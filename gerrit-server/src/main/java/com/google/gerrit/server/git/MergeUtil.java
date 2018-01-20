@@ -16,6 +16,7 @@ package com.google.gerrit.server.git;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
@@ -243,13 +244,18 @@ public class MergeUtil {
     return id;
   }
 
-  private void scUpdateDatesWithinBlobs(ObjectInserter inserter,
+  private ObjectId scUpdateDatesWithinBlobs(ObjectInserter inserter,
                                         CodeReviewRevWalk rw,
                                         RevCommit mergeTip,
                                         ObjectId tree)
       throws IOException {
 
     try (ObjectReader reader = inserter.newReader()) {
+      DirCache dirCache = DirCache.newInCore();
+      DirCacheBuilder dirCacheBuilder = dirCache.builder();
+      dirCacheBuilder.addTree(new byte[0], DirCacheEntry.STAGE_0, reader, tree);
+      dirCacheBuilder.finish();
+
       RevTree cTree = rw.parseTree(tree);
       DiffFormatter diffFmt = new DiffFormatter(NullOutputStream.INSTANCE);
       diffFmt.setReader(reader, new Config());
@@ -264,67 +270,45 @@ public class MergeUtil {
         final byte[] newData = newContent.getBytes("iso-8859-1");
         final ByteArrayInputStream newBAIS = new ByteArrayInputStream(newData);
 
-        ChangeFileContentModification modif = new ChangeFileContentModification(entry.getNewPath(),
-            new RawInput() {
-              @Override
-              public String getContentType() {
-                return null;
-              }
-
-              @Override
-              public long getContentLength() {
-                return newData.length;
-              }
-
-              @Override
-              public InputStream getInputStream() throws IOException {
-                return newBAIS;
-              }
-            });
-
-        TreeModification
-
         //List<TreeModification> modifs = new ArrayList<TreeModification>() {{ add(modif); }};
         //TreeCreator treeCreator = new TreeCreator(mergeTip);
         //treeCreator.addTreeModifications(modifs);
 
-        DirCache dirCache = DirCache.newInCore();
-        DirCacheBuilder dirCacheBuilder = dirCache.builder();
-        dirCacheBuilder.addTree(new byte[0], DirCacheEntry.STAGE_0, reader, tree);
-        dirCacheBuilder.finish();
+        DirCacheEditor.PathEdit edit = new DirCacheEditor.PathEdit(entry.getNewPath()) {
+          @Override
+          public void apply(DirCacheEntry dirCacheEntry) {
+            try {
+              if (dirCacheEntry.getFileMode() == FileMode.GITLINK) {
+                dirCacheEntry.setLength(0);
+                dirCacheEntry.setLastModified(0);
+                ObjectId newObjectId = ObjectId.fromString(newData, 0);
+                dirCacheEntry.setObjectId(newObjectId);
+              } else {
+                if (dirCacheEntry.getRawMode() == 0) {
+                  dirCacheEntry.setFileMode(FileMode.REGULAR_FILE);
+                }
+                ObjectId newBlobObjectId = createNewBlobAndGetItsId();
+                dirCacheEntry.setObjectId(newBlobObjectId);
+              }
+            } catch (IOException e) {
+              e.printStackTrace();
+            }
+          }
+
+          private ObjectId createNewBlobAndGetItsId() throws IOException {
+            return inserter.insert(OBJ_BLOB, newData.length, newBAIS);
+          }
+        };
 
         DirCacheEditor dirCacheEditor = dirCache.editor();
-        dirCacheEditor.add(modif.getPathEdits());
+        dirCacheEditor.add(edit);
         dirCacheEditor.finish();
+      } // end diff loop
 
-        /*
-        ObjectId treeId = tree.writeTree(objectInserter);
-      objectInserter.flush();
-         */
-
-        // LBO: now go on and create the new tree?
-      }
+      ObjectId finalTree = dirCache.writeTree(inserter);
+      inserter.flush();
+      return finalTree;
     }
-
-    /*
-    try (ObjectReader reader = inserter.newReader()) {
-      CanonicalTreeParser mergeTipIter = new CanonicalTreeParser();
-      mergeTipIter.reset(reader, mergeTip.getId());
-      CanonicalTreeParser newIter = new CanonicalTreeParser();
-      newIter.reset(reader, tree);
-
-      try (Git git = new Git(repo)) {
-        List<DiffEntry> diffs = git.diff()
-            .setNewTree(newIter)
-            .setOldTree(mergeTipIter)
-            .call();
-
-        for (DiffEntry entry : diffs) {
-          System.out.println("Entry: " + entry);
-        }
-      }
-    }
-    */
   }
 
   // LBO: this is where the magic happens.
@@ -356,7 +340,10 @@ public class MergeUtil {
         commitMsg = "MOD " + modId + ": " + commitMsg;
       }
 
-      scUpdateDatesWithinBlobs(inserter, rw, mergeTip, tree); // throws IOException
+      ObjectId modfiedTree = scUpdateDatesWithinBlobs(inserter, rw, mergeTip, tree); // throws IOException
+      if (modfiedTree != null) {
+        tree = modfiedTree;
+      }
 
       CommitBuilder mergeCommit = new CommitBuilder();
       mergeCommit.setTreeId(tree);
