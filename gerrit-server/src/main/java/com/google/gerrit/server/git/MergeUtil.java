@@ -270,10 +270,6 @@ public class MergeUtil {
         final byte[] newData = newContent.getBytes("iso-8859-1");
         final ByteArrayInputStream newBAIS = new ByteArrayInputStream(newData);
 
-        //List<TreeModification> modifs = new ArrayList<TreeModification>() {{ add(modif); }};
-        //TreeCreator treeCreator = new TreeCreator(mergeTip);
-        //treeCreator.addTreeModifications(modifs);
-
         DirCacheEditor.PathEdit edit = new DirCacheEditor.PathEdit(entry.getNewPath()) {
           @Override
           public void apply(DirCacheEntry dirCacheEntry) {
