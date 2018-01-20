@@ -113,6 +113,7 @@ import com.google.gerrit.server.extensions.events.GitReferenceUpdated;
 import com.google.gerrit.server.extensions.webui.UiActions;
 import com.google.gerrit.server.git.AbandonOp;
 import com.google.gerrit.server.git.ChangeMessageModifier;
+import com.google.gerrit.server.git.CommitModifier;
 import com.google.gerrit.server.git.EmailMerge;
 import com.google.gerrit.server.git.GitModule;
 import com.google.gerrit.server.git.GitModules;
@@ -349,6 +350,7 @@ public class GerritGlobalModule extends FactoryModule {
     DynamicSet.setOf(binder(), UserScopedEventListener.class);
     DynamicSet.setOf(binder(), CommitValidationListener.class);
     DynamicSet.setOf(binder(), ChangeMessageModifier.class);
+    DynamicSet.setOf(binder(), CommitModifier.class);
     DynamicSet.setOf(binder(), RefOperationValidationListener.class);
     DynamicSet.setOf(binder(), OnSubmitValidationListener.class);
     DynamicSet.setOf(binder(), MergeValidationListener.class);
