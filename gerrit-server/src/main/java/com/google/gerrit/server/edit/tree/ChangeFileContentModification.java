@@ -77,7 +77,7 @@ public class ChangeFileContentModification implements TreeModification {
     }
 
     @Override
-    public void apply(DirCacheEntry dirCacheEntry) {
+    public void apply(DirCacheEntry dirCacheEntry) { // LBO: use this directly in the future
       try {
         if (dirCacheEntry.getFileMode() == FileMode.GITLINK) {
           dirCacheEntry.setLength(0);

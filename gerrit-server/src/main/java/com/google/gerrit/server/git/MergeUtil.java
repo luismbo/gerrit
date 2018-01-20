@@ -29,6 +29,7 @@ import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.extensions.registration.DynamicSet;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.MergeConflictException;
+import com.google.gerrit.extensions.restapi.RawInput;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Branch;
@@ -43,6 +44,9 @@ import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.config.CanonicalWebUrl;
 import com.google.gerrit.server.config.GerritServerConfig;
+import com.google.gerrit.server.edit.tree.ChangeFileContentModification;
+import com.google.gerrit.server.edit.tree.TreeCreator;
+import com.google.gerrit.server.edit.tree.TreeModification;
 import com.google.gerrit.server.git.CodeReviewCommit.CodeReviewRevWalk;
 import com.google.gerrit.server.git.strategy.CommitMergeStatus;
 import com.google.gerrit.server.notedb.ChangeNotes;
@@ -52,7 +56,10 @@ import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
 import com.google.inject.assistedinject.AssistedInject;
+
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -64,6 +71,14 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.sun.xml.internal.ws.policy.privateutil.PolicyUtils;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.diff.DiffEntry;
+import org.eclipse.jgit.diff.DiffFormatter;
+import org.eclipse.jgit.dircache.DirCache;
+import org.eclipse.jgit.dircache.DirCacheBuilder;
+import org.eclipse.jgit.dircache.DirCacheEditor;
+import org.eclipse.jgit.dircache.DirCacheEntry;
 import org.eclipse.jgit.errors.AmbiguousObjectException;
 import org.eclipse.jgit.errors.IncorrectObjectTypeException;
 import org.eclipse.jgit.errors.LargeObjectException;
@@ -71,25 +86,15 @@ import org.eclipse.jgit.errors.MissingObjectException;
 import org.eclipse.jgit.errors.NoMergeBaseException;
 import org.eclipse.jgit.errors.NoMergeBaseException.MergeBaseFailureReason;
 import org.eclipse.jgit.errors.RevisionSyntaxException;
-import org.eclipse.jgit.lib.AnyObjectId;
-import org.eclipse.jgit.lib.CommitBuilder;
-import org.eclipse.jgit.lib.Config;
-import org.eclipse.jgit.lib.Constants;
-import org.eclipse.jgit.lib.ObjectId;
-import org.eclipse.jgit.lib.ObjectInserter;
-import org.eclipse.jgit.lib.PersonIdent;
-import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.merge.MergeStrategy;
 import org.eclipse.jgit.merge.Merger;
 import org.eclipse.jgit.merge.ResolveMerger;
 import org.eclipse.jgit.merge.ThreeWayMergeStrategy;
 import org.eclipse.jgit.merge.ThreeWayMerger;
-import org.eclipse.jgit.revwalk.FooterKey;
-import org.eclipse.jgit.revwalk.FooterLine;
-import org.eclipse.jgit.revwalk.RevCommit;
-import org.eclipse.jgit.revwalk.RevFlag;
-import org.eclipse.jgit.revwalk.RevSort;
-import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.revwalk.*;
+import org.eclipse.jgit.treewalk.CanonicalTreeParser;
+import org.eclipse.jgit.util.io.NullOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -238,6 +243,90 @@ public class MergeUtil {
     return id;
   }
 
+  private void scUpdateDatesWithinBlobs(ObjectInserter inserter,
+                                        CodeReviewRevWalk rw,
+                                        RevCommit mergeTip,
+                                        ObjectId tree)
+      throws IOException {
+
+    try (ObjectReader reader = inserter.newReader()) {
+      RevTree cTree = rw.parseTree(tree);
+      DiffFormatter diffFmt = new DiffFormatter(NullOutputStream.INSTANCE);
+      diffFmt.setReader(reader, new Config());
+      List<DiffEntry> result = diffFmt.scan(mergeTip.getTree(), cTree);
+
+      for (DiffEntry entry : result) {
+        ObjectId id = entry.getNewId().toObjectId();
+        byte[] data = reader.open(id).getBytes();
+
+        String content = new String(data, "iso-8859-1");
+        String newContent = content.replaceAll("00/00/00", "2018/01/19");
+        final byte[] newData = newContent.getBytes("iso-8859-1");
+        final ByteArrayInputStream newBAIS = new ByteArrayInputStream(newData);
+
+        ChangeFileContentModification modif = new ChangeFileContentModification(entry.getNewPath(),
+            new RawInput() {
+              @Override
+              public String getContentType() {
+                return null;
+              }
+
+              @Override
+              public long getContentLength() {
+                return newData.length;
+              }
+
+              @Override
+              public InputStream getInputStream() throws IOException {
+                return newBAIS;
+              }
+            });
+
+        TreeModification
+
+        //List<TreeModification> modifs = new ArrayList<TreeModification>() {{ add(modif); }};
+        //TreeCreator treeCreator = new TreeCreator(mergeTip);
+        //treeCreator.addTreeModifications(modifs);
+
+        DirCache dirCache = DirCache.newInCore();
+        DirCacheBuilder dirCacheBuilder = dirCache.builder();
+        dirCacheBuilder.addTree(new byte[0], DirCacheEntry.STAGE_0, reader, tree);
+        dirCacheBuilder.finish();
+
+        DirCacheEditor dirCacheEditor = dirCache.editor();
+        dirCacheEditor.add(modif.getPathEdits());
+        dirCacheEditor.finish();
+
+        /*
+        ObjectId treeId = tree.writeTree(objectInserter);
+      objectInserter.flush();
+         */
+
+        // LBO: now go on and create the new tree?
+      }
+    }
+
+    /*
+    try (ObjectReader reader = inserter.newReader()) {
+      CanonicalTreeParser mergeTipIter = new CanonicalTreeParser();
+      mergeTipIter.reset(reader, mergeTip.getId());
+      CanonicalTreeParser newIter = new CanonicalTreeParser();
+      newIter.reset(reader, tree);
+
+      try (Git git = new Git(repo)) {
+        List<DiffEntry> diffs = git.diff()
+            .setNewTree(newIter)
+            .setOldTree(mergeTipIter)
+            .call();
+
+        for (DiffEntry entry : diffs) {
+          System.out.println("Entry: " + entry);
+        }
+      }
+    }
+    */
+  }
+
   // LBO: this is where the magic happens.
   public CodeReviewCommit createCherryPickFromCommit(
       ObjectInserter inserter,
@@ -263,8 +352,11 @@ public class MergeUtil {
 
       int modId = scFindNextModId(mergeTip);
       if (modId != -1) {
+        // TODO: only do this if the commitMsg doesn't already start with MOD?
         commitMsg = "MOD " + modId + ": " + commitMsg;
       }
+
+      scUpdateDatesWithinBlobs(inserter, rw, mergeTip, tree); // throws IOException
 
       CommitBuilder mergeCommit = new CommitBuilder();
       mergeCommit.setTreeId(tree);
