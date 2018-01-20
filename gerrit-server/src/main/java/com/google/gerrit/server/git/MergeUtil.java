@@ -229,21 +229,6 @@ public class MergeUtil {
     return result;
   }
 
-  private Pattern scModIdPattern = Pattern.compile("^MOD (\\d+):");
-  private int scFindNextModId(RevCommit commit) {
-    int id = -1;
-    String subject = commit.getShortMessage();
-    Matcher matcher = scModIdPattern.matcher(subject);
-
-    if (matcher.find()) {
-      try {
-        id = Integer.parseInt(matcher.group(1)) + 1;
-      } catch (NumberFormatException e) { }
-    }
-
-    return id;
-  }
-
   private ObjectId scUpdateDatesWithinBlobs(ObjectInserter inserter,
                                         CodeReviewRevWalk rw,
                                         RevCommit mergeTip,
@@ -307,7 +292,6 @@ public class MergeUtil {
     }
   }
 
-  // LBO: this is where the magic happens.
   public CodeReviewCommit createCherryPickFromCommit(
       ObjectInserter inserter,
       Config repoConfig,
@@ -328,12 +312,6 @@ public class MergeUtil {
       ObjectId tree = m.getResultTreeId();
       if (tree.equals(mergeTip.getTree()) && !ignoreIdenticalTree) {
         throw new MergeIdenticalTreeException("identical tree");
-      }
-
-      int modId = scFindNextModId(mergeTip);
-      if (modId != -1) {
-        // TODO: only do this if the commitMsg doesn't already start with MOD?
-        commitMsg = "MOD " + modId + ": " + commitMsg;
       }
 
       ObjectId modfiedTree = scUpdateDatesWithinBlobs(inserter, rw, mergeTip, tree); // throws IOException
@@ -443,7 +421,7 @@ public class MergeUtil {
       msgbuf.append('\n');
     }
 
-    final String siteUrl = urlProvider.get(); // LBO: this is where Reviewed-On gets added
+    final String siteUrl = urlProvider.get();
     if (siteUrl != null) {
       final String url = siteUrl + c.getId().get();
       if (!contains(footers, FooterConstants.REVIEWED_ON, url)) {

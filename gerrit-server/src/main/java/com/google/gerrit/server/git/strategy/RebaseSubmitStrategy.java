@@ -136,12 +136,10 @@ public class RebaseSubmitStrategy extends SubmitStrategy {
                 toMerge.change().currentPatchSetId());
         RevCommit mergeTip = args.mergeTip.getCurrentTip();
         args.rw.parseBody(mergeTip);
-        String cherryPickCmtMsg = "CP XXX: " + args.mergeUtil.createCommitMessageOnSubmit(toMerge, mergeTip);
+        String cherryPickCmtMsg = args.mergeUtil.createCommitMessageOnSubmit(toMerge, mergeTip);
         PersonIdent committer =
             args.caller.newCommitterIdent(ctx.getWhen(), args.serverIdent.getTimeZone());
         try {
-          // LBO if the rebase operation would be fast-forward, then we go via
-          // createCherryPickFromCommit instead of rebaseOp. Hmpf.
           newCommit =
               args.mergeUtil.createCherryPickFromCommit(
                   ctx.getInserter(),
