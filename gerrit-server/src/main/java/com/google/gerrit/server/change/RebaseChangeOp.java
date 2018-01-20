@@ -16,6 +16,8 @@ package com.google.gerrit.server.change;
 
 import static com.google.common.base.Preconditions.checkState;
 
+import com.google.common.collect.ImmutableList;
+import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.restapi.MergeConflictException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
@@ -41,11 +43,14 @@ import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.assistedinject.Assisted;
 import java.io.IOException;
+import java.sql.Timestamp;
+
 import org.eclipse.jgit.lib.CommitBuilder;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.merge.ThreeWayMerger;
 import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevTree;
 import org.eclipse.jgit.revwalk.RevWalk;
 
 public class RebaseChangeOp implements BatchUpdateOp {
@@ -163,12 +168,12 @@ public class RebaseChangeOp implements BatchUpdateOp {
     String newCommitMessage;
     if (detailedCommitMessage) {
       rw.parseBody(baseCommit);
-      newCommitMessage =
+      newCommitMessage = "MOD YYYY: " + // LBO was here, trying things out without a debugger (still)
           newMergeUtil()
               .createCommitMessageOnSubmit(
                   original, baseCommit, notes, changeOwner, originalPatchSet.getId());
     } else {
-      newCommitMessage = original.getFullMessage();
+      newCommitMessage = "BAH: " + original.getFullMessage(); // LBO was here messing around
     }
 
     rebasedCommit = rebaseCommit(ctx, original, baseCommit, newCommitMessage);
@@ -270,11 +275,13 @@ public class RebaseChangeOp implements BatchUpdateOp {
           "The change could not be rebased due to a conflict during merge.");
     }
 
+    //ObjectId newTreeId = createNewTree(repository, baseCommit, ImmutableList.of(treeModification));
+
     CommitBuilder cb = new CommitBuilder();
-    cb.setTreeId(merger.getResultTreeId());
+    cb.setTreeId(merger.getResultTreeId()); // LBO this is where we want to hook into
     cb.setParentId(base);
     cb.setAuthor(original.getAuthorIdent());
-    cb.setMessage(commitMessage);
+    cb.setMessage("MOD XXXX: " + commitMessage); // LBO we might want to hook into here too
     if (committerIdent != null) {
       cb.setCommitter(committerIdent);
     } else {
@@ -285,6 +292,7 @@ public class RebaseChangeOp implements BatchUpdateOp {
           new PersonIdent(
               cb.getAuthor(), cb.getCommitter().getWhen(), cb.getCommitter().getTimeZone()));
     }
+
     ObjectId objectId = ctx.getInserter().insert(cb);
     ctx.getInserter().flush();
     return ctx.getRevWalk().parseCommit(objectId);

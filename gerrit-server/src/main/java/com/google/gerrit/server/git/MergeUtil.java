@@ -61,6 +61,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import org.eclipse.jgit.errors.AmbiguousObjectException;
 import org.eclipse.jgit.errors.IncorrectObjectTypeException;
 import org.eclipse.jgit.errors.LargeObjectException;
@@ -220,6 +223,22 @@ public class MergeUtil {
     return result;
   }
 
+  private Pattern scModIdPattern = Pattern.compile("^MOD (\\d+):");
+  private int scFindNextModId(RevCommit commit) {
+    int id = -1;
+    String subject = commit.getShortMessage();
+    Matcher matcher = scModIdPattern.matcher(subject);
+
+    if (matcher.find()) {
+      try {
+        id = Integer.parseInt(matcher.group(1)) + 1;
+      } catch (NumberFormatException e) { }
+    }
+
+    return id;
+  }
+
+  // LBO: this is where the magic happens.
   public CodeReviewCommit createCherryPickFromCommit(
       ObjectInserter inserter,
       Config repoConfig,
@@ -240,6 +259,11 @@ public class MergeUtil {
       ObjectId tree = m.getResultTreeId();
       if (tree.equals(mergeTip.getTree()) && !ignoreIdenticalTree) {
         throw new MergeIdenticalTreeException("identical tree");
+      }
+
+      int modId = scFindNextModId(mergeTip);
+      if (modId != -1) {
+        commitMsg = "MOD " + modId + ": " + commitMsg;
       }
 
       CommitBuilder mergeCommit = new CommitBuilder();
@@ -344,7 +368,7 @@ public class MergeUtil {
       msgbuf.append('\n');
     }
 
-    final String siteUrl = urlProvider.get();
+    final String siteUrl = urlProvider.get(); // LBO: this is where Reviewed-On gets added
     if (siteUrl != null) {
       final String url = siteUrl + c.getId().get();
       if (!contains(footers, FooterConstants.REVIEWED_ON, url)) {

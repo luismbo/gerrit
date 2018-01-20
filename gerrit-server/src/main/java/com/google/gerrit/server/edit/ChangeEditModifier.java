@@ -245,7 +245,7 @@ public class ChangeEditModifier {
    * @throws InvalidChangeOperationException if the file already had the specified content
    * @throws PermissionBackendException
    */
-  public void modifyFile(
+  public void modifyFile( // LBO was here
       Repository repository, ChangeNotes notes, String filePath, RawInput newContent)
       throws AuthException, InvalidChangeOperationException, IOException, OrmException,
           PermissionBackendException {
@@ -319,6 +319,7 @@ public class ChangeEditModifier {
     RevCommit baseCommit =
         optionalChangeEdit.map(ChangeEdit::getEditCommit).orElse(basePatchSetCommit);
 
+    // LBO: I guess this is where the commit is modified. (wrt Gerrit's "Edit" feature)
     ObjectId newTreeId = createNewTree(repository, baseCommit, ImmutableList.of(treeModification));
 
     String commitMessage = baseCommit.getFullMessage();
