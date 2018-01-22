@@ -16,7 +16,6 @@ package com.google.gerrit.server.git;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
@@ -30,7 +29,6 @@ import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.extensions.registration.DynamicSet;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.MergeConflictException;
-import com.google.gerrit.extensions.restapi.RawInput;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Branch;
@@ -45,9 +43,6 @@ import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.config.CanonicalWebUrl;
 import com.google.gerrit.server.config.GerritServerConfig;
-import com.google.gerrit.server.edit.tree.ChangeFileContentModification;
-import com.google.gerrit.server.edit.tree.TreeCreator;
-import com.google.gerrit.server.edit.tree.TreeModification;
 import com.google.gerrit.server.git.CodeReviewCommit.CodeReviewRevWalk;
 import com.google.gerrit.server.git.strategy.CommitMergeStatus;
 import com.google.gerrit.server.notedb.ChangeNotes;
@@ -58,9 +53,7 @@ import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
 import com.google.inject.assistedinject.AssistedInject;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -69,17 +62,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-import com.sun.xml.internal.ws.policy.privateutil.PolicyUtils;
-import org.eclipse.jgit.api.Git;
-import org.eclipse.jgit.diff.DiffEntry;
-import org.eclipse.jgit.diff.DiffFormatter;
-import org.eclipse.jgit.dircache.DirCache;
-import org.eclipse.jgit.dircache.DirCacheBuilder;
-import org.eclipse.jgit.dircache.DirCacheEditor;
-import org.eclipse.jgit.dircache.DirCacheEntry;
 import org.eclipse.jgit.errors.AmbiguousObjectException;
 import org.eclipse.jgit.errors.IncorrectObjectTypeException;
 import org.eclipse.jgit.errors.LargeObjectException;
@@ -94,8 +77,6 @@ import org.eclipse.jgit.merge.ResolveMerger;
 import org.eclipse.jgit.merge.ThreeWayMergeStrategy;
 import org.eclipse.jgit.merge.ThreeWayMerger;
 import org.eclipse.jgit.revwalk.*;
-import org.eclipse.jgit.treewalk.CanonicalTreeParser;
-import org.eclipse.jgit.util.io.NullOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -129,9 +110,36 @@ public class MergeUtil {
         checkNotNull(
             current,
             changeMessageModifier.getClass().getName()
-                + ".OnSubmit returned null instead of new commit message");
+                + ".onSubmit returned null instead of new commit message");
       }
       return current;
+    }
+  }
+
+  static class PluggableCommitModifier {
+    private final DynamicSet<CommitModifier> commitModifiers;
+
+    @Inject
+    PluggableCommitModifier(DynamicSet<CommitModifier> commitModifiers) {
+      this.commitModifiers = commitModifiers;
+    }
+
+    public ObjectId process(ObjectInserter inserter, RevWalk rw, RevCommit mergeTip,
+                            ObjectId newTree, String newCommitMessage) throws IOException {
+      checkNotNull(mergeTip.getRawBuffer());
+      if (mergeTip != null) {
+        checkNotNull(mergeTip.getRawBuffer());
+      }
+
+      for (CommitModifier commitModifier : commitModifiers) {
+        newTree = commitModifier.onSubmit(inserter, rw, mergeTip, newTree, newCommitMessage);
+        checkNotNull(
+            newTree,
+            commitModifier.getClass().getName()
+                +  ".onSubmit returned null instead of a tree identity");
+      }
+
+      return newTree;
     }
   }
 
@@ -159,6 +167,7 @@ public class MergeUtil {
   private final boolean useContentMerge;
   private final boolean useRecursiveMerge;
   private final PluggableCommitMessageGenerator commitMessageGenerator;
+  private final PluggableCommitModifier commitModifier;
 
   @AssistedInject
   MergeUtil(
@@ -168,6 +177,7 @@ public class MergeUtil {
       @CanonicalWebUrl @Nullable Provider<String> urlProvider,
       ApprovalsUtil approvalsUtil,
       PluggableCommitMessageGenerator commitMessageGenerator,
+      PluggableCommitModifier commitModifier,
       @Assisted ProjectState project) {
     this(
         serverConfig,
@@ -177,6 +187,7 @@ public class MergeUtil {
         approvalsUtil,
         project,
         commitMessageGenerator,
+        commitModifier,
         project.isUseContentMerge());
   }
 
@@ -189,6 +200,7 @@ public class MergeUtil {
       ApprovalsUtil approvalsUtil,
       @Assisted ProjectState project,
       PluggableCommitMessageGenerator commitMessageGenerator,
+      PluggableCommitModifier commitModifier,
       @Assisted boolean useContentMerge) {
     this.db = db;
     this.identifiedUserFactory = identifiedUserFactory;
@@ -198,6 +210,7 @@ public class MergeUtil {
     this.useContentMerge = useContentMerge;
     this.useRecursiveMerge = useRecursiveMerge(serverConfig);
     this.commitMessageGenerator = commitMessageGenerator;
+    this.commitModifier = commitModifier;
   }
 
   public CodeReviewCommit getFirstFastForward(
@@ -229,69 +242,6 @@ public class MergeUtil {
     return result;
   }
 
-  private ObjectId scUpdateDatesWithinBlobs(ObjectInserter inserter,
-                                        CodeReviewRevWalk rw,
-                                        RevCommit mergeTip,
-                                        ObjectId tree)
-      throws IOException {
-
-    try (ObjectReader reader = inserter.newReader()) {
-      DirCache dirCache = DirCache.newInCore();
-      DirCacheBuilder dirCacheBuilder = dirCache.builder();
-      dirCacheBuilder.addTree(new byte[0], DirCacheEntry.STAGE_0, reader, tree);
-      dirCacheBuilder.finish();
-
-      RevTree cTree = rw.parseTree(tree);
-      DiffFormatter diffFmt = new DiffFormatter(NullOutputStream.INSTANCE);
-      diffFmt.setReader(reader, new Config());
-      List<DiffEntry> result = diffFmt.scan(mergeTip.getTree(), cTree);
-
-      for (DiffEntry entry : result) {
-        ObjectId id = entry.getNewId().toObjectId();
-        byte[] data = reader.open(id).getBytes();
-
-        String content = new String(data, "iso-8859-1");
-        String newContent = content.replaceAll("00/00/00", "2018/01/19");
-        final byte[] newData = newContent.getBytes("iso-8859-1");
-        final ByteArrayInputStream newBAIS = new ByteArrayInputStream(newData);
-
-        DirCacheEditor.PathEdit edit = new DirCacheEditor.PathEdit(entry.getNewPath()) {
-          @Override
-          public void apply(DirCacheEntry dirCacheEntry) {
-            try {
-              if (dirCacheEntry.getFileMode() == FileMode.GITLINK) {
-                dirCacheEntry.setLength(0);
-                dirCacheEntry.setLastModified(0);
-                ObjectId newObjectId = ObjectId.fromString(newData, 0);
-                dirCacheEntry.setObjectId(newObjectId);
-              } else {
-                if (dirCacheEntry.getRawMode() == 0) {
-                  dirCacheEntry.setFileMode(FileMode.REGULAR_FILE);
-                }
-                ObjectId newBlobObjectId = createNewBlobAndGetItsId();
-                dirCacheEntry.setObjectId(newBlobObjectId);
-              }
-            } catch (IOException e) {
-              e.printStackTrace();
-            }
-          }
-
-          private ObjectId createNewBlobAndGetItsId() throws IOException {
-            return inserter.insert(OBJ_BLOB, newData.length, newBAIS);
-          }
-        };
-
-        DirCacheEditor dirCacheEditor = dirCache.editor();
-        dirCacheEditor.add(edit);
-        dirCacheEditor.finish();
-      } // end diff loop
-
-      ObjectId finalTree = dirCache.writeTree(inserter);
-      inserter.flush();
-      return finalTree;
-    }
-  }
-
   public CodeReviewCommit createCherryPickFromCommit(
       ObjectInserter inserter,
       Config repoConfig,
@@ -301,7 +251,8 @@ public class MergeUtil {
       String commitMsg,
       CodeReviewRevWalk rw,
       int parentIndex,
-      boolean ignoreIdenticalTree)
+      boolean ignoreIdenticalTree,
+      boolean applyCommitModifiers)
       throws MissingObjectException, IncorrectObjectTypeException, IOException,
           MergeIdenticalTreeException, MergeConflictException {
 
@@ -314,9 +265,8 @@ public class MergeUtil {
         throw new MergeIdenticalTreeException("identical tree");
       }
 
-      ObjectId modfiedTree = scUpdateDatesWithinBlobs(inserter, rw, mergeTip, tree); // throws IOException
-      if (modfiedTree != null) {
-        tree = modfiedTree;
+      if (applyCommitModifiers) {
+        tree = commitModifier.process(inserter, rw, mergeTip, tree, commitMsg);
       }
 
       CommitBuilder mergeCommit = new CommitBuilder();
