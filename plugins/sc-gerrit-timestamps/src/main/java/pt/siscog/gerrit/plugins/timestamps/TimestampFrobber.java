@@ -33,7 +33,10 @@ import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
 @Listen
 @Singleton
 public class TimestampFrobber implements CommitModifier {
+  // TODO (MAYBE): turn these constants into config options
   private static final int MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MiB
+  private static final SimpleDateFormat TIMESTAMP_FORMAT = new SimpleDateFormat("\tyyyy/MM/dd\t");
+  private static final String TIMESTAMP_MARKER = "\t0000/00/00\t";
 
   @Inject
   public TimestampFrobber() {}
@@ -56,7 +59,7 @@ public class TimestampFrobber implements CommitModifier {
       dirCacheBuilder.addTree(new byte[0], DirCacheEntry.STAGE_0, reader, newTree);
       dirCacheBuilder.finish();
 
-      String timestamp = new SimpleDateFormat("YY/MM/dd").format(new Date());
+      String timestamp = TIMESTAMP_FORMAT.format(new Date());
 
       for (DiffEntry entry : getChangedFiles(reader, mergeTip.getTree(), rw.parseTree(newTree))) {
         ObjectId id = entry.getNewId().toObjectId();
@@ -69,10 +72,7 @@ public class TimestampFrobber implements CommitModifier {
         // TODO: avoid reading the whole file into memory.
         String content = new String(data, "iso-8859-1");
 
-        // TODO (MAYBE): grab magic date from config file
-        // TODO: compute current date in... UTC or something
-        // TODO: check for TAB before "00/00/00"
-        String newContent = content.replaceAll("\t00/00/00", timestamp);
+        String newContent = content.replaceAll(TIMESTAMP_MARKER, timestamp);
 
         // TODO: avoid yet another array
         final byte[] newData = newContent.getBytes("iso-8859-1");
