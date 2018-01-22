@@ -1,5 +1,6 @@
 package pt.siscog.gerrit.plugins.timestamps;
 
+import com.google.common.primitives.Bytes;
 import com.google.gerrit.extensions.annotations.Listen;
 import com.google.gerrit.server.git.CommitModifier;
 import com.google.inject.Inject;
@@ -11,6 +12,7 @@ import org.eclipse.jgit.dircache.DirCacheBuilder;
 import org.eclipse.jgit.dircache.DirCacheEditor;
 import org.eclipse.jgit.dircache.DirCacheEditor.PathEdit;
 import org.eclipse.jgit.dircache.DirCacheEntry;
+import org.eclipse.jgit.errors.LargeObjectException;
 import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.FileMode;
 import org.eclipse.jgit.lib.ObjectId;
@@ -24,7 +26,6 @@ import org.eclipse.jgit.util.io.NullOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
-import java.time.format.DateTimeFormatter;
 import java.util.Date;
 import java.util.List;
 
@@ -37,6 +38,7 @@ public class TimestampFrobber implements CommitModifier {
   private static final int MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MiB
   private static final SimpleDateFormat TIMESTAMP_FORMAT = new SimpleDateFormat("\tyyyy/MM/dd\t");
   private static final String TIMESTAMP_MARKER = "\t0000/00/00\t";
+  private static final String ENCODING = "iso-8859-1";
 
   @Inject
   public TimestampFrobber() {}
@@ -62,20 +64,37 @@ public class TimestampFrobber implements CommitModifier {
       String timestamp = TIMESTAMP_FORMAT.format(new Date());
 
       for (DiffEntry entry : getChangedFiles(reader, mergeTip.getTree(), rw.parseTree(newTree))) {
+        if (!entry.getNewMode().equals(FileMode.REGULAR_FILE)) {
+          continue; // skip symlinks, submodules, executable files, etc.
+        }
+
         ObjectId id = entry.getNewId().toObjectId();
 
-        // TODO: skip file if it's too big
-        // TODO: skip file if it looks binary
-        byte[] data = reader.open(id).getCachedBytes(MAX_FILE_SIZE);
-        //reader.open(id).openStream().getSize();
+        if (id.equals(ObjectId.zeroId())) {
+          continue; // this file is no more, skip it.
+        }
 
-        // TODO: avoid reading the whole file into memory.
-        String content = new String(data, "iso-8859-1");
+        byte[] data;
+        try {
+          data = reader.open(id).getCachedBytes(MAX_FILE_SIZE);
+        } catch (LargeObjectException e) {
+          continue; // skip large files.
+        }
 
+        if (Bytes.contains(data, (byte) 0)) {
+          continue; // skip files that seem to be binary.
+        }
+
+        // TODO: avoid so many copies
+        String content = new String(data, ENCODING);
         String newContent = content.replaceAll(TIMESTAMP_MARKER, timestamp);
 
-        // TODO: avoid yet another array
-        final byte[] newData = newContent.getBytes("iso-8859-1");
+        if (content.equals(newContent)) {
+          continue; // skip unchanged files.
+        }
+
+        // TODO: avoid yet another copy
+        final byte[] newData = newContent.getBytes(ENCODING);
         final ByteArrayInputStream newBAIS = new ByteArrayInputStream(newData);
 
         PathEdit edit = new PathEdit(entry.getNewPath()) {
@@ -95,7 +114,6 @@ public class TimestampFrobber implements CommitModifier {
           }
         };
 
-        // TODO: detect whether there was any change at all
         DirCacheEditor dirCacheEditor = dirCache.editor();
         dirCacheEditor.add(edit);
         dirCacheEditor.finish();
