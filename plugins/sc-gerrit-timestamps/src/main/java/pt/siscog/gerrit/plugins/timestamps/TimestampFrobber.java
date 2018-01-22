@@ -23,7 +23,6 @@ import org.eclipse.jgit.revwalk.RevTree;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.util.io.NullOutputStream;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -95,14 +94,13 @@ public class TimestampFrobber implements CommitModifier {
 
         // TODO: avoid yet another copy
         final byte[] newData = newContent.getBytes(ENCODING);
-        final ByteArrayInputStream newBAIS = new ByteArrayInputStream(newData);
 
         PathEdit edit = new PathEdit(entry.getNewPath()) {
           @Override
           public void apply(DirCacheEntry dirCacheEntry) {
             if (dirCacheEntry.getFileMode() != FileMode.GITLINK) {
               try {
-                ObjectId newBlobObjectId = inserter.insert(OBJ_BLOB, newData.length, newBAIS);
+                ObjectId newBlobObjectId = inserter.insert(OBJ_BLOB, newData);
                 if (dirCacheEntry.getRawMode() == 0) {
                   dirCacheEntry.setFileMode(FileMode.REGULAR_FILE);
                 }
