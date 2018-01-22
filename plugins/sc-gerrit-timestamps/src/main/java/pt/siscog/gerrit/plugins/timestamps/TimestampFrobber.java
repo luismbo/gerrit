@@ -51,13 +51,24 @@ public class TimestampFrobber implements CommitModifier {
 
       for (DiffEntry entry : result) {
         ObjectId id = entry.getNewId().toObjectId();
+
+        // TODO: skip file if it's too big
+        // TODO: skip file if it looks binary
         byte[] data = reader.open(id).getBytes();
 
+        // TODO: avoid reading the whole file into memory.
         String content = new String(data, "iso-8859-1");
+
+        // TODO (MAYBE): grab magic date from config file
+        // TODO: compute current date in... UTC or something
+        // TODO: check for TAB before "00/00/00"
         String newContent = content.replaceAll("00/00/00", "2018/01/19");
+
+        // TODO: avoid yet another array
         final byte[] newData = newContent.getBytes("iso-8859-1");
         final ByteArrayInputStream newBAIS = new ByteArrayInputStream(newData);
 
+        // TODO: refactor this out.
         DirCacheEditor.PathEdit edit = new DirCacheEditor.PathEdit(entry.getNewPath()) {
           @Override
           public void apply(DirCacheEntry dirCacheEntry) {
@@ -84,10 +95,11 @@ public class TimestampFrobber implements CommitModifier {
           }
         };
 
+        // TODO: detect whether there was any change at all
         DirCacheEditor dirCacheEditor = dirCache.editor();
         dirCacheEditor.add(edit);
         dirCacheEditor.finish();
-      } // end diff loop
+      }
 
       ObjectId finalTree = dirCache.writeTree(inserter);
       inserter.flush();
