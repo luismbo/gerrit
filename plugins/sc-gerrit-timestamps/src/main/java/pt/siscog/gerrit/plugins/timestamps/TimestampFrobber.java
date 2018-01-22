@@ -9,6 +9,7 @@ import org.eclipse.jgit.diff.DiffFormatter;
 import org.eclipse.jgit.dircache.DirCache;
 import org.eclipse.jgit.dircache.DirCacheBuilder;
 import org.eclipse.jgit.dircache.DirCacheEditor;
+import org.eclipse.jgit.dircache.DirCacheEditor.PathEdit;
 import org.eclipse.jgit.dircache.DirCacheEntry;
 import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.FileMode;
@@ -22,6 +23,9 @@ import org.eclipse.jgit.util.io.NullOutputStream;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.time.format.DateTimeFormatter;
+import java.util.Date;
 import java.util.List;
 
 import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
@@ -29,8 +33,16 @@ import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
 @Listen
 @Singleton
 public class TimestampFrobber implements CommitModifier {
+  private static final int MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MiB
+
   @Inject
-  public TimestampFrobber() {
+  public TimestampFrobber() {}
+
+  private List<DiffEntry> getChangedFiles(ObjectReader reader, RevTree oldTree, RevTree newTree)
+      throws IOException {
+    DiffFormatter diffFmt = new DiffFormatter(NullOutputStream.INSTANCE);
+    diffFmt.setReader(reader, new Config());
+    return diffFmt.scan(oldTree, newTree);
   }
 
   @Override
@@ -44,17 +56,15 @@ public class TimestampFrobber implements CommitModifier {
       dirCacheBuilder.addTree(new byte[0], DirCacheEntry.STAGE_0, reader, newTree);
       dirCacheBuilder.finish();
 
-      RevTree cTree = rw.parseTree(newTree);
-      DiffFormatter diffFmt = new DiffFormatter(NullOutputStream.INSTANCE);
-      diffFmt.setReader(reader, new Config());
-      List<DiffEntry> result = diffFmt.scan(mergeTip.getTree(), cTree);
+      String timestamp = new SimpleDateFormat("YY/MM/dd").format(new Date());
 
-      for (DiffEntry entry : result) {
+      for (DiffEntry entry : getChangedFiles(reader, mergeTip.getTree(), rw.parseTree(newTree))) {
         ObjectId id = entry.getNewId().toObjectId();
 
         // TODO: skip file if it's too big
         // TODO: skip file if it looks binary
-        byte[] data = reader.open(id).getBytes();
+        byte[] data = reader.open(id).getCachedBytes(MAX_FILE_SIZE);
+        //reader.open(id).openStream().getSize();
 
         // TODO: avoid reading the whole file into memory.
         String content = new String(data, "iso-8859-1");
@@ -62,36 +72,26 @@ public class TimestampFrobber implements CommitModifier {
         // TODO (MAYBE): grab magic date from config file
         // TODO: compute current date in... UTC or something
         // TODO: check for TAB before "00/00/00"
-        String newContent = content.replaceAll("00/00/00", "2018/01/19");
+        String newContent = content.replaceAll("\t00/00/00", timestamp);
 
         // TODO: avoid yet another array
         final byte[] newData = newContent.getBytes("iso-8859-1");
         final ByteArrayInputStream newBAIS = new ByteArrayInputStream(newData);
 
-        // TODO: refactor this out.
-        DirCacheEditor.PathEdit edit = new DirCacheEditor.PathEdit(entry.getNewPath()) {
+        PathEdit edit = new PathEdit(entry.getNewPath()) {
           @Override
           public void apply(DirCacheEntry dirCacheEntry) {
-            try {
-              if (dirCacheEntry.getFileMode() == FileMode.GITLINK) {
-                dirCacheEntry.setLength(0);
-                dirCacheEntry.setLastModified(0);
-                ObjectId newObjectId = ObjectId.fromString(newData, 0);
-                dirCacheEntry.setObjectId(newObjectId);
-              } else {
+            if (dirCacheEntry.getFileMode() != FileMode.GITLINK) {
+              try {
+                ObjectId newBlobObjectId = inserter.insert(OBJ_BLOB, newData.length, newBAIS);
                 if (dirCacheEntry.getRawMode() == 0) {
                   dirCacheEntry.setFileMode(FileMode.REGULAR_FILE);
                 }
-                ObjectId newBlobObjectId = createNewBlobAndGetItsId();
                 dirCacheEntry.setObjectId(newBlobObjectId);
+              } catch (IOException e) {
+                e.printStackTrace(); // FIXME: is this the proper way to log this?
               }
-            } catch (IOException e) {
-              e.printStackTrace();
             }
-          }
-
-          private ObjectId createNewBlobAndGetItsId() throws IOException {
-            return inserter.insert(OBJ_BLOB, newData.length, newBAIS);
           }
         };
 
