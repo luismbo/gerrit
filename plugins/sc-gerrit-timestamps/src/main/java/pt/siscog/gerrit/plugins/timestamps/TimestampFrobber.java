@@ -27,6 +27,10 @@ import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
 
@@ -47,6 +51,33 @@ public class TimestampFrobber implements CommitModifier {
     DiffFormatter diffFmt = new DiffFormatter(NullOutputStream.INSTANCE);
     diffFmt.setReader(reader, new Config());
     return diffFmt.scan(oldTree, newTree);
+  }
+
+  private static final Pattern patchVersionPattern = Pattern.compile("patch.*-\\d+-(\\d+)\\.lisp");
+  private static OptionalInt getPatchVersion(String path) {
+    if (path != null) {
+      Matcher m = patchVersionPattern.matcher(path);
+
+      if (m.find()) {
+        try {
+          return OptionalInt.of(Integer.parseInt(path.substring(m.start(1), m.end(1))));
+        } catch (NumberFormatException e) {
+          return OptionalInt.empty();
+        }
+      }
+    }
+
+    return OptionalInt.empty();
+  }
+
+  private static Optional<String> setPatchVersion(String path, int newVersion) {
+    Matcher m = patchVersionPattern.matcher(path);
+
+    if (m.find()) {
+      return Optional.of(path.substring(0, m.start(1)) + newVersion + path.substring(m.end(1), path.length()));
+    }
+
+    return Optional.empty();
   }
 
   @Override
@@ -94,26 +125,40 @@ public class TimestampFrobber implements CommitModifier {
 
         // TODO: avoid yet another copy
         final byte[] newData = newContent.getBytes(ENCODING);
+        final ObjectId newBlobObjectId = inserter.insert(OBJ_BLOB, newData);
 
         PathEdit edit = new PathEdit(entry.getNewPath()) {
           @Override
           public void apply(DirCacheEntry dirCacheEntry) {
             if (dirCacheEntry.getFileMode() != FileMode.GITLINK) {
-              try {
-                ObjectId newBlobObjectId = inserter.insert(OBJ_BLOB, newData);
-                if (dirCacheEntry.getRawMode() == 0) {
-                  dirCacheEntry.setFileMode(FileMode.REGULAR_FILE);
-                }
-                dirCacheEntry.setObjectId(newBlobObjectId);
-              } catch (IOException e) {
-                e.printStackTrace(); // FIXME: is this the proper way to log this?
+              if (dirCacheEntry.getRawMode() == 0) {
+                dirCacheEntry.setFileMode(FileMode.REGULAR_FILE);
               }
+              dirCacheEntry.setObjectId(newBlobObjectId);
             }
           }
         };
 
         DirCacheEditor dirCacheEditor = dirCache.editor();
         dirCacheEditor.add(edit);
+        dirCacheEditor.finish();
+
+        dirCacheEditor = dirCache.editor();
+
+        // Maybe increment patch version.
+        OptionalInt newVersion = getPatchVersion(entry.getNewPath());
+        OptionalInt oldVersion = getPatchVersion(entry.getOldPath());
+
+        if (newVersion.isPresent() && newVersion.equals(oldVersion)) {
+          Optional<String> newNewPath = setPatchVersion(entry.getNewPath(), newVersion.getAsInt()+1);
+          if (newNewPath.isPresent()) {
+            DirCacheEditor.DeletePath deletePathEdit = new DirCacheEditor.DeletePath(entry.getNewPath());
+            AddPath addPathEdit = new AddPath(newNewPath.get(), entry.getNewMode(), newBlobObjectId);
+            dirCacheEditor.add(deletePathEdit);
+            dirCacheEditor.add(addPathEdit);
+          }
+        }
+
         dirCacheEditor.finish();
       }
 
@@ -122,4 +167,23 @@ public class TimestampFrobber implements CommitModifier {
       return finalTree;
     }
   }
+
+  private class AddPath extends DirCacheEditor.PathEdit {
+
+    private final FileMode fileMode;
+    private final ObjectId objectId;
+
+    AddPath(String filePath, FileMode fileMode, ObjectId objectId) {
+      super(filePath);
+      this.fileMode = fileMode;
+      this.objectId = objectId;
+    }
+
+    @Override
+    public void apply(DirCacheEntry dirCacheEntry) {
+      dirCacheEntry.setFileMode(fileMode);
+      dirCacheEntry.setObjectId(objectId);
+    }
+  }
+
 }
