@@ -217,6 +217,7 @@ public class CherryPickChange {
                     commitMessage,
                     revWalk,
                     input.parent - 1,
+                    false,
                     false);
 
         Change.Key changeKey;

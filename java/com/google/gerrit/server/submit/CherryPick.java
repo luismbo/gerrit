@@ -116,7 +116,8 @@ public class CherryPick extends SubmitStrategy {
                 cherryPickCmtMsg,
                 args.rw,
                 0,
-                false);
+                false,
+                true);
       } catch (MergeConflictException mce) {
         // Keep going in the case of a single merge failure; the goal is to
         // cherry-pick as many commits as possible.

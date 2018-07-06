@@ -74,25 +74,27 @@ import org.eclipse.jgit.errors.MissingObjectException;
 import org.eclipse.jgit.errors.NoMergeBaseException;
 import org.eclipse.jgit.errors.NoMergeBaseException.MergeBaseFailureReason;
 import org.eclipse.jgit.errors.RevisionSyntaxException;
-import org.eclipse.jgit.lib.AnyObjectId;
-import org.eclipse.jgit.lib.CommitBuilder;
-import org.eclipse.jgit.lib.Config;
-import org.eclipse.jgit.lib.Constants;
-import org.eclipse.jgit.lib.ObjectId;
-import org.eclipse.jgit.lib.ObjectInserter;
-import org.eclipse.jgit.lib.PersonIdent;
-import org.eclipse.jgit.lib.Repository;
+// import org.eclipse.jgit.lib.AnyObjectId;
+// import org.eclipse.jgit.lib.CommitBuilder;
+// import org.eclipse.jgit.lib.Config;
+// import org.eclipse.jgit.lib.Constants;
+// import org.eclipse.jgit.lib.ObjectId;
+// import org.eclipse.jgit.lib.ObjectInserter;
+// import org.eclipse.jgit.lib.PersonIdent;
+// import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.lib.*;
 import org.eclipse.jgit.merge.MergeStrategy;
 import org.eclipse.jgit.merge.Merger;
 import org.eclipse.jgit.merge.ResolveMerger;
 import org.eclipse.jgit.merge.ThreeWayMergeStrategy;
 import org.eclipse.jgit.merge.ThreeWayMerger;
-import org.eclipse.jgit.revwalk.FooterKey;
-import org.eclipse.jgit.revwalk.FooterLine;
-import org.eclipse.jgit.revwalk.RevCommit;
-import org.eclipse.jgit.revwalk.RevFlag;
-import org.eclipse.jgit.revwalk.RevSort;
-import org.eclipse.jgit.revwalk.RevWalk;
+// import org.eclipse.jgit.revwalk.FooterKey;
+// import org.eclipse.jgit.revwalk.FooterLine;
+// import org.eclipse.jgit.revwalk.RevCommit;
+// import org.eclipse.jgit.revwalk.RevFlag;
+// import org.eclipse.jgit.revwalk.RevSort;
+// import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.revwalk.*;
 
 /**
  * Utility methods used during the merge process.
@@ -130,6 +132,33 @@ public class MergeUtil {
     }
   }
 
+  static class PluggableCommitModifier {
+    private final DynamicSet<CommitModifier> commitModifiers;
+
+    @Inject
+    PluggableCommitModifier(DynamicSet<CommitModifier> commitModifiers) {
+      this.commitModifiers = commitModifiers;
+    }
+
+    public ObjectId process(ObjectInserter inserter, RevWalk rw, RevCommit mergeTip,
+                            ObjectId newTree, String newCommitMessage) throws IOException {
+      checkNotNull(mergeTip.getRawBuffer());
+      if (mergeTip != null) {
+        checkNotNull(mergeTip.getRawBuffer());
+      }
+
+      for (CommitModifier commitModifier : commitModifiers) {
+        newTree = commitModifier.onSubmit(inserter, rw, mergeTip, newTree, newCommitMessage);
+        checkNotNull(
+            newTree,
+            commitModifier.getClass().getName()
+                +  ".onSubmit returned null instead of a tree identity");
+      }
+
+      return newTree;
+    }
+  }
+
   private static final String R_HEADS_MASTER = Constants.R_HEADS + Constants.MASTER;
 
   public static boolean useRecursiveMerge(Config cfg) {
@@ -154,6 +183,7 @@ public class MergeUtil {
   private final boolean useContentMerge;
   private final boolean useRecursiveMerge;
   private final PluggableCommitMessageGenerator commitMessageGenerator;
+  private final PluggableCommitModifier commitModifier;
 
   @AssistedInject
   MergeUtil(
@@ -163,6 +193,7 @@ public class MergeUtil {
       @CanonicalWebUrl @Nullable Provider<String> urlProvider,
       ApprovalsUtil approvalsUtil,
       PluggableCommitMessageGenerator commitMessageGenerator,
+      PluggableCommitModifier commitModifier,
       @Assisted ProjectState project) {
     this(
         serverConfig,
@@ -172,6 +203,7 @@ public class MergeUtil {
         approvalsUtil,
         project,
         commitMessageGenerator,
+        commitModifier,
         project.is(BooleanProjectConfig.USE_CONTENT_MERGE));
   }
 
@@ -184,6 +216,7 @@ public class MergeUtil {
       ApprovalsUtil approvalsUtil,
       @Assisted ProjectState project,
       PluggableCommitMessageGenerator commitMessageGenerator,
+      PluggableCommitModifier commitModifier,
       @Assisted boolean useContentMerge) {
     this.db = db;
     this.identifiedUserFactory = identifiedUserFactory;
@@ -193,6 +226,7 @@ public class MergeUtil {
     this.useContentMerge = useContentMerge;
     this.useRecursiveMerge = useRecursiveMerge(serverConfig);
     this.commitMessageGenerator = commitMessageGenerator;
+    this.commitModifier = commitModifier;
   }
 
   public CodeReviewCommit getFirstFastForward(
@@ -233,7 +267,8 @@ public class MergeUtil {
       String commitMsg,
       CodeReviewRevWalk rw,
       int parentIndex,
-      boolean ignoreIdenticalTree)
+      boolean ignoreIdenticalTree,
+      boolean applyCommitModifiers)
       throws MissingObjectException, IncorrectObjectTypeException, IOException,
           MergeIdenticalTreeException, MergeConflictException {
 
@@ -244,6 +279,10 @@ public class MergeUtil {
       ObjectId tree = m.getResultTreeId();
       if (tree.equals(mergeTip.getTree()) && !ignoreIdenticalTree) {
         throw new MergeIdenticalTreeException("identical tree");
+      }
+
+      if (applyCommitModifiers) {
+        tree = commitModifier.process(inserter, rw, mergeTip, tree, commitMsg);
       }
 
       CommitBuilder mergeCommit = new CommitBuilder();
