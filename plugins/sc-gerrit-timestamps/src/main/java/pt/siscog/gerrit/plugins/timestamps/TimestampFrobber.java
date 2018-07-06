@@ -53,7 +53,7 @@ public class TimestampFrobber implements CommitModifier {
     return diffFmt.scan(oldTree, newTree);
   }
 
-  private static final Pattern patchVersionPattern = Pattern.compile("patch.*-\\d+-(\\d+)\\.lisp");
+  private static final Pattern patchVersionPattern = Pattern.compile("patch-.*-(\\d+)\\.lisp");
   private static OptionalInt getPatchVersion(String path) {
     if (path != null) {
       Matcher m = patchVersionPattern.matcher(path);
@@ -120,7 +120,9 @@ public class TimestampFrobber implements CommitModifier {
         String newContent = content.replaceAll(TIMESTAMP_MARKER, timestamp);
 
         if (content.equals(newContent)) {
-          continue; // skip unchanged files.
+          // skip files without timestamp markers. Notably, this mean we won't
+          // bump patch file versions for such files.
+          continue;
         }
 
         // TODO: avoid yet another copy
@@ -145,12 +147,21 @@ public class TimestampFrobber implements CommitModifier {
 
         dirCacheEditor = dirCache.editor();
 
-        // Maybe increment patch version.
+        // If both new and old patches have a version and the new version
+        // is not greater than the old version, we force the new patch's
+        // version to be oldVersion+1. (Setting the version on a versionless
+        // patch would complicate setPatchVersion() and it's not clear why
+        // the new patch wouldn't have a version.)
+        //
+        // Note: if the patch doesn't contain at least one timestamp marker,
+        // we don't get this far. That way we can tweak the initial patches
+        // without having their versions inadvertently bumped.
         OptionalInt newVersion = getPatchVersion(entry.getNewPath());
         OptionalInt oldVersion = getPatchVersion(entry.getOldPath());
 
-        if (newVersion.isPresent() && newVersion.equals(oldVersion)) {
-          Optional<String> newNewPath = setPatchVersion(entry.getNewPath(), newVersion.getAsInt()+1);
+        if (oldVersion.isPresent() && newVersion.isPresent()) {
+          int finalVersion = Math.max(oldVersion.getAsInt()+1, newVersion.getAsInt());
+          Optional<String> newNewPath = setPatchVersion(entry.getNewPath(), finalVersion);
           if (newNewPath.isPresent()) {
             DirCacheEditor.DeletePath deletePathEdit = new DirCacheEditor.DeletePath(entry.getNewPath());
             AddPath addPathEdit = new AddPath(newNewPath.get(), entry.getNewMode(), newBlobObjectId);
