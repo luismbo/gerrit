@@ -41,7 +41,6 @@ import com.google.gerrit.reviewdb.client.PatchSet.Id;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
 import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
-import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.config.CanonicalWebUrl;
 import com.google.gerrit.server.config.GerritServerConfig;
@@ -254,7 +253,7 @@ public class MergeUtil {
     } catch (IOException e) {
       throw new IntegrationException("Branch head sorting failed", e);
     }
-    Collections.sort(result, CodeReviewCommit.ORDER);
+    result.sort(CodeReviewCommit.ORDER);
     return result;
   }
 
@@ -354,12 +353,10 @@ public class MergeUtil {
    *
    * @param n
    * @param notes
-   * @param user
    * @param psId
    * @return new message
    */
-  private String createDetailedCommitMessage(
-      RevCommit n, ChangeNotes notes, CurrentUser user, PatchSet.Id psId) {
+  private String createDetailedCommitMessage(RevCommit n, ChangeNotes notes, PatchSet.Id psId) {
     Change c = notes.getChange();
     final List<FooterLine> footers = n.getFooterLines();
     final StringBuilder msgbuf = new StringBuilder();
@@ -400,7 +397,7 @@ public class MergeUtil {
 
     PatchSetApproval submitAudit = null;
 
-    for (PatchSetApproval a : safeGetApprovals(notes, user, psId)) {
+    for (PatchSetApproval a : safeGetApprovals(notes, psId)) {
       if (a.getValue() <= 0) {
         // Negative votes aren't counted.
         continue;
@@ -463,12 +460,7 @@ public class MergeUtil {
   }
 
   public String createCommitMessageOnSubmit(CodeReviewCommit n, RevCommit mergeTip) {
-    return createCommitMessageOnSubmit(
-        n,
-        mergeTip,
-        n.notes(),
-        identifiedUserFactory.create(n.notes().getChange().getOwner()),
-        n.getPatchsetId());
+    return createCommitMessageOnSubmit(n, mergeTip, n.notes(), n.getPatchsetId());
   }
 
   /**
@@ -481,14 +473,13 @@ public class MergeUtil {
    * @param n
    * @param mergeTip
    * @param notes
-   * @param user
    * @param id
    * @return new message
    */
   public String createCommitMessageOnSubmit(
-      RevCommit n, RevCommit mergeTip, ChangeNotes notes, CurrentUser user, Id id) {
+      RevCommit n, RevCommit mergeTip, ChangeNotes notes, Id id) {
     return commitMessageGenerator.generate(
-        n, mergeTip, notes.getChange().getDest(), createDetailedCommitMessage(n, notes, user, id));
+        n, mergeTip, notes.getChange().getDest(), createDetailedCommitMessage(n, notes, id));
   }
 
   private static boolean isCodeReview(LabelId id) {
@@ -499,10 +490,9 @@ public class MergeUtil {
     return "Verified".equalsIgnoreCase(id.get());
   }
 
-  private Iterable<PatchSetApproval> safeGetApprovals(
-      ChangeNotes notes, CurrentUser user, PatchSet.Id psId) {
+  private Iterable<PatchSetApproval> safeGetApprovals(ChangeNotes notes, PatchSet.Id psId) {
     try {
-      return approvalsUtil.byPatchSet(db.get(), notes, user, psId, null, null);
+      return approvalsUtil.byPatchSet(db.get(), notes, psId, null, null);
     } catch (OrmException e) {
       logger.atSevere().withCause(e).log("Can't read approval records for %s", psId);
       return Collections.emptyList();

@@ -37,14 +37,18 @@ limitations under the License.
 <script>
   suite('gr-change-list-item tests', () => {
     let element;
+    let sandbox;
 
     setup(() => {
+      sandbox = sinon.sandbox.create();
       stub('gr-rest-api-interface', {
         getConfig() { return Promise.resolve({}); },
         getLoggedIn() { return Promise.resolve(false); },
       });
       element = fixture('basic');
     });
+
+    teardown(() => { sandbox.restore(); });
 
     test('computed fields', () => {
       assert.equal(element._computeLabelClass({labels: {}}),
@@ -121,7 +125,7 @@ limitations under the License.
         'Status',
         'Owner',
         'Assignee',
-        'Project',
+        'Repo',
         'Branch',
         'Updated',
         'Size',
@@ -131,31 +135,13 @@ limitations under the License.
 
       for (const column of element.columnNames) {
         const elementClass = '.' + column.toLowerCase();
+        assert.isOk(element.$$(elementClass),
+            `Expect ${elementClass} element to be found`);
         assert.isFalse(element.$$(elementClass).hidden);
       }
     });
 
-    test('no hidden columns', () => {
-      element.visibleChangeTableColumns = [
-        'Subject',
-        'Status',
-        'Owner',
-        'Assignee',
-        'Project',
-        'Branch',
-        'Updated',
-        'Size',
-      ];
-
-      flushAsynchronousOperations();
-
-      for (const column of element.columnNames) {
-        const elementClass = '.' + column.toLowerCase();
-        assert.isFalse(element.$$(elementClass).hidden);
-      }
-    });
-
-    test('project column hidden', () => {
+    test('repo column hidden', () => {
       element.visibleChangeTableColumns = [
         'Subject',
         'Status',
@@ -170,7 +156,7 @@ limitations under the License.
 
       for (const column of element.columnNames) {
         const elementClass = '.' + column.toLowerCase();
-        if (column === 'Project') {
+        if (column === 'Repo') {
           assert.isTrue(element.$$(elementClass).hidden);
         } else {
           assert.isFalse(element.$$(elementClass).hidden);
@@ -248,6 +234,40 @@ limitations under the License.
         insertions: 99,
         deletions: 999,
       }), 'XL');
+    });
+
+    test('change params passed to gr-navigation', () => {
+      sandbox.stub(Gerrit.Nav);
+      const change = {
+        internalHost: 'test-host',
+        project: 'test-repo',
+        topic: 'test-topic',
+        branch: 'test-branch',
+      };
+      element.change = change;
+      flushAsynchronousOperations();
+
+      assert.deepEqual(Gerrit.Nav.getUrlForChange.lastCall.args, [change]);
+      assert.deepEqual(Gerrit.Nav.getUrlForProjectChanges.lastCall.args,
+          [change.project, true, change.internalHost]);
+      assert.deepEqual(Gerrit.Nav.getUrlForBranch.lastCall.args,
+          [change.branch, change.project, null, change.internalHost]);
+      assert.deepEqual(Gerrit.Nav.getUrlForTopic.lastCall.args,
+          [change.topic, change.internalHost]);
+    });
+
+    test('_computeRepoDisplay', () => {
+      const change = {
+        project: 'a/test/repo',
+        internalHost: 'host',
+      };
+      assert.equal(element._computeRepoDisplay(change), 'host/a/test/repo');
+      assert.equal(element._computeRepoDisplay(change, true),
+          'host/…/test/repo');
+      delete change.internalHost;
+      assert.equal(element._computeRepoDisplay(change), 'a/test/repo');
+      assert.equal(element._computeRepoDisplay(change, true),
+          '…/test/repo');
     });
   });
 </script>

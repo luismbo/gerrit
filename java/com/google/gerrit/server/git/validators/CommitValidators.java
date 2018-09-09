@@ -35,9 +35,7 @@ import com.google.gerrit.reviewdb.client.BooleanProjectConfig;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Branch.NameKey;
 import com.google.gerrit.reviewdb.client.Change;
-import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
-import com.google.gerrit.reviewdb.client.RevId;
 import com.google.gerrit.server.GerritPersonIdent;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.account.externalids.ExternalIdsConsistencyChecker;
@@ -46,11 +44,9 @@ import com.google.gerrit.server.config.AllUsersName;
 import com.google.gerrit.server.config.CanonicalWebUrl;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.events.CommitReceivedEvent;
-import com.google.gerrit.server.git.BanCommit;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.git.ValidationError;
 import com.google.gerrit.server.permissions.PermissionBackend;
-import com.google.gerrit.server.permissions.PermissionBackend.ForRef;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.permissions.RefPermission;
 import com.google.gerrit.server.project.ProjectCache;
@@ -124,15 +120,15 @@ public class CommitValidators {
     }
 
     public CommitValidators forReceiveCommits(
-        PermissionBackend.ForRef perm,
+        PermissionBackend.ForProject forProject,
         Branch.NameKey branch,
         IdentifiedUser user,
         SshInfo sshInfo,
-        Repository repo,
+        NoteMap rejectCommits,
         RevWalk rw,
         @Nullable Change change)
         throws IOException {
-      NoteMap rejectCommits = BanCommit.loadRejectCommitsMap(repo, rw);
+      PermissionBackend.ForRef perm = forProject.ref(branch.get());
       ProjectState projectState = projectCache.checkedGet(branch.getParentKey());
       return new CommitValidators(
           ImmutableList.of(
@@ -158,13 +154,14 @@ public class CommitValidators {
     }
 
     public CommitValidators forGerritCommits(
-        ForRef perm,
+        PermissionBackend.ForProject forProject,
         NameKey branch,
         IdentifiedUser user,
         SshInfo sshInfo,
         RevWalk rw,
         @Nullable Change change)
         throws IOException {
+      PermissionBackend.ForRef perm = forProject.ref(branch.get());
       ProjectState projectState = projectCache.checkedGet(branch.getParentKey());
       return new CommitValidators(
           ImmutableList.of(
@@ -188,7 +185,7 @@ public class CommitValidators {
     }
 
     public CommitValidators forMergedCommits(
-        Project.NameKey project, PermissionBackend.ForRef perm, IdentifiedUser user)
+        PermissionBackend.ForProject forProject, Branch.NameKey branch, IdentifiedUser user)
         throws IOException {
       // Generally only include validators that are based on permissions of the
       // user creating a change for a merged commit; generally exclude
@@ -203,10 +200,11 @@ public class CommitValidators {
       //    discuss what to do about it.
       //  - Plugin validators may do things like require certain commit message
       //    formats, so we play it safe and exclude them.
+      PermissionBackend.ForRef perm = forProject.ref(branch.get());
       return new CommitValidators(
           ImmutableList.of(
               new UploadMergesPermissionValidator(perm),
-              new ProjectStateValidationListener(projectCache.checkedGet(project)),
+              new ProjectStateValidationListener(projectCache.checkedGet(branch.getParentKey())),
               new AuthorUploaderValidator(user, perm, canonicalWebUrl),
               new CommitterUploaderValidator(user, perm, canonicalWebUrl)));
     }
@@ -237,26 +235,17 @@ public class CommitValidators {
 
   public static class ChangeIdValidator implements CommitValidationListener {
     private static final String CHANGE_ID_PREFIX = FooterConstants.CHANGE_ID.getName() + ":";
-    private static final String MISSING_CHANGE_ID_MSG =
-        "[%s] missing " + FooterConstants.CHANGE_ID.getName() + " in commit message footer";
+    private static final String MISSING_CHANGE_ID_MSG = "missing Change-Id in message footer";
     private static final String MISSING_SUBJECT_MSG =
-        "[%s] missing subject; "
-            + FooterConstants.CHANGE_ID.getName()
-            + " must be in commit message footer";
+        "missing subject; Change-Id must be in message footer";
     private static final String MULTIPLE_CHANGE_ID_MSG =
-        "[%s] multiple " + FooterConstants.CHANGE_ID.getName() + " lines in commit message footer";
+        "multiple Change-Id lines in message footer";
     private static final String INVALID_CHANGE_ID_MSG =
-        "[%s] invalid "
-            + FooterConstants.CHANGE_ID.getName()
-            + " line format in commit message footer";
+        "invalid Change-Id line format in message footer";
 
     @VisibleForTesting
     public static final String CHANGE_ID_MISMATCH_MSG =
-        "[%s] "
-            + FooterConstants.CHANGE_ID.getName()
-            + " in commit message footer does not match"
-            + FooterConstants.CHANGE_ID.getName()
-            + " of target change";
+        "Change-Id in message footer does not match Change-Id of target change";
 
     private static final Pattern CHANGE_ID = Pattern.compile(CHANGE_ID_PATTERN);
 
@@ -291,35 +280,29 @@ public class CommitValidators {
       RevCommit commit = receiveEvent.commit;
       List<CommitValidationMessage> messages = new ArrayList<>();
       List<String> idList = commit.getFooterLines(FooterConstants.CHANGE_ID);
-      String sha1 = commit.abbreviate(RevId.ABBREV_LEN).name();
 
       if (idList.isEmpty()) {
         String shortMsg = commit.getShortMessage();
         if (shortMsg.startsWith(CHANGE_ID_PREFIX)
             && CHANGE_ID.matcher(shortMsg.substring(CHANGE_ID_PREFIX.length()).trim()).matches()) {
-          String errMsg = String.format(MISSING_SUBJECT_MSG, sha1);
-          throw new CommitValidationException(errMsg);
+          throw new CommitValidationException(MISSING_SUBJECT_MSG);
         }
         if (projectState.is(BooleanProjectConfig.REQUIRE_CHANGE_ID)) {
-          String errMsg = String.format(MISSING_CHANGE_ID_MSG, sha1);
-          messages.add(getMissingChangeIdErrorMsg(errMsg, commit));
-          throw new CommitValidationException(errMsg, messages);
+          messages.add(getMissingChangeIdErrorMsg(MISSING_CHANGE_ID_MSG, commit));
+          throw new CommitValidationException(MISSING_CHANGE_ID_MSG, messages);
         }
       } else if (idList.size() > 1) {
-        String errMsg = String.format(MULTIPLE_CHANGE_ID_MSG, sha1);
-        throw new CommitValidationException(errMsg, messages);
+        throw new CommitValidationException(MULTIPLE_CHANGE_ID_MSG, messages);
       } else {
         String v = idList.get(idList.size() - 1).trim();
         // Reject Change-Ids with wrong format and invalid placeholder ID from
         // Egit (I0000000000000000000000000000000000000000).
         if (!CHANGE_ID.matcher(v).matches() || v.matches("^I00*$")) {
-          String errMsg = String.format(INVALID_CHANGE_ID_MSG, sha1);
-          messages.add(getMissingChangeIdErrorMsg(errMsg, receiveEvent.commit));
-          throw new CommitValidationException(errMsg, messages);
+          messages.add(getMissingChangeIdErrorMsg(INVALID_CHANGE_ID_MSG, receiveEvent.commit));
+          throw new CommitValidationException(INVALID_CHANGE_ID_MSG, messages);
         }
         if (change != null && !v.equals(change.getKey().get())) {
-          String errMsg = String.format(CHANGE_ID_MISMATCH_MSG, sha1);
-          throw new CommitValidationException(errMsg);
+          throw new CommitValidationException(CHANGE_ID_MISMATCH_MSG);
         }
       }
 
@@ -333,29 +316,28 @@ public class CommitValidators {
 
     private CommitValidationMessage getMissingChangeIdErrorMsg(String errMsg, RevCommit c) {
       StringBuilder sb = new StringBuilder();
-      sb.append("ERROR: ").append(errMsg);
+      sb.append("ERROR: ").append(errMsg).append("\n");
 
+      boolean hinted = false;
       if (c.getFullMessage().contains(CHANGE_ID_PREFIX)) {
         String lastLine = Iterables.getLast(Splitter.on('\n').split(c.getFullMessage()), "");
         if (!lastLine.contains(CHANGE_ID_PREFIX)) {
-          sb.append('\n');
-          sb.append('\n');
-          sb.append("Hint: A potential ");
-          sb.append(FooterConstants.CHANGE_ID.getName());
-          sb.append("Change-Id was found, but it was not in the ");
-          sb.append("footer (last paragraph) of the commit message.");
+          hinted = true;
+          sb.append("\n")
+              .append("Hint: run\n")
+              .append("  git commit --amend\n")
+              .append("and move 'Change-Id: Ixxx..' to the bottom on a separate line\n");
         }
       }
-      sb.append('\n');
-      sb.append('\n');
-      sb.append("Hint: To automatically insert ");
-      sb.append(FooterConstants.CHANGE_ID.getName());
-      sb.append(", install the hook:\n");
-      sb.append(getCommitMessageHookInstallationHint());
-      sb.append('\n');
-      sb.append("And then amend the commit:\n");
-      sb.append("  git commit --amend\n");
 
+      // Print only one hint to avoid overwhelming the user.
+      if (!hinted) {
+        sb.append("\nHint: to automatically insert a Change-Id, install the hook:\n")
+            .append(getCommitMessageHookInstallationHint())
+            .append("\n")
+            .append("and then amend the commit:\n")
+            .append("  git commit --amend\n");
+      }
       return new CommitValidationMessage(sb.toString(), false);
     }
 
@@ -368,10 +350,9 @@ public class CommitValidators {
       // If there are no SSH keys, the commit-msg hook must be installed via
       // HTTP(S)
       if (hostKeys.isEmpty()) {
-        String p = "${gitdir}/hooks/commit-msg";
         return String.format(
-            "  gitdir=$(git rev-parse --git-dir); curl -o %s %stools/hooks/commit-msg ; chmod +x %s",
-            p, canonicalWebUrl, p);
+            "  f=\"$(git rev-parse --git-dir)/hooks/commit-msg\"; curl -o \"$f\" %stools/hooks/commit-msg ; chmod +x \"$f\"",
+            canonicalWebUrl);
       }
 
       // SSH keys exist, so the hook can be installed with scp.
@@ -549,7 +530,7 @@ public class CommitValidators {
           perm.check(RefPermission.FORGE_COMMITTER);
         } catch (AuthException denied) {
           throw new CommitValidationException(
-              "not Signed-off-by author/committer/uploader in commit message footer");
+              "not Signed-off-by author/committer/uploader in message footer");
         } catch (PermissionBackendException e) {
           logger.atSevere().withCause(e).log("cannot check FORGE_COMMITTER");
           throw new CommitValidationException("internal auth error");
@@ -584,8 +565,7 @@ public class CommitValidators {
         return Collections.emptyList();
       } catch (AuthException e) {
         throw new CommitValidationException(
-            "invalid author",
-            invalidEmail(receiveEvent.commit, "author", author, user, canonicalWebUrl));
+            "invalid author", invalidEmail("author", author, user, canonicalWebUrl));
       } catch (PermissionBackendException e) {
         logger.atSevere().withCause(e).log("cannot check FORGE_AUTHOR");
         throw new CommitValidationException("internal auth error");
@@ -618,8 +598,7 @@ public class CommitValidators {
         return Collections.emptyList();
       } catch (AuthException e) {
         throw new CommitValidationException(
-            "invalid committer",
-            invalidEmail(receiveEvent.commit, "committer", committer, user, canonicalWebUrl));
+            "invalid committer", invalidEmail("committer", committer, user, canonicalWebUrl));
       } catch (PermissionBackendException e) {
         logger.atSevere().withCause(e).log("cannot check FORGE_COMMITTER");
         throw new CommitValidationException("internal auth error");
@@ -839,42 +818,30 @@ public class CommitValidators {
   }
 
   private static CommitValidationMessage invalidEmail(
-      RevCommit c,
-      String type,
-      PersonIdent who,
-      IdentifiedUser currentUser,
-      String canonicalWebUrl) {
+      String type, PersonIdent who, IdentifiedUser currentUser, String canonicalWebUrl) {
     StringBuilder sb = new StringBuilder();
-    sb.append("\n");
-    sb.append("ERROR:  In commit ").append(c.name()).append("\n");
-    sb.append("ERROR:  ")
-        .append(type)
-        .append(" email address ")
+
+    sb.append("email address ")
         .append(who.getEmailAddress())
-        .append("\n");
-    sb.append("ERROR:  does not match your user account and you have no 'forge ")
+        .append(" is not registered in your account, and you lack 'forge ")
         .append(type)
         .append("' permission.\n");
-    sb.append("ERROR:\n");
+
     if (currentUser.getEmailAddresses().isEmpty()) {
-      sb.append("ERROR:  You have not registered any email addresses.\n");
+      sb.append("You have not registered any email addresses.\n");
     } else {
-      sb.append("ERROR:  The following addresses are currently registered:\n");
+      sb.append("The following addresses are currently registered:\n");
       for (String address : currentUser.getEmailAddresses()) {
-        sb.append("ERROR:    ").append(address).append("\n");
+        sb.append("   ").append(address).append("\n");
       }
     }
-    sb.append("ERROR:\n");
+
     if (canonicalWebUrl != null) {
-      sb.append("ERROR:  To register an email address, please visit:\n");
-      sb.append("ERROR:  ")
-          .append(canonicalWebUrl)
-          .append("#")
-          .append(PageLinks.SETTINGS_CONTACT)
-          .append("\n");
+      sb.append("To register an email address, visit:\n");
+      sb.append(canonicalWebUrl).append("#").append(PageLinks.SETTINGS_CONTACT).append("\n");
     }
     sb.append("\n");
-    return new CommitValidationMessage(sb.toString(), false);
+    return new CommitValidationMessage(sb.toString(), true);
   }
 
   /**

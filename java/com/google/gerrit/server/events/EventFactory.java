@@ -73,7 +73,6 @@ import java.io.IOException;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -90,7 +89,7 @@ public class EventFactory {
   private final Emails emails;
   private final Provider<String> urlProvider;
   private final PatchListCache patchListCache;
-  private final PersonIdent myIdent;
+  private final Provider<PersonIdent> myIdent;
   private final ChangeData.Factory changeDataFactory;
   private final ApprovalsUtil approvalsUtil;
   private final ChangeKindCache changeKindCache;
@@ -104,7 +103,7 @@ public class EventFactory {
       Emails emails,
       @CanonicalWebUrl @Nullable Provider<String> urlProvider,
       PatchListCache patchListCache,
-      @GerritPersonIdent PersonIdent myIdent,
+      @GerritPersonIdent Provider<PersonIdent> myIdent,
       ChangeData.Factory changeDataFactory,
       ApprovalsUtil approvalsUtil,
       ChangeKindCache changeKindCache,
@@ -130,9 +129,9 @@ public class EventFactory {
    * @param change
    * @return object suitable for serialization to JSON
    */
-  public ChangeAttribute asChangeAttribute(Change change) {
+  public ChangeAttribute asChangeAttribute(Change change, ChangeNotes notes) {
     try (ReviewDb db = schema.open()) {
-      return asChangeAttribute(db, change);
+      return asChangeAttribute(db, change, notes);
     } catch (OrmException e) {
       logger.atSevere().withCause(e).log("Cannot open database connection");
       return new ChangeAttribute();
@@ -170,6 +169,24 @@ public class EventFactory {
     return a;
   }
 
+  /**
+   * Create a ChangeAttribute for the given change suitable for serialization to JSON.
+   *
+   * @param db Review database
+   * @param change
+   * @param notes
+   * @return object suitable for serialization to JSON
+   */
+  public ChangeAttribute asChangeAttribute(ReviewDb db, Change change, ChangeNotes notes)
+      throws OrmException {
+    ChangeAttribute a = asChangeAttribute(db, change);
+    Set<String> hashtags = notes.load().getHashtags();
+    if (!hashtags.isEmpty()) {
+      a.hashtags = new ArrayList<>(hashtags.size());
+      a.hashtags.addAll(hashtags);
+    }
+    return a;
+  }
   /**
    * Create a RefUpdateAttribute for the given old ObjectId, new ObjectId, and branch that is
    * suitable for serialization to JSON.
@@ -311,10 +328,9 @@ public class EventFactory {
       }
     }
     // Sort by original parent order.
-    Collections.sort(
-        ca.dependsOn,
+    ca.dependsOn.sort(
         comparing(
-            (DependencyAttribute d) -> {
+            d -> {
               for (int i = 0; i < parentNames.size(); i++) {
                 if (parentNames.get(i).equals(d.revision)) {
                   return i;
@@ -646,7 +662,7 @@ public class EventFactory {
     a.reviewer =
         message.getAuthor() != null
             ? asAccountAttribute(message.getAuthor())
-            : asAccountAttribute(myIdent);
+            : asAccountAttribute(myIdent.get());
     a.message = message.getMessage();
     return a;
   }

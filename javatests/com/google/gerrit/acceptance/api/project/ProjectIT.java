@@ -23,6 +23,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.AtomicLongMap;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
+import com.google.gerrit.acceptance.GerritConfig;
 import com.google.gerrit.acceptance.GitUtil;
 import com.google.gerrit.acceptance.NoHttpd;
 import com.google.gerrit.acceptance.PushOneCommit;
@@ -67,7 +68,7 @@ public class ProjectIT extends AbstractDaemonTest {
   @Before
   public void addProjectIndexedCounter() {
     projectIndexedCounter = new ProjectIndexedCounter();
-    projectIndexedCounterHandle = projectIndexedListeners.add(projectIndexedCounter);
+    projectIndexedCounterHandle = projectIndexedListeners.add("gerrit", projectIndexedCounter);
   }
 
   @After
@@ -368,7 +369,7 @@ public class ProjectIT extends AbstractDaemonTest {
     gApi.projects().name(project.get()).branch("test").create(new BranchInput());
     setApiUser(user);
     exception.expect(AuthException.class);
-    exception.expectMessage("set HEAD not permitted for refs/heads/test");
+    exception.expectMessage("not permitted: set HEAD on refs/heads/test");
     gApi.projects().name(project.get()).head("test");
   }
 
@@ -410,6 +411,94 @@ public class ProjectIT extends AbstractDaemonTest {
         ImmutableMap.of(project.get(), 1L, middle.get(), 1L, leave.get(), 1L));
   }
 
+  @Test
+  public void maxObjectSizeIsNotSetByDefault() throws Exception {
+    ConfigInfo info = getConfig();
+    assertThat(info.maxObjectSizeLimit.value).isNull();
+    assertThat(info.maxObjectSizeLimit.configuredValue).isNull();
+    assertThat(info.maxObjectSizeLimit.inheritedValue).isNull();
+  }
+
+  @Test
+  public void maxObjectSizeCanBeSetAndCleared() throws Exception {
+    // Set a value
+    ConfigInfo info = setMaxObjectSize("100k");
+    assertThat(info.maxObjectSizeLimit.value).isEqualTo("102400");
+    assertThat(info.maxObjectSizeLimit.configuredValue).isEqualTo("100k");
+    assertThat(info.maxObjectSizeLimit.inheritedValue).isNull();
+
+    // Clear the value
+    info = setMaxObjectSize("0");
+    assertThat(info.maxObjectSizeLimit.value).isNull();
+    assertThat(info.maxObjectSizeLimit.configuredValue).isNull();
+    assertThat(info.maxObjectSizeLimit.inheritedValue).isNull();
+  }
+
+  @Test
+  public void maxObjectSizeIsNotInheritedFromParentProject() throws Exception {
+    Project.NameKey child = createProject(name("child"), project);
+
+    ConfigInfo info = setMaxObjectSize("100k");
+    assertThat(info.maxObjectSizeLimit.value).isEqualTo("102400");
+    assertThat(info.maxObjectSizeLimit.configuredValue).isEqualTo("100k");
+    assertThat(info.maxObjectSizeLimit.inheritedValue).isNull();
+
+    info = getConfig(child);
+    assertThat(info.maxObjectSizeLimit.value).isNull();
+    assertThat(info.maxObjectSizeLimit.configuredValue).isNull();
+    assertThat(info.maxObjectSizeLimit.inheritedValue).isNull();
+  }
+
+  @Test
+  @GerritConfig(name = "receive.maxObjectSizeLimit", value = "200k")
+  public void maxObjectSizeIsInheritedFromGlobalConfig() throws Exception {
+    ConfigInfo info = getConfig();
+    assertThat(info.maxObjectSizeLimit.value).isEqualTo("204800");
+    assertThat(info.maxObjectSizeLimit.configuredValue).isNull();
+    assertThat(info.maxObjectSizeLimit.inheritedValue).isEqualTo("200k");
+  }
+
+  @Test
+  @GerritConfig(name = "receive.maxObjectSizeLimit", value = "200k")
+  public void maxObjectSizeOverridesGlobalConfigWhenLower() throws Exception {
+    ConfigInfo info = setMaxObjectSize("100k");
+    assertThat(info.maxObjectSizeLimit.value).isEqualTo("102400");
+    assertThat(info.maxObjectSizeLimit.configuredValue).isEqualTo("100k");
+    assertThat(info.maxObjectSizeLimit.inheritedValue).isEqualTo("200k");
+  }
+
+  @Test
+  @GerritConfig(name = "receive.maxObjectSizeLimit", value = "200k")
+  public void maxObjectSizeDoesNotOverrideGlobalConfigWhenHigher() throws Exception {
+    ConfigInfo info = setMaxObjectSize("300k");
+    assertThat(info.maxObjectSizeLimit.value).isEqualTo("204800");
+    assertThat(info.maxObjectSizeLimit.configuredValue).isEqualTo("300k");
+    assertThat(info.maxObjectSizeLimit.inheritedValue).isEqualTo("200k");
+  }
+
+  @Test
+  public void invalidMaxObjectSizeIsRejected() throws Exception {
+    exception.expect(ResourceConflictException.class);
+    exception.expectMessage("100 foo");
+    setMaxObjectSize("100 foo");
+  }
+
+  private ConfigInfo setConfig(Project.NameKey name, ConfigInput input) throws Exception {
+    return gApi.projects().name(name.get()).config(input);
+  }
+
+  private ConfigInfo setConfig(ConfigInput input) throws Exception {
+    return setConfig(project, input);
+  }
+
+  private ConfigInfo getConfig(Project.NameKey name) throws Exception {
+    return gApi.projects().name(name.get()).config();
+  }
+
+  private ConfigInfo getConfig() throws Exception {
+    return getConfig(project);
+  }
+
   private ConfigInput createTestConfigInput() {
     ConfigInput input = new ConfigInput();
     input.description = "some description";
@@ -425,6 +514,12 @@ public class ProjectIT extends AbstractDaemonTest {
     input.submitType = SubmitType.CHERRY_PICK;
     input.state = ProjectState.HIDDEN;
     return input;
+  }
+
+  private ConfigInfo setMaxObjectSize(String value) throws Exception {
+    ConfigInput input = new ConfigInput();
+    input.maxObjectSizeLimit = value;
+    return setConfig(input);
   }
 
   private static class ProjectIndexedCounter implements ProjectIndexedListener {

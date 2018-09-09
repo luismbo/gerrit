@@ -14,12 +14,14 @@
 
 package com.google.gerrit.acceptance.ssh;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Streams;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.NoHttpd;
@@ -28,7 +30,6 @@ import com.google.gerrit.acceptance.UseSsh;
 import com.google.gerrit.common.data.GlobalCapability;
 import com.google.gerrit.sshd.Commands;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.junit.Test;
@@ -39,7 +40,7 @@ public class SshCommandsIT extends AbstractDaemonTest {
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
   // TODO: It would be better to dynamically generate these lists
-  private static final List<String> COMMON_ROOT_COMMANDS =
+  private static final ImmutableList<String> COMMON_ROOT_COMMANDS =
       ImmutableList.of(
           "apropos",
           "close-connection",
@@ -57,7 +58,7 @@ public class SshCommandsIT extends AbstractDaemonTest {
           "show-queue",
           "version");
 
-  private static final List<String> MASTER_ONLY_ROOT_COMMANDS =
+  private static final ImmutableList<String> MASTER_ONLY_ROOT_COMMANDS =
       ImmutableList.of(
           "ban-commit",
           "create-account",
@@ -79,19 +80,12 @@ public class SshCommandsIT extends AbstractDaemonTest {
           "stream-events",
           "test-submit");
 
-  private static final Map<String, List<String>> MASTER_COMMANDS =
+  private static final ImmutableMap<String, List<String>> MASTER_COMMANDS =
       ImmutableMap.of(
           Commands.ROOT,
-          ImmutableList.copyOf(
-              new ArrayList<String>() {
-                private static final long serialVersionUID = 1L;
-
-                {
-                  addAll(COMMON_ROOT_COMMANDS);
-                  addAll(MASTER_ONLY_ROOT_COMMANDS);
-                  Collections.sort(this);
-                }
-              }),
+          Streams.concat(COMMON_ROOT_COMMANDS.stream(), MASTER_ONLY_ROOT_COMMANDS.stream())
+              .sorted()
+              .collect(toImmutableList()),
           "index",
           ImmutableList.of(
               "changes", "changes-in-project"), // "activate" and "start" are not included
@@ -102,7 +96,7 @@ public class SshCommandsIT extends AbstractDaemonTest {
           "test-submit",
           ImmutableList.of("rule", "type"));
 
-  private static final Map<String, List<String>> SLAVE_COMMANDS =
+  private static final ImmutableMap<String, List<String>> SLAVE_COMMANDS =
       ImmutableMap.of(
           Commands.ROOT,
           COMMON_ROOT_COMMANDS,

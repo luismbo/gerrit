@@ -22,6 +22,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.GroupReference;
@@ -43,13 +44,12 @@ import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.account.AccountControl;
 import com.google.gerrit.server.account.AccountDirectory.FillOptions;
 import com.google.gerrit.server.account.AccountLoader;
+import com.google.gerrit.server.account.AccountState;
 import com.google.gerrit.server.account.GroupBackend;
 import com.google.gerrit.server.account.GroupMembers;
 import com.google.gerrit.server.index.account.AccountField;
 import com.google.gerrit.server.index.account.AccountIndexCollection;
 import com.google.gerrit.server.notedb.ChangeNotes;
-import com.google.gerrit.server.permissions.GlobalPermission;
-import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.project.NoSuchProjectException;
 import com.google.gerrit.server.project.ProjectState;
@@ -129,7 +129,6 @@ public class ReviewersUtil {
   private final IndexConfig indexConfig;
   private final AccountControl.Factory accountControlFactory;
   private final Provider<CurrentUser> self;
-  private final PermissionBackend permissionBackend;
 
   @Inject
   ReviewersUtil(
@@ -142,8 +141,7 @@ public class ReviewersUtil {
       AccountIndexCollection accountIndexes,
       IndexConfig indexConfig,
       AccountControl.Factory accountControlFactory,
-      Provider<CurrentUser> self,
-      PermissionBackend permissionBackend) {
+      Provider<CurrentUser> self) {
     this.accountLoaderFactory = accountLoaderFactory;
     this.accountQueryBuilder = accountQueryBuilder;
     this.groupBackend = groupBackend;
@@ -154,7 +152,6 @@ public class ReviewersUtil {
     this.indexConfig = indexConfig;
     this.accountControlFactory = accountControlFactory;
     this.self = self;
-    this.permissionBackend = permissionBackend;
   }
 
   public interface VisibilityControl {
@@ -232,24 +229,30 @@ public class ReviewersUtil {
         // For performance reasons we don't use AccountQueryProvider as it would always load the
         // complete account from the cache (or worse, from NoteDb) even though we only need the ID
         // which we can directly get from the returned results.
+        Predicate<AccountState> pred =
+            Predicate.and(
+                AccountPredicates.isActive(),
+                accountQueryBuilder.defaultQuery(suggestReviewers.getQuery()));
+        logger.atFine().log("accounts index query: %s", pred);
         ResultSet<FieldBundle> result =
             accountIndexes
                 .getSearchIndex()
                 .getSource(
-                    Predicate.and(
-                        AccountPredicates.isActive(),
-                        accountQueryBuilder.defaultQuery(suggestReviewers.getQuery())),
+                    pred,
                     QueryOptions.create(
                         indexConfig,
                         0,
                         suggestReviewers.getLimit() * CANDIDATE_LIST_MULTIPLIER,
                         ImmutableSet.of(AccountField.ID.getName())))
                 .readRaw();
-        return result
-            .toList()
-            .stream()
-            .map(f -> new Account.Id(f.getValue(AccountField.ID).intValue()))
-            .collect(toList());
+        List<Account.Id> matches =
+            result
+                .toList()
+                .stream()
+                .map(f -> new Account.Id(f.getValue(AccountField.ID).intValue()))
+                .collect(toList());
+        logger.atFine().log("Matches: %s", matches);
+        return matches;
       } catch (QueryParseException e) {
         return ImmutableList.of();
       }
@@ -301,10 +304,7 @@ public class ReviewersUtil {
   private List<SuggestedReviewerInfo> loadAccounts(List<Account.Id> accountIds)
       throws PermissionBackendException {
     Set<FillOptions> fillOptions =
-        permissionBackend.currentUser().test(GlobalPermission.MODIFY_ACCOUNT)
-            ? EnumSet.of(FillOptions.SECONDARY_EMAILS)
-            : EnumSet.noneOf(FillOptions.class);
-    fillOptions.addAll(AccountLoader.DETAILED_OPTIONS);
+        Sets.union(AccountLoader.DETAILED_OPTIONS, EnumSet.of(FillOptions.SECONDARY_EMAILS));
     AccountLoader accountLoader = accountLoaderFactory.create(fillOptions);
 
     try (Timer0.Context ctx = metrics.loadAccountsLatency.start()) {
@@ -381,8 +381,10 @@ public class ReviewersUtil {
     GroupAsReviewer result = new GroupAsReviewer();
     int maxAllowed = suggestReviewers.getMaxAllowed();
     int maxAllowedWithoutConfirmation = suggestReviewers.getMaxAllowedWithoutConfirmation();
+    logger.atFine().log("maxAllowedWithoutConfirmation: " + maxAllowedWithoutConfirmation);
 
     if (!PostReviewers.isLegalReviewerGroup(group.getUUID())) {
+      logger.atFine().log("Ignore group %s that is not legal as reviewer", group.getUUID());
       return result;
     }
 
@@ -390,6 +392,7 @@ public class ReviewersUtil {
       Set<Account> members = groupMembers.listAccounts(group.getUUID(), project.getNameKey());
 
       if (members.isEmpty()) {
+        logger.atFine().log("Ignore group %s since it has no members", group.getUUID());
         return result;
       }
 
@@ -399,6 +402,11 @@ public class ReviewersUtil {
       }
 
       boolean needsConfirmation = result.size > maxAllowedWithoutConfirmation;
+      if (needsConfirmation) {
+        logger.atFine().log(
+            "group %s needs confirmation to be added as reviewer, it has %d members",
+            group.getUUID(), result.size);
+      }
 
       // require that at least one member in the group can see the change
       for (Account account : members) {
@@ -408,9 +416,12 @@ public class ReviewersUtil {
           } else {
             result.allowed = true;
           }
+          logger.atFine().log("Suggest group %s", group.getUUID());
           return result;
         }
       }
+      logger.atFine().log(
+          "Ignore group %s since none of its members can see the change", group.getUUID());
     } catch (NoSuchProjectException e) {
       return result;
     }

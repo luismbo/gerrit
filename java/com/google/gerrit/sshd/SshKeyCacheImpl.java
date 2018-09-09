@@ -86,6 +86,7 @@ public class SshKeyCacheImpl implements SshKeyCache {
   @Override
   public void evict(String username) {
     if (username != null) {
+      logger.atFine().log("Evict SSH key for username %s", username);
       cache.invalidate(username);
     }
   }
@@ -102,6 +103,8 @@ public class SshKeyCacheImpl implements SshKeyCache {
 
     @Override
     public Iterable<SshKeyCacheEntry> load(String username) throws Exception {
+      logger.atFine().log("Loading SSH keys for account with username %s", username);
+
       Optional<ExternalId> user = externalIds.get(ExternalId.Key.create(SCHEME_USERNAME, username));
       if (!user.isPresent()) {
         return NO_SUCH_USER;

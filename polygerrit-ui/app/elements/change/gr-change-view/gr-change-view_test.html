@@ -89,12 +89,13 @@ limitations under the License.
         assert(starStub.called);
       });
 
-      test('U should navigate to / if no backPage set', () => {
+      test('U should navigate to root if no backPage set', () => {
         const relativeNavStub = sandbox.stub(Gerrit.Nav,
             'navigateToRelativeUrl');
         MockInteractions.pressAndReleaseKeyOn(element, 85, null, 'u');
         assert.isTrue(relativeNavStub.called);
-        assert.isTrue(relativeNavStub.lastCall.calledWithExactly('/'));
+        assert.isTrue(relativeNavStub.lastCall.calledWithExactly(
+            Gerrit.Nav.getUrlForRoot()));
       });
 
       test('U should navigate to backPage if set', () => {
@@ -840,6 +841,10 @@ limitations under the License.
       assert.isFalse(element._computeHideEditCommitMessage(true, false, {}));
       assert.isTrue(element._computeHideEditCommitMessage(true, false,
           _change));
+      assert.isTrue(element._computeHideEditCommitMessage(true, false, {},
+          true));
+      assert.isFalse(element._computeHideEditCommitMessage(true, false, {},
+          false));
     });
 
     test('_handleCommitMessageSave trims trailing whitespace', () => {
@@ -1406,18 +1411,24 @@ limitations under the License.
       });
 
       test('canStartReview computation', () => {
-        const account1 = {_account_id: 1};
-        const account2 = {_account_id: 2};
-        const change = {
-          owner: {_account_id: 1},
+        const change1 = {};
+        const change2 = {
+          actions: {
+            ready: {
+              enabled: true,
+            },
+          },
         };
-        assert.isFalse(element._computeCanStartReview(true, change, account1));
-        change.work_in_progress = false;
-        assert.isFalse(element._computeCanStartReview(true, change, account1));
-        change.work_in_progress = true;
-        assert.isTrue(element._computeCanStartReview(true, change, account1));
-        assert.isFalse(element._computeCanStartReview(false, change, account1));
-        assert.isFalse(element._computeCanStartReview(true, change, account2));
+        const change3 = {
+          actions: {
+            ready: {
+              label: 'Ready for Review',
+            },
+          },
+        };
+        assert.isFalse(element._computeCanStartReview(change1));
+        assert.isTrue(element._computeCanStartReview(change2));
+        assert.isFalse(element._computeCanStartReview(change3));
       });
     });
 
@@ -1730,6 +1741,19 @@ limitations under the License.
       });
       assert.isTrue(setStub.calledOnce);
       assert.isTrue(setStub.calledWith(101, 'test-project'));
+    });
+
+    test('_handleToggleStar called when star is tapped', () => {
+      element._change = {
+        owner: {_account_id: 1},
+        starred: false,
+      };
+      element._loggedIn = true;
+      const stub = sandbox.stub(element, '_handleToggleStar');
+      flushAsynchronousOperations();
+
+      MockInteractions.tap(element.$.changeStar.$$('button'));
+      assert.isTrue(stub.called);
     });
   });
 </script>

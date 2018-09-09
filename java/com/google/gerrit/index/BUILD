@@ -12,19 +12,6 @@ java_library(
 )
 
 java_library(
-    name = "query_parser",
-    srcs = ["//antlr3:query"],
-    visibility = [
-        "//javatests/com/google/gerrit/index:__pkg__",
-        "//plugins:__pkg__",
-    ],
-    deps = [
-        ":query_exception",
-        "//lib/antlr:java-runtime",
-    ],
-)
-
-java_library(
     name = "index",
     srcs = glob(
         ["**/*.java"],
@@ -33,10 +20,11 @@ java_library(
     visibility = ["//visibility:public"],
     deps = [
         ":query_exception",
-        ":query_parser",
+        "//antlr3:query_parser",
         "//java/com/google/gerrit/common:annotations",
         "//java/com/google/gerrit/extensions:api",
         "//java/com/google/gerrit/metrics",
+        "//java/com/google/gerrit/reviewdb:server",
         "//lib:guava",
         "//lib:gwtjsonrpc",
         "//lib:gwtorm",

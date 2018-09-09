@@ -15,8 +15,10 @@
 package com.google.gerrit.server.project;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.gerrit.common.data.Permission.isPermission;
 import static com.google.gerrit.reviewdb.client.Project.DEFAULT_SUBMIT_TYPE;
+import static java.util.stream.Collectors.toList;
 
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Joiner;
@@ -25,6 +27,7 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
 import com.google.common.primitives.Shorts;
+import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.AccessSection;
 import com.google.gerrit.common.data.ContributorAgreement;
 import com.google.gerrit.common.data.GlobalCapability;
@@ -41,6 +44,7 @@ import com.google.gerrit.common.data.SubscribeSection;
 import com.google.gerrit.common.errors.InvalidNameException;
 import com.google.gerrit.extensions.client.InheritableBoolean;
 import com.google.gerrit.extensions.client.ProjectState;
+import com.google.gerrit.mail.Address;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.BooleanProjectConfig;
 import com.google.gerrit.reviewdb.client.Branch;
@@ -55,7 +59,6 @@ import com.google.gerrit.server.git.NotifyConfig;
 import com.google.gerrit.server.git.ValidationError;
 import com.google.gerrit.server.git.meta.MetaDataUpdate;
 import com.google.gerrit.server.git.meta.VersionedMetaData;
-import com.google.gerrit.server.mail.Address;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -69,6 +72,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -77,6 +81,8 @@ import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.CommitBuilder;
 import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.transport.RefSpec;
 
 public class ProjectConfig extends VersionedMetaData implements ValidationError.Sink {
@@ -86,6 +92,7 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
   public static final String KEY_DEFAULT_VALUE = "defaultValue";
   public static final String KEY_COPY_MIN_SCORE = "copyMinScore";
   public static final String KEY_ALLOW_POST_SUBMIT = "allowPostSubmit";
+  public static final String KEY_IGNORE_SELF_APPROVAL = "ignoreSelfApproval";
   public static final String KEY_COPY_MAX_SCORE = "copyMaxScore";
   public static final String KEY_COPY_ALL_SCORES_ON_MERGE_FIRST_PARENT_UPDATE =
       "copyAllScoresOnMergeFirstParentUpdate";
@@ -158,7 +165,6 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
 
   private static final Pattern EXCLUSIVE_PERMISSIONS_SPLIT_PATTERN = Pattern.compile("[, \t]{1,}");
 
-  private Project.NameKey projectName;
   private Project project;
   private AccountsSection accountsSection;
   private GroupList groupList;
@@ -237,6 +243,20 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
 
   public ProjectConfig(Project.NameKey projectName) {
     this.projectName = projectName;
+  }
+
+  public void load(Repository repo) throws IOException, ConfigInvalidException {
+    super.load(projectName, repo);
+  }
+
+  public void load(Repository repo, @Nullable ObjectId revision)
+      throws IOException, ConfigInvalidException {
+    super.load(projectName, repo, revision);
+  }
+
+  public void load(RevWalk rw, @Nullable ObjectId revision)
+      throws IOException, ConfigInvalidException {
+    super.load(projectName, rw, revision);
   }
 
   public Project.NameKey getName() {
@@ -402,10 +422,6 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
     return mimeTypes;
   }
 
-  public GroupReference resolve(AccountGroup group) {
-    return resolve(GroupReference.forGroup(group));
-  }
-
   public GroupReference resolve(GroupReference group) {
     GroupReference groupRef = groupList.resolve(group);
     if (groupRef != null
@@ -441,10 +457,7 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
     return rulesId;
   }
 
-  /**
-   * @return the maxObjectSizeLimit for this project, if set. Zero if this project doesn't define
-   *     own maxObjectSizeLimit.
-   */
+  /** @return the maxObjectSizeLimit configured on this project, or zero if not configured. */
   public long getMaxObjectSizeLimit() {
     return maxObjectSizeLimit;
   }
@@ -502,6 +515,9 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
     p.setDescription(rc.getString(PROJECT, null, KEY_DESCRIPTION));
     if (p.getDescription() == null) {
       p.setDescription("");
+    }
+    if (revision != null) {
+      p.setConfigRefState(revision.toObjectId().name());
     }
 
     if (rc.getStringList(ACCESS, null, KEY_INHERIT_FROM).length > 1) {
@@ -868,6 +884,8 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
       }
       label.setAllowPostSubmit(
           rc.getBoolean(LABEL, name, KEY_ALLOW_POST_SUBMIT, LabelType.DEF_ALLOW_POST_SUBMIT));
+      label.setIgnoreSelfApproval(
+          rc.getBoolean(LABEL, name, KEY_IGNORE_SELF_APPROVAL, LabelType.DEF_IGNORE_SELF_APPROVAL));
       label.setCopyMinScore(
           rc.getBoolean(LABEL, name, KEY_COPY_MIN_SCORE, LabelType.DEF_COPY_MIN_SCORE));
       label.setCopyMaxScore(
@@ -1150,21 +1168,20 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
 
   private void saveNotifySections(Config rc, Set<AccountGroup.UUID> keepGroups) {
     for (NotifyConfig nc : sort(notifySections.values())) {
-      List<String> email = new ArrayList<>();
-      for (GroupReference gr : nc.getGroups()) {
-        if (gr.getUUID() != null) {
-          keepGroups.add(gr.getUUID());
-        }
-        email.add(new PermissionRule(gr).asString(false));
-      }
-      Collections.sort(email);
+      nc.getGroups()
+          .stream()
+          .map(gr -> gr.getUUID())
+          .filter(Objects::nonNull)
+          .forEach(keepGroups::add);
+      List<String> email =
+          nc.getGroups()
+              .stream()
+              .map(gr -> new PermissionRule(gr).asString(false))
+              .sorted()
+              .collect(toList());
 
-      List<String> addrs = new ArrayList<>();
-      for (Address addr : nc.getAddresses()) {
-        addrs.add(addr.toString());
-      }
-      Collections.sort(addrs);
-      email.addAll(addrs);
+      // Separate stream operation so that emails list contains 2 sorted sub-lists.
+      nc.getAddresses().stream().map(Address::toString).sorted().forEach(email::add);
 
       set(rc, NOTIFY, nc.getName(), KEY_HEADER, nc.getHeader(), NotifyConfig.Header.BCC);
       if (email.isEmpty()) {
@@ -1308,6 +1325,13 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
           rc,
           LABEL,
           name,
+          KEY_IGNORE_SELF_APPROVAL,
+          label.ignoreSelfApproval(),
+          LabelType.DEF_IGNORE_SELF_APPROVAL);
+      setBooleanConfigKey(
+          rc,
+          LABEL,
+          name,
           KEY_COPY_MIN_SCORE,
           label.isCopyMinScore(),
           LabelType.DEF_COPY_MIN_SCORE);
@@ -1438,10 +1462,8 @@ public class ProjectConfig extends VersionedMetaData implements ValidationError.
     validationErrors.add(error);
   }
 
-  private static <T extends Comparable<? super T>> List<T> sort(Collection<T> m) {
-    ArrayList<T> r = new ArrayList<>(m);
-    Collections.sort(r);
-    return r;
+  private static <T extends Comparable<? super T>> ImmutableList<T> sort(Collection<T> m) {
+    return m.stream().sorted().collect(toImmutableList());
   }
 
   public boolean hasLegacyPermissions() {

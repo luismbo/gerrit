@@ -449,6 +449,13 @@
       this.fire('comment-discard', this._getEventPayload());
     },
 
+    _handleFix() {
+      this.dispatchEvent(new CustomEvent('create-fix-comment', {
+        bubbles: true,
+        detail: this._getEventPayload(),
+      }));
+    },
+
     _handleDiscard(e) {
       e.preventDefault();
       this.$.reporting.recordDraftInteraction();
@@ -457,7 +464,11 @@
         this._discardDraft();
         return;
       }
-      this._openOverlay(this.confirmDiscardOverlay);
+
+      this._openOverlay(this.confirmDiscardOverlay).then(() => {
+        this.confirmDiscardOverlay.querySelector('#confirmDiscardDialog')
+            .resetFocus();
+      });
     },
 
     _handleConfirmDiscard(e) {
@@ -626,9 +637,7 @@
 
     _openOverlay(overlay) {
       Polymer.dom(Gerrit.getRootElement()).appendChild(overlay);
-      this.async(() => {
-        overlay.open();
-      }, 1);
+      return overlay.open();
     },
 
     _closeOverlay(overlay) {

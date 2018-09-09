@@ -18,6 +18,7 @@ import com.google.auto.value.AutoValue;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.cache.Cache;
 import com.google.common.collect.Table;
+import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Project;
@@ -25,10 +26,10 @@ import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.ReviewerByEmailSet;
 import com.google.gerrit.server.ReviewerSet;
 import com.google.gerrit.server.cache.CacheModule;
-import com.google.gerrit.server.cache.CacheSerializer;
-import com.google.gerrit.server.cache.ProtoCacheSerializers;
-import com.google.gerrit.server.cache.ProtoCacheSerializers.ObjectIdConverter;
 import com.google.gerrit.server.cache.proto.Cache.ChangeNotesKeyProto;
+import com.google.gerrit.server.cache.serialize.CacheSerializer;
+import com.google.gerrit.server.cache.serialize.ProtoCacheSerializers;
+import com.google.gerrit.server.cache.serialize.ProtoCacheSerializers.ObjectIdConverter;
 import com.google.gerrit.server.notedb.AbstractChangeNotes.Args;
 import com.google.gerrit.server.notedb.ChangeNotesCommit.ChangeNotesRevWalk;
 import com.google.inject.Inject;
@@ -46,6 +47,8 @@ import org.eclipse.jgit.lib.ObjectId;
 
 @Singleton
 public class ChangeNotesCache {
+  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
+
   @VisibleForTesting static final String CACHE_NAME = "change_notes";
 
   public static Module module() {
@@ -77,7 +80,7 @@ public class ChangeNotesCache {
     abstract ObjectId id();
 
     @VisibleForTesting
-    static enum Serializer implements CacheSerializer<Key> {
+    enum Serializer implements CacheSerializer<Key> {
       INSTANCE;
 
       @Override
@@ -345,6 +348,8 @@ public class ChangeNotesCache {
 
     @Override
     public ChangeNotesState call() throws ConfigInvalidException, IOException {
+      logger.atFine().log(
+          "Load change notes for change %s of project %s", key.changeId(), key.project());
       ChangeNotesParser parser =
           new ChangeNotesParser(
               key.changeId(),

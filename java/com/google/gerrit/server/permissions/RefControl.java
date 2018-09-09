@@ -16,12 +16,13 @@ package com.google.gerrit.server.permissions;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.common.data.PermissionRange;
 import com.google.gerrit.common.data.PermissionRule;
 import com.google.gerrit.common.data.PermissionRule.Action;
+import com.google.gerrit.extensions.conditions.BooleanCondition;
 import com.google.gerrit.extensions.restapi.AuthException;
-import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
@@ -41,6 +42,8 @@ import java.util.Set;
 
 /** Manages access control for Git references (aka branches, tags). */
 class RefControl {
+  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
+
   private final IdentifiedUser.GenericFactory identifiedUserFactory;
   private final ProjectControl projectControl;
   private final String refName;
@@ -133,9 +136,10 @@ class RefControl {
     return canPerform(Permission.EDIT_TOPIC_NAME, false, true);
   }
 
-  /** @return true if this user can delete their own changes. */
-  boolean canDeleteOwnChanges(boolean isChangeOwner) {
-    return canPerform(Permission.DELETE_OWN_CHANGES, isChangeOwner, false);
+  /** @return true if this user can delete changes. */
+  boolean canDeleteChanges(boolean isChangeOwner) {
+    return canPerform(Permission.DELETE_CHANGES)
+        || (isChangeOwner && canPerform(Permission.DELETE_OWN_CHANGES, isChangeOwner, false));
   }
 
   /** The range of permitted values associated with a label permission. */
@@ -391,35 +395,42 @@ class RefControl {
   /** True if the user has this permission. */
   private boolean canPerform(String permissionName, boolean isChangeOwner, boolean withForce) {
     if (isBlocked(permissionName, isChangeOwner, withForce)) {
+      logger.atFine().log(
+          "'%s' cannot perform '%s' with force=%s on project '%s' for ref '%s'"
+              + " because this permission is blocked",
+          getUser().getLoggableName(),
+          permissionName,
+          withForce,
+          projectControl.getProject().getName(),
+          refName);
       return false;
     }
 
     for (PermissionRule pr : relevant.getAllowRules(permissionName)) {
       if (isAllow(pr, withForce) && projectControl.match(pr, isChangeOwner)) {
+        logger.atFine().log(
+            "'%s' can perform '%s' with force=%s on project '%s' for ref '%s'",
+            getUser().getLoggableName(),
+            permissionName,
+            withForce,
+            projectControl.getProject().getName(),
+            refName);
         return true;
       }
     }
 
+    logger.atFine().log(
+        "'%s' cannot perform '%s' with force=%s on project '%s' for ref '%s'",
+        getUser().getLoggableName(),
+        permissionName,
+        withForce,
+        projectControl.getProject().getName(),
+        refName);
     return false;
   }
 
   private class ForRefImpl extends ForRef {
     private String resourcePath;
-
-    @Override
-    public CurrentUser user() {
-      return getUser();
-    }
-
-    @Override
-    public ForRef user(CurrentUser user) {
-      return forUser(user).asForRef().database(db);
-    }
-
-    @Override
-    public ForRef absentUser(Account.Id id) {
-      return user(identifiedUserFactory.create(id));
-    }
 
     @Override
     public String resourcePath() {
@@ -463,7 +474,88 @@ class RefControl {
     @Override
     public void check(RefPermission perm) throws AuthException, PermissionBackendException {
       if (!can(perm)) {
-        throw new AuthException(perm.describeForException() + " not permitted for " + refName);
+        PermissionDeniedException pde = new PermissionDeniedException(perm, refName);
+        switch (perm) {
+          case UPDATE:
+            if (refName.equals(RefNames.REFS_CONFIG)) {
+              pde.setAdvice(
+                  "Configuration changes can only be pushed by project owners\n"
+                      + "who also have 'Push' rights on "
+                      + RefNames.REFS_CONFIG);
+            } else {
+              pde.setAdvice("To push into this reference you need 'Push' rights.");
+            }
+            break;
+          case DELETE:
+            pde.setAdvice(
+                "You need 'Delete Reference' rights or 'Push' rights with the \n"
+                    + "'Force Push' flag set to delete references.");
+            break;
+          case CREATE_CHANGE:
+            // This is misleading in the default permission backend, since "create change" on a
+            // branch is encoded as "push" on refs/for/DESTINATION.
+            pde.setAdvice(
+                "You need 'Create Change' rights to upload code review requests.\n"
+                    + "Verify that you are pushing to the right branch.");
+            break;
+          case CREATE:
+            pde.setAdvice("You need 'Create' rights to create new references.");
+            break;
+          case CREATE_SIGNED_TAG:
+            pde.setAdvice("You need 'Create Signed Tag' rights to push a signed tag.");
+            break;
+          case CREATE_TAG:
+            pde.setAdvice("You need 'Create Tag' rights to push a normal tag.");
+            break;
+          case FORCE_UPDATE:
+            pde.setAdvice(
+                "You need 'Push' rights with 'Force' flag set to do a non-fastforward push.");
+            break;
+          case FORGE_AUTHOR:
+            pde.setAdvice(
+                "You need 'Forge Author' rights to push commits with another user as author.");
+            break;
+          case FORGE_COMMITTER:
+            pde.setAdvice(
+                "You need 'Forge Committer' rights to push commits with another user as committer.");
+            break;
+          case FORGE_SERVER:
+            pde.setAdvice(
+                "You need 'Forge Server' rights to push merge commits authored by the server.");
+            break;
+          case MERGE:
+            pde.setAdvice(
+                "You need 'Push Merge' in addition to 'Push' rights to push merge commits.");
+            break;
+
+          case READ:
+            pde.setAdvice("You need 'Read' rights to fetch or clone this ref.");
+            break;
+
+          case READ_CONFIG:
+            pde.setAdvice("You need 'Read' rights on refs/meta/config to see the configuration.");
+            break;
+          case READ_PRIVATE_CHANGES:
+            pde.setAdvice("You need 'Read Private Changes' to see private changes.");
+            break;
+          case SET_HEAD:
+            pde.setAdvice("You need 'Set HEAD' rights to set the default branch.");
+            break;
+          case SKIP_VALIDATION:
+            pde.setAdvice(
+                "You need 'Forge Author', 'Forge Server', 'Forge Committer'\n"
+                    + "and 'Push Merge' rights to skip validation.");
+            break;
+          case UPDATE_BY_SUBMIT:
+            pde.setAdvice(
+                "You need 'Submit' rights on refs/for/ to submit changes during change upload.");
+            break;
+
+          case WRITE_CONFIG:
+            pde.setAdvice("You need 'Write' rights on refs/meta/config.");
+            break;
+        }
+        throw pde;
       }
     }
 
@@ -477,6 +569,11 @@ class RefControl {
         }
       }
       return ok;
+    }
+
+    @Override
+    public BooleanCondition testCond(RefPermission perm) {
+      return new PermissionBackendCondition.ForRef(this, perm, getUser());
     }
 
     private boolean can(RefPermission perm) throws PermissionBackendException {

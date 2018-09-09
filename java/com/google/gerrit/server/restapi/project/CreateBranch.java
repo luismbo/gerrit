@@ -23,7 +23,7 @@ import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.IdString;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
-import com.google.gerrit.extensions.restapi.RestCreateView;
+import com.google.gerrit.extensions.restapi.RestCollectionCreateView;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.IdentifiedUser;
@@ -41,6 +41,7 @@ import com.google.gerrit.server.project.RefValidationHelper;
 import com.google.gerrit.server.util.MagicBranch;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
+import com.google.inject.Singleton;
 import java.io.IOException;
 import org.eclipse.jgit.errors.IncorrectObjectTypeException;
 import org.eclipse.jgit.lib.Constants;
@@ -51,7 +52,9 @@ import org.eclipse.jgit.revwalk.RevObject;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.transport.ReceiveCommand;
 
-public class CreateBranch implements RestCreateView<ProjectResource, BranchResource, BranchInput> {
+@Singleton
+public class CreateBranch
+    implements RestCollectionCreateView<ProjectResource, BranchResource, BranchInput> {
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
   private final Provider<IdentifiedUser> identifiedUser;

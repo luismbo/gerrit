@@ -19,8 +19,6 @@ import com.google.gerrit.extensions.common.DiffWebLinkInfo;
 import com.google.gerrit.extensions.common.EditInfo;
 import com.google.gerrit.extensions.common.Input;
 import com.google.gerrit.extensions.registration.DynamicMap;
-import com.google.gerrit.extensions.restapi.AcceptsDelete;
-import com.google.gerrit.extensions.restapi.AcceptsPost;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.BinaryResult;
@@ -31,8 +29,9 @@ import com.google.gerrit.extensions.restapi.RawInput;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.Response;
-import com.google.gerrit.extensions.restapi.RestApiException;
-import com.google.gerrit.extensions.restapi.RestCreateView;
+import com.google.gerrit.extensions.restapi.RestCollectionCreateView;
+import com.google.gerrit.extensions.restapi.RestCollectionDeleteMissingView;
+import com.google.gerrit.extensions.restapi.RestCollectionModifyView;
 import com.google.gerrit.extensions.restapi.RestModifyView;
 import com.google.gerrit.extensions.restapi.RestReadView;
 import com.google.gerrit.extensions.restapi.RestView;
@@ -59,7 +58,6 @@ import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
-import com.google.inject.assistedinject.Assisted;
 import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
@@ -70,28 +68,19 @@ import org.eclipse.jgit.revwalk.RevWalk;
 import org.kohsuke.args4j.Option;
 
 @Singleton
-public class ChangeEdits
-    implements ChildCollection<ChangeResource, ChangeEditResource>,
-        AcceptsPost<ChangeResource>,
-        AcceptsDelete<ChangeResource> {
+public class ChangeEdits implements ChildCollection<ChangeResource, ChangeEditResource> {
   private final DynamicMap<RestView<ChangeEditResource>> views;
-  private final DeleteFile.Factory deleteFileFactory;
   private final Provider<Detail> detail;
   private final ChangeEditUtil editUtil;
-  private final Post post;
 
   @Inject
   ChangeEdits(
       DynamicMap<RestView<ChangeEditResource>> views,
       Provider<Detail> detail,
-      ChangeEditUtil editUtil,
-      Post post,
-      DeleteFile.Factory deleteFileFactory) {
+      ChangeEditUtil editUtil) {
     this.views = views;
     this.detail = detail;
     this.editUtil = editUtil;
-    this.post = post;
-    this.deleteFileFactory = deleteFileFactory;
   }
 
   @Override
@@ -114,32 +103,13 @@ public class ChangeEdits
     return new ChangeEditResource(rsrc, edit.get(), id.get());
   }
 
-  @Override
-  public Post post(ChangeResource parent) throws RestApiException {
-    return post;
-  }
-
-  /**
-   * This method is invoked if a DELETE request on a non-existing member is done. For change edits
-   * this is the case if a DELETE request for a file in a change edit is done and the change edit
-   * doesn't exist yet (and hence the parse method returned ResourceNotFoundException). In this case
-   * we want to create the change edit on the fly and delete the file with the given id in it.
-   */
-  @Override
-  public DeleteFile delete(ChangeResource parent, IdString id) throws RestApiException {
-    // It's safe to assume that id can never be null, because
-    // otherwise we would end up in dedicated endpoint for
-    // deleting of change edits and not a file in change edit
-    return deleteFileFactory.create(id.get());
-  }
-
   /**
    * Create handler that is activated when collection element is accessed but doesn't exist, e. g.
    * PUT request with a path was called but change edit wasn't created yet. Change edit is created
    * and PUT handler is called.
    */
   public static class Create
-      implements RestCreateView<ChangeResource, ChangeEditResource, Put.Input> {
+      implements RestCollectionCreateView<ChangeResource, ChangeEditResource, Put.Input> {
     private final Put putEdit;
 
     @Inject
@@ -156,26 +126,20 @@ public class ChangeEdits
     }
   }
 
-  public static class DeleteFile implements RestModifyView<ChangeResource, Input> {
-
-    public interface Factory {
-      DeleteFile create(String path);
-    }
-
+  public static class DeleteFile
+      implements RestCollectionDeleteMissingView<ChangeResource, ChangeEditResource, Input> {
     private final DeleteContent deleteContent;
-    private final String path;
 
     @Inject
-    DeleteFile(DeleteContent deleteContent, @Assisted String path) {
+    DeleteFile(DeleteContent deleteContent) {
       this.deleteContent = deleteContent;
-      this.path = path;
     }
 
     @Override
-    public Response<?> apply(ChangeResource rsrc, Input in)
+    public Response<?> apply(ChangeResource rsrc, IdString id, Input in)
         throws IOException, AuthException, ResourceConflictException, OrmException,
             PermissionBackendException {
-      return deleteContent.apply(rsrc, path);
+      return deleteContent.apply(rsrc, id.get());
     }
   }
 
@@ -247,7 +211,8 @@ public class ChangeEdits
    * The combination of two operations in one request is supported.
    */
   @Singleton
-  public static class Post implements RestModifyView<ChangeResource, Post.Input> {
+  public static class Post
+      implements RestCollectionModifyView<ChangeResource, ChangeEditResource, Post.Input> {
     public static class Input {
       public String restorePath;
       public String oldPath;

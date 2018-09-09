@@ -14,11 +14,19 @@
 
 package com.google.gerrit.sshd;
 
+import com.google.gerrit.server.logging.TraceContext;
 import java.io.IOException;
 import java.io.PrintWriter;
 import org.apache.sshd.server.Environment;
+import org.kohsuke.args4j.Option;
 
 public abstract class SshCommand extends BaseCommand {
+  @Option(name = "--trace", usage = "enable request tracing")
+  private boolean trace;
+
+  @Option(name = "--trace-id", usage = "trace ID (can only be set if --trace was set too)")
+  private String traceId;
+
   protected PrintWriter stdout;
   protected PrintWriter stderr;
 
@@ -31,7 +39,7 @@ public abstract class SshCommand extends BaseCommand {
             parseCommandLine();
             stdout = toPrintWriter(out);
             stderr = toPrintWriter(err);
-            try {
+            try (TraceContext traceContext = enableTracing()) {
               SshCommand.this.run();
             } finally {
               stdout.flush();
@@ -42,4 +50,14 @@ public abstract class SshCommand extends BaseCommand {
   }
 
   protected abstract void run() throws UnloggedFailure, Failure, Exception;
+
+  private TraceContext enableTracing() throws UnloggedFailure {
+    if (!trace && traceId != null) {
+      throw die("A trace ID can only be set if --trace was specified.");
+    }
+    return TraceContext.newTrace(
+        trace,
+        traceId,
+        (tagName, traceId) -> stderr.println(String.format("%s: %s", tagName, traceId)));
+  }
 }

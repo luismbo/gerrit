@@ -15,6 +15,7 @@
 package com.google.gerrit.server.restapi.group;
 
 import static com.google.common.base.Strings.nullToEmpty;
+import static java.util.Comparator.comparing;
 
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.data.GroupDescription;
@@ -24,12 +25,11 @@ import com.google.gerrit.extensions.restapi.RestReadView;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.server.account.GroupControl;
 import com.google.gerrit.server.group.GroupResource;
+import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 
 @Singleton
@@ -46,7 +46,8 @@ public class ListSubgroups implements RestReadView<GroupResource> {
   }
 
   @Override
-  public List<GroupInfo> apply(GroupResource rsrc) throws NotInternalGroupException, OrmException {
+  public List<GroupInfo> apply(GroupResource rsrc)
+      throws NotInternalGroupException, OrmException, PermissionBackendException {
     GroupDescription.Internal group =
         rsrc.asInternalGroup().orElseThrow(NotInternalGroupException::new);
 
@@ -54,7 +55,8 @@ public class ListSubgroups implements RestReadView<GroupResource> {
   }
 
   public List<GroupInfo> getDirectSubgroups(
-      GroupDescription.Internal group, GroupControl groupControl) throws OrmException {
+      GroupDescription.Internal group, GroupControl groupControl)
+      throws OrmException, PermissionBackendException {
     boolean ownerOfParent = groupControl.isOwner();
     List<GroupInfo> included = new ArrayList<>();
     for (AccountGroup.UUID subgroupUuid : group.getSubgroups()) {
@@ -69,18 +71,8 @@ public class ListSubgroups implements RestReadView<GroupResource> {
         continue;
       }
     }
-    Collections.sort(
-        included,
-        new Comparator<GroupInfo>() {
-          @Override
-          public int compare(GroupInfo a, GroupInfo b) {
-            int cmp = nullToEmpty(a.name).compareTo(nullToEmpty(b.name));
-            if (cmp != 0) {
-              return cmp;
-            }
-            return nullToEmpty(a.id).compareTo(nullToEmpty(b.id));
-          }
-        });
+    included.sort(
+        comparing((GroupInfo g) -> nullToEmpty(g.name)).thenComparing(g -> nullToEmpty(g.id)));
     return included;
   }
 }

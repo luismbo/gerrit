@@ -20,10 +20,11 @@ import static com.google.gerrit.common.data.GlobalCapability.MAINTAIN_SERVER;
 import com.google.common.cache.Cache;
 import com.google.gerrit.extensions.annotations.RequiresAnyCapability;
 import com.google.gerrit.extensions.registration.DynamicMap;
+import com.google.gerrit.extensions.registration.PluginName;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.Response;
-import com.google.gerrit.extensions.restapi.RestModifyView;
+import com.google.gerrit.extensions.restapi.RestCollectionModifyView;
 import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.server.config.CacheResource;
 import com.google.gerrit.server.config.ConfigResource;
@@ -36,7 +37,7 @@ import java.util.List;
 
 @RequiresAnyCapability({FLUSH_CACHES, MAINTAIN_SERVER})
 @Singleton
-public class PostCaches implements RestModifyView<ConfigResource, Input> {
+public class PostCaches implements RestCollectionModifyView<ConfigResource, CacheResource, Input> {
   public static class Input {
     public Operation operation;
     public List<String> caches;
@@ -110,7 +111,7 @@ public class PostCaches implements RestModifyView<ConfigResource, Input> {
     List<CacheResource> cacheResources = new ArrayList<>(cacheNames.size());
 
     for (String n : cacheNames) {
-      String pluginName = "gerrit";
+      String pluginName = PluginName.GERRIT;
       String cacheName = n;
       int i = cacheName.lastIndexOf('-');
       if (i != -1) {

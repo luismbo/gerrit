@@ -25,11 +25,20 @@
   // gerrit-server/src/test/java/com/google/gerrit/server/query/change/AbstractQueryChangesTest.java
   const DEFAULT_SECTIONS = [
     {
+      // Changes with unpublished draft comments. This section is omitted when
+      // viewing other users, so we don't need to filter anything out.
+      name: 'Has unpublished drafts',
+      query: 'has:draft',
+      selfOnly: true,
+      hideIfEmpty: true,
+    },
+    {
       // WIP open changes owned by viewing user. This section is omitted when
       // viewing other users, so we don't need to filter anything out.
       name: 'Work in progress',
       query: 'is:open owner:${user} is:wip',
       selfOnly: true,
+      hideIfEmpty: true,
     },
     {
       // Non-WIP open changes owned by viewed user. Filter out changes ignored
@@ -58,7 +67,8 @@
       // changes not owned by the viewing user (the one instance of
       // 'owner:self' is intentional and implements this logic).
       query: 'is:closed -is:ignored (-is:wip OR owner:self) ' +
-          '(owner:${user} OR reviewer:${user} OR assignee:${user})',
+          '(owner:${user} OR reviewer:${user} OR assignee:${user} ' +
+          'OR cc:${user})',
       suffixForDashboard: '-age:4w limit:10',
     },
   ];
@@ -160,16 +170,10 @@
     _getUserDashboard(user, sections, title) {
       sections = sections
         .filter(section => (user === 'self' || !section.selfOnly))
-        .map(section => {
-          const dashboardSection = {
-            name: section.name,
-            query: section.query.replace(USER_PLACEHOLDER_PATTERN, user),
-          };
-          if (section.suffixForDashboard) {
-            dashboardSection.suffixForDashboard = section.suffixForDashboard;
-          }
-          return dashboardSection;
-        });
+        .map(section => Object.assign({}, section, {
+          name: section.name,
+          query: section.query.replace(USER_PLACEHOLDER_PATTERN, user),
+        }));
       return Promise.resolve({title, sections});
     },
 
@@ -197,49 +201,71 @@
       // in an async so that attachment to the DOM can take place first.
       const title = params.title || this._computeTitle(user);
       this.async(() => this.fire('title-change', {title}));
+      return this._reload();
+    },
 
+    /**
+     * Reloads the element.
+     *
+     * @return {Promise<!Object>}
+     */
+    _reload() {
       this._loading = true;
-
-      const dashboardPromise = params.project ?
-          this._getProjectDashboard(params.project, params.dashboard) :
+      const {project, dashboard, title, user, sections} = this.params;
+      const dashboardPromise = project ?
+          this._getProjectDashboard(project, dashboard) :
           this._getUserDashboard(
-              params.user || 'self',
-              params.sections || DEFAULT_SECTIONS,
-              params.title || this._computeTitle(params.user));
+              user || 'self',
+              sections || DEFAULT_SECTIONS,
+              title || this._computeTitle(user));
 
-      return dashboardPromise.then(dashboard => {
-        if (!dashboard) {
-          this._loading = false;
-          return;
+      return dashboardPromise.then(this._fetchDashboardChanges.bind(this))
+          .then(() => {
+            this.$.reporting.dashboardDisplayed();
+          }).catch(err => {
+            console.warn(err);
+          }).then(() => { this._loading = false; });
+    },
+
+    /**
+     * Fetches the changes for each dashboard section and sets this._results
+     * with the response.
+     *
+     * @param {!Object} res
+     * @return {Promise}
+     */
+    _fetchDashboardChanges(res) {
+      if (!res) { return Promise.resolve(); }
+      const queries = res.sections.map(section => {
+        if (section.suffixForDashboard) {
+          return section.query + ' ' + section.suffixForDashboard;
         }
-        const queries = dashboard.sections.map(section => {
-          if (section.suffixForDashboard) {
-            return section.query + ' ' + section.suffixForDashboard;
-          }
-          return section.query;
-        });
-        const req =
-            this.$.restAPI.getChanges(null, queries, null, this.options);
-        return req.then(response => {
-          this._loading = false;
-          this._results = response.map((results, i) => {
-            return {
-              sectionName: dashboard.sections[i].name,
-              query: dashboard.sections[i].query,
-              results,
-            };
-          });
-        });
-      }).then(() => {
-        this.$.reporting.dashboardDisplayed();
-      }).catch(err => {
-        this._loading = false;
-        console.warn(err);
+        return section.query;
       });
+
+      return this.$.restAPI.getChanges(null, queries, null, this.options)
+          .then(changes => {
+            this._results = changes.map((results, i) => ({
+              sectionName: res.sections[i].name,
+              query: res.sections[i].query,
+              results,
+            })).filter((section, i) => !res.sections[i].hideIfEmpty ||
+                section.results.length);
+          });
     },
 
     _computeUserHeaderClass(userParam) {
       return userParam === 'self' ? 'hide' : '';
+    },
+
+    _handleToggleStar(e) {
+      this.$.restAPI.saveChangeStarred(e.detail.change._number,
+          e.detail.starred);
+    },
+
+    _handleToggleReviewed(e) {
+      this.$.restAPI.saveChangeReviewed(e.detail.change._number,
+          e.detail.reviewed);
     },
   });
 })();

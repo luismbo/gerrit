@@ -88,6 +88,7 @@ public class ProjectInfoScreen extends ProjectScreen {
   private ListBox requireSignedPush;
   private ListBox rejectImplicitMerges;
   private ListBox privateByDefault;
+  private ListBox workInProgressByDefault;
   private ListBox enableReviewerByEmail;
   private ListBox matchAuthorToCommitterDate;
   private NpTextBox maxObjectSizeLimit;
@@ -198,6 +199,7 @@ public class ProjectInfoScreen extends ProjectScreen {
     requireChangeID.setEnabled(isOwner);
     rejectImplicitMerges.setEnabled(isOwner);
     privateByDefault.setEnabled(isOwner);
+    workInProgressByDefault.setEnabled(isOwner);
     maxObjectSizeLimit.setEnabled(isOwner);
     enableReviewerByEmail.setEnabled(isOwner);
     matchAuthorToCommitterDate.setEnabled(isOwner);
@@ -277,6 +279,10 @@ public class ProjectInfoScreen extends ProjectScreen {
     privateByDefault = newInheritedBooleanBox();
     saveEnabler.listenTo(privateByDefault);
     grid.addHtml(AdminConstants.I.privateByDefault(), privateByDefault);
+
+    workInProgressByDefault = newInheritedBooleanBox();
+    saveEnabler.listenTo(workInProgressByDefault);
+    grid.addHtml(AdminConstants.I.workInProgressByDefault(), workInProgressByDefault);
 
     enableReviewerByEmail = newInheritedBooleanBox();
     saveEnabler.listenTo(enableReviewerByEmail);
@@ -427,19 +433,21 @@ public class ProjectInfoScreen extends ProjectScreen {
     }
     setBool(rejectImplicitMerges, result.rejectImplicitMerges());
     setBool(privateByDefault, result.privateByDefault());
+    setBool(workInProgressByDefault, result.workInProgressByDefault());
     setBool(enableReviewerByEmail, result.enableReviewerByEmail());
     setBool(matchAuthorToCommitterDate, result.matchAuthorToCommitterDate());
     setSubmitType(result.defaultSubmitType());
     setState(result.state());
     maxObjectSizeLimit.setText(result.maxObjectSizeLimit().configuredValue());
-    if (result.maxObjectSizeLimit().inheritedValue() != null) {
-      effectiveMaxObjectSizeLimit.setVisible(true);
+    if (result.maxObjectSizeLimit().value() != null) {
       effectiveMaxObjectSizeLimit.setText(
           AdminMessages.I.effectiveMaxObjectSizeLimit(result.maxObjectSizeLimit().value()));
-      effectiveMaxObjectSizeLimit.setTitle(
-          AdminMessages.I.globalMaxObjectSizeLimit(result.maxObjectSizeLimit().inheritedValue()));
+      if (result.maxObjectSizeLimit().inheritedValue() != null) {
+        effectiveMaxObjectSizeLimit.setTitle(
+            AdminMessages.I.globalMaxObjectSizeLimit(result.maxObjectSizeLimit().inheritedValue()));
+      }
     } else {
-      effectiveMaxObjectSizeLimit.setVisible(false);
+      effectiveMaxObjectSizeLimit.setText(AdminMessages.I.noMaxObjectSizeLimit());
     }
 
     saveProject.setEnabled(false);
@@ -504,6 +512,9 @@ public class ProjectInfoScreen extends ProjectScreen {
     } else {
       textBox.setValue(param.value());
       addWidget(g, textBox, param);
+    }
+    if (textBox.getValue().length() > textBox.getVisibleLength()) {
+      textBox.setVisibleLength(textBox.getValue().length());
     }
     saveEnabler.listenTo(textBox);
     return textBox;
@@ -700,6 +711,7 @@ public class ProjectInfoScreen extends ProjectScreen {
         rsp,
         getBool(rejectImplicitMerges),
         getBool(privateByDefault),
+        getBool(workInProgressByDefault),
         getBool(enableReviewerByEmail),
         getBool(matchAuthorToCommitterDate),
         maxObjectSizeLimit.getText().trim(),

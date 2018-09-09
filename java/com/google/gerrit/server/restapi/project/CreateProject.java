@@ -41,7 +41,7 @@ import com.google.gerrit.extensions.restapi.IdString;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.Response;
 import com.google.gerrit.extensions.restapi.RestApiException;
-import com.google.gerrit.extensions.restapi.RestCreateView;
+import com.google.gerrit.extensions.restapi.RestCollectionCreateView;
 import com.google.gerrit.extensions.restapi.TopLevelResource;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.BooleanProjectConfig;
@@ -72,6 +72,7 @@ import com.google.gerrit.server.validators.ProjectCreationValidationListener;
 import com.google.gerrit.server.validators.ValidationException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
+import com.google.inject.Singleton;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -90,8 +91,9 @@ import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.transport.ReceiveCommand;
 
 @RequiresCapability(GlobalCapability.CREATE_PROJECT)
+@Singleton
 public class CreateProject
-    implements RestCreateView<TopLevelResource, ProjectResource, ProjectInput> {
+    implements RestCollectionCreateView<TopLevelResource, ProjectResource, ProjectInput> {
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
   private final Provider<ProjectsCollection> projectsCollection;

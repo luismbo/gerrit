@@ -37,11 +37,8 @@ import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.InvalidRemoteException;
 import org.eclipse.jgit.api.errors.TransportException;
 import org.eclipse.jgit.lib.ObjectId;
-import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
-import org.eclipse.jgit.revwalk.RevObject;
-import org.eclipse.jgit.revwalk.RevTag;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.transport.RefSpec;
 import org.eclipse.jgit.transport.RemoteRefUpdate;
@@ -59,38 +56,6 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
     r.assertChange(Change.Status.MERGED, null, admin);
     assertSubmitApproval(r.getPatchSetId());
     assertCommit(project, "refs/heads/master");
-  }
-
-  @Test
-  public void submitOnPushWithTag() throws Exception {
-    grant(project, "refs/for/refs/heads/master", Permission.SUBMIT);
-    grant(project, "refs/tags/*", Permission.CREATE);
-    grant(project, "refs/tags/*", Permission.PUSH);
-    PushOneCommit.Tag tag = new PushOneCommit.Tag("v1.0");
-    PushOneCommit push = pushFactory.create(db, admin.getIdent(), testRepo);
-    push.setTag(tag);
-    PushOneCommit.Result r = push.to("refs/for/master%submit");
-    r.assertOkStatus();
-    r.assertChange(Change.Status.MERGED, null, admin);
-    assertSubmitApproval(r.getPatchSetId());
-    assertCommit(project, "refs/heads/master");
-    assertTag(project, "refs/heads/master", tag);
-  }
-
-  @Test
-  public void submitOnPushWithAnnotatedTag() throws Exception {
-    grant(project, "refs/for/refs/heads/master", Permission.SUBMIT);
-    grant(project, "refs/tags/*", Permission.PUSH);
-    PushOneCommit.AnnotatedTag tag =
-        new PushOneCommit.AnnotatedTag("v1.0", "annotation", admin.getIdent());
-    PushOneCommit push = pushFactory.create(db, admin.getIdent(), testRepo);
-    push.setTag(tag);
-    PushOneCommit.Result r = push.to("refs/for/master%submit");
-    r.assertOkStatus();
-    r.assertChange(Change.Status.MERGED, null, admin);
-    assertSubmitApproval(r.getPatchSetId());
-    assertCommit(project, "refs/heads/master");
-    assertTag(project, "refs/heads/master", tag);
   }
 
   @Test
@@ -158,7 +123,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
   @Test
   public void submitOnPushNotAllowed_Error() throws Exception {
     PushOneCommit.Result r = pushTo("refs/for/master%submit");
-    r.assertErrorStatus("update by submit not permitted");
+    r.assertErrorStatus("not permitted: update by submit");
   }
 
   @Test
@@ -170,7 +135,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
         push(
             "refs/for/master%submit",
             PushOneCommit.SUBJECT, "a.txt", "other content", r.getChangeId());
-    r.assertErrorStatus("update by submit not permitted");
+    r.assertErrorStatus("not permitted: update by submit ");
   }
 
   @Test
@@ -382,31 +347,6 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
       assertThat(c.getAuthorIdent().getEmailAddress()).isEqualTo(admin.email);
       assertThat(c.getCommitterIdent().getEmailAddress())
           .isEqualTo(serverIdent.get().getEmailAddress());
-    }
-  }
-
-  private void assertTag(Project.NameKey project, String branch, PushOneCommit.Tag tag)
-      throws Exception {
-    try (Repository repo = repoManager.openRepository(project)) {
-      Ref tagRef = repo.findRef(tag.name);
-      assertThat(tagRef).isNotNull();
-      ObjectId taggedCommit = null;
-      if (tag instanceof PushOneCommit.AnnotatedTag) {
-        PushOneCommit.AnnotatedTag annotatedTag = (PushOneCommit.AnnotatedTag) tag;
-        try (RevWalk rw = new RevWalk(repo)) {
-          RevObject object = rw.parseAny(tagRef.getObjectId());
-          assertThat(object).isInstanceOf(RevTag.class);
-          RevTag tagObject = (RevTag) object;
-          assertThat(tagObject.getFullMessage()).isEqualTo(annotatedTag.message);
-          assertThat(tagObject.getTaggerIdent()).isEqualTo(annotatedTag.tagger);
-          taggedCommit = tagObject.getObject();
-        }
-      } else {
-        taggedCommit = tagRef.getObjectId();
-      }
-      ObjectId headCommit = repo.exactRef(branch).getObjectId();
-      assertThat(taggedCommit).isNotNull();
-      assertThat(taggedCommit).isEqualTo(headCommit);
     }
   }
 

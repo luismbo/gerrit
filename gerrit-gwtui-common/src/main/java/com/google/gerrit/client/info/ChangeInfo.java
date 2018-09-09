@@ -14,6 +14,8 @@
 
 package com.google.gerrit.client.info;
 
+import static java.util.Comparator.comparing;
+
 import com.google.gerrit.client.rpc.NativeMap;
 import com.google.gerrit.client.rpc.NativeString;
 import com.google.gerrit.client.rpc.Natives;
@@ -30,8 +32,6 @@ import com.google.gwt.core.client.JsArrayString;
 import com.google.gwtjsonrpc.client.impl.ser.JavaSqlTimestamp_JsonSerializer;
 import java.sql.Timestamp;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -447,18 +447,8 @@ public class ChangeInfo extends JavaScriptObject {
 
     public static void sortRevisionInfoByNumber(JsArray<RevisionInfo> list) {
       final int editParent = findEditParent(list);
-      Collections.sort(
-          Natives.asList(list),
-          new Comparator<RevisionInfo>() {
-            @Override
-            public int compare(RevisionInfo a, RevisionInfo b) {
-              return num(a) - num(b);
-            }
-
-            private int num(RevisionInfo r) {
-              return !r.isEdit() ? 2 * (r._number() - 1) + 1 : 2 * editParent;
-            }
-          });
+      Natives.asList(list)
+          .sort(comparing(r -> !r.isEdit() ? 2 * (r._number() - 1) + 1 : 2 * editParent));
     }
 
     public static int findEditParent(JsArray<RevisionInfo> list) {

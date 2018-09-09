@@ -90,6 +90,7 @@ import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.gpg.Fingerprint;
 import com.google.gerrit.gpg.PublicKeyStore;
 import com.google.gerrit.gpg.testing.TestKey;
+import com.google.gerrit.mail.Address;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Project;
@@ -111,7 +112,6 @@ import com.google.gerrit.server.git.LockFailureException;
 import com.google.gerrit.server.git.meta.MetaDataUpdate;
 import com.google.gerrit.server.index.account.AccountIndexer;
 import com.google.gerrit.server.index.account.StalenessChecker;
-import com.google.gerrit.server.mail.Address;
 import com.google.gerrit.server.notedb.rebuild.ChangeRebuilderImpl;
 import com.google.gerrit.server.project.ProjectConfig;
 import com.google.gerrit.server.project.RefPattern;
@@ -230,7 +230,7 @@ public class AccountIT extends AbstractDaemonTest {
   @Before
   public void addAccountIndexEventCounter() {
     accountIndexedCounter = new AccountIndexedCounter();
-    accountIndexEventCounterHandle = accountIndexedListeners.add(accountIndexedCounter);
+    accountIndexEventCounterHandle = accountIndexedListeners.add("gerrit", accountIndexedCounter);
   }
 
   @After
@@ -243,7 +243,7 @@ public class AccountIT extends AbstractDaemonTest {
   @Before
   public void addRefUpdateCounter() {
     refUpdateCounter = new RefUpdateCounter();
-    refUpdateCounterHandle = refUpdateListeners.add(refUpdateCounter);
+    refUpdateCounterHandle = refUpdateListeners.add("gerrit", refUpdateCounter);
   }
 
   @After
@@ -301,7 +301,7 @@ public class AccountIT extends AbstractDaemonTest {
 
   @Test
   public void createByAccountCreator() throws Exception {
-    Account.Id accountId = createByAccountCreator(2); // account creation + external ID creation
+    Account.Id accountId = createByAccountCreator(1);
     refUpdateCounter.assertRefUpdateFor(
         RefUpdateCounter.projectRef(allUsers, RefNames.refsUsers(accountId)),
         RefUpdateCounter.projectRef(allUsers, RefNames.REFS_EXTERNAL_IDS),
@@ -340,7 +340,7 @@ public class AccountIT extends AbstractDaemonTest {
     assertThat(accountInfo.status).isNull();
 
     Account.Id accountId = new Account.Id(accountInfo._accountId);
-    accountIndexedCounter.assertReindexOf(accountId, 2); // account creation + external ID creation
+    accountIndexedCounter.assertReindexOf(accountId, 1);
     assertThat(externalIds.byAccount(accountId))
         .containsExactly(
             ExternalId.createUsername(input.username, accountId, null),
@@ -532,6 +532,7 @@ public class AccountIT extends AbstractDaemonTest {
         accountOperations.newAccount().preferredEmail("foo@deactivatable.com").create();
     RegistrationHandle registrationHandle =
         accountActivationValidationListeners.add(
+            "gerrit",
             new AccountActivationValidationListener() {
               @Override
               public void validateActivation(AccountState account) throws ValidationException {
@@ -2508,7 +2509,7 @@ public class AccountIT extends AbstractDaemonTest {
     // Manually inserting/updating/deleting an external ID of the user makes the index document
     // stale.
     try (Repository repo = repoManager.openRepository(allUsers)) {
-      ExternalIdNotes extIdNotes = ExternalIdNotes.loadNoCacheUpdate(repo);
+      ExternalIdNotes extIdNotes = ExternalIdNotes.loadNoCacheUpdate(allUsers, repo);
 
       ExternalId.Key key = ExternalId.Key.create("foo", "foo");
       extIdNotes.insert(ExternalId.create(key, accountId));

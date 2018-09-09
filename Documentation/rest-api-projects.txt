@@ -597,17 +597,30 @@ If the description was deleted the response is "`204 No Content`".
 
 Deletes the description of a project.
 
-The request body does not need to include a
-link:#project-description-input[ProjectDescriptionInput] entity if no
-commit message is specified.
-
-Please note that some proxies prohibit request bodies for DELETE
-requests. In this case, if you want to specify a commit message, use
-link:#set-project-description[PUT] to delete the description.
-
 .Request
 ----
   DELETE /projects/plugins%2Freplication/description HTTP/1.0
+----
+
+.Response
+----
+  HTTP/1.1 204 No Content
+----
+
+A commit message can be provided in the request body as a
+link:#project-description-input[ProjectDescriptionInput] entity.
+Historically, this method allowed a body in the DELETE, but that behavior is
+link:https://www.gerritcodereview.com/releases/2.16.md[deprecated].
+In this case, use link:#set-project-description[PUT] instead.
+
+.Request
+----
+  PUT /projects/plugins%2Freplication/description HTTP/1.0
+  Content-Type: application/json; charset=UTF-8
+
+  {
+    "commit_message": "Update the project description"
+  }
 ----
 
 .Response
@@ -1357,8 +1370,8 @@ parameters `perm`, `account` and `ref`, for example:
 === Index project
 
 Adds or updates the current project (and children, if specified) in the secondary index.
-The indexing task is executed asynchronously in background, so this command
-returns immediately.
+The indexing task is executed asynchronously in background and this command returns
+immediately if `async` is specified in the input.
 
 As an input, a link:#index-project-input[IndexProjectInput] entity can be provided.
 
@@ -1369,6 +1382,7 @@ As an input, a link:#index-project-input[IndexProjectInput] entity can be provid
 
   {
     "index_children": "true"
+    "async": "true"
   }
 ----
 
@@ -1394,6 +1408,95 @@ returns immediately.
 ----
   HTTP/1.1 202 Accepted
   Content-Disposition: attachment
+----
+
+[[check]]
+=== Check project consistency
+
+Performs consistency checks on the project.
+
+Which consistency checks should be performed is controlled by the
+link:#check-project-input[CheckProjectInput] entity in the request
+body.
+
+The following consistency checks are supported:
+
+[[auto-closeable-changes-check]]
+--
+* AutoCloseableChangesCheck: Searches for open changes that can be
+  auto-closed because a patch set of the change is already contained in
+  the destination branch or because the destination branch contains a
+  commit with the same Change-Id. Normally Gerrit auto-closes such
+  changes when the corresponding commits are pushed directly to the
+  repository. However if a branch is updated behind Gerrit's back or if
+  auto-closing changes fails (and the push is still successful) change
+  states can get inconsistent (changes that are already part of the
+  destination branch are still open). This consistency check is
+  intended to detect and repair this situation.
+--
+
+To fix any problems that can be fixed automatically set the `fix` field
+in the inputs for the consistency checks  to `true`.
+
+This REST endpoint requires the
+link:access-control.html#capability_administrateServer[Administrate Server]
+global capability.
+
+.Request
+----
+  POST /projects/MyProject/check HTTP/1.0
+  Content-Type: application/json; charset=UTF-8
+
+  {
+    "auto_closeable_changes_check": {
+      "fix": true,
+      "branch": "refs/heads/master",
+      "max_commits": 100
+    }
+  }
+----
+
+As response a link:#check-project-result-info[CheckProjectResultInfo]
+entity is returned that results for the consistency checks.
+
+.Response
+----
+  HTTP/1.1 200 OK
+  Content-Disposition: attachment
+  Content-Type: application/json; charset=UTF-8
+
+  )]}'
+  {
+    "auto_closeable_changes_check_result": {
+      "auto_closeable_changes": {
+        "refs/heads/master": [
+          {
+            "id": "myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940",
+            "project": "myProject",
+            "branch": "master",
+            "change_id": "I8473b95934b5732ac55d26311a706c9c2bde9940",
+            "subject": "Implementing Feature X",
+            "status": "NEW",
+            "created": "2013-02-01 09:59:32.126000000",
+            "updated": "2013-02-21 11:16:36.775000000",
+            "insertions": 34,
+            "deletions": 101,
+            "_number": 3965,
+            "owner": {
+              "name": "John Doe"
+            },
+            "problems": [
+              {
+                "message": "Patch set 1 (2f15e416237ed9b561199f24184f5f5d2708c584) is merged into destination ref refs/heads/master (2f15e416237ed9b561199f24184f5f5d2708c584), but change status is NEW",
+                "status": "FIXED",
+                "outcome": "Marked change as merged"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
 ----
 
 [[branch-endpoints]]
@@ -2511,6 +2614,51 @@ describes the resulting cherry-picked change.
   }
 ----
 
+[[list-files]]
+=== List Files
+--
+'GET /projects/link:#project-name[\{project-name\}]/commits/link:#commit-id[\{commit-id\}]/files/'
+--
+
+Lists the files that were modified, added or deleted in a commit.
+
+.Request
+----
+  GET /projects/work%2Fmy-project/commits/a8a477efffbbf3b44169bb9a1d3a334cbbd9aa96/files/ HTTP/1.0
+----
+
+As result a map is returned that maps the link:rest-api-changes.html#file-id[file path] to a
+link:rest-api-changes.html#file-info[FileInfo] entry. The entries in the map are
+sorted by file path.
+
+.Response
+----
+  HTTP/1.1 200 OK
+  Content-Disposition: attachment
+  Content-Type: application/json; charset=UTF-8
+
+  )]}'
+  {
+    "/COMMIT_MSG": {
+      "status": "A",
+      "lines_inserted": 7,
+      "size_delta": 551,
+      "size": 551
+    },
+    "gerrit-server/src/main/java/com/google/gerrit/server/project/RefControl.java": {
+      "lines_inserted": 5,
+      "lines_deleted": 3,
+      "size_delta": 98,
+      "size": 23348
+    }
+  }
+----
+
+The integer-valued request parameter `parent` changes the response to return a
+list of the files which are different in this commit compared to the given
+parent commit. This is useful for supporting review of merge commits. The value
+is the 1-based index of the parent's position in the commit object.
+
 [[dashboard-endpoints]]
 == Dashboard Endpoints
 
@@ -2791,6 +2939,52 @@ access
 check. This defaults to `read`. If given, it `ref` must be given too.
 |=========================================
 
+[[auto_closeable_changes_check_input]]
+=== AutoCloseableChangesCheckInput
+The `AutoCloseableChangesCheckInput` entity contains options for running
+the link:#auto-closeable-changes-check[AutoCloseableChangesCheck].
+
+[options="header",cols="1,^2,4"]
+|=============================
+|Field Name      ||Description
+|`fix`           |optional|
+Whether auto-closeable changes should be closed automatically.
+|`branch`        ||
+The branch for which the link:#auto-closeable-changes-check[
+AutoCloseableChangesCheck] should be performed. The 'refs/heads/'
+prefix for the branch name can be omitted.
+|`skip_commits`  |optional|
+Number of commits that should be skipped when walking the commits of
+the branch.
+|`max_commits`   |optional|
+Maximum number of commits to walk. If not specified this defaults to
+10,000 commits. 10,000 is also the maximum that can be set.
+Auto-closing changes is an expensive operation and the more commits
+are walked the slower it gets. This is why you should avoid walking too
+many commits.
+|=============================
+
+[[auto_closeable_changes_check_result]]
+=== AutoCloseableChangesCheckResult
+The `AutoCloseableChangesCheckResult` entity contains the results of
+running the link:#auto-closeable-changes-check[AutoCloseableChangesCheck]
+on a project.
+
+[options="header",cols="1,6"]
+|====================================
+|Field Name              |Description
+|`auto_closeable_changes`|
+Changes that can be auto-closed as list of
+link:rest-api-changes.html#change-info[ChangeInfo] entities. For each
+returned link:rest-api-changes.html#change-info[ChangeInfo] entity the
+`problems` field is populated that includes details about the detected
+issues. If `fix` in the link:#auto_closeable_changes_check_input[
+AutoCloseableChangesCheckInput] was set to `true`, `status` and
+`outcome` in link:rest-api-changes.html#problem-info[ProblemInfo] are
+populated. If the status says `FIXED` Gerrit was able to auto-close the
+change now.
+|====================================
+
 [[ban-input]]
 === BanInput
 The `BanInput` entity contains information for banning commits in a
@@ -2848,6 +3042,36 @@ The base revision of the new branch. +
 If not set, `HEAD` will be used as base revision.
 |=======================
 
+[[check-project-input]]
+=== CheckProjectInput
+The `CheckProjectInput` entity contains information about which
+consistency checks should be run on a project.
+
+[options="header",cols="1,^2,4"]
+|===========================================
+|Field Name                    ||Description
+|`auto_closeable_changes_check`|optional|
+Parameters for the link:#auto-closeable-changes-check[
+AutoCloseableChangesCheck] as
+link:rest-api-changes.html#auto_closeable_changes_check_input[
+AutoCloseableChangesCheckInput] entity.
+|===========================================
+
+[[check-project-result-info]]
+=== CheckProjectResultInfo
+The `CheckProjectResultInfo` entity contains results for consistency
+checks that have been run on a project.
+
+[options="header",cols="1,^2,4"]
+|==================================================
+|Field Name                           ||Description
+|`auto_closeable_changes_check_result`|optional|
+Results for the link:#auto-closeable-changes-check[
+AutoCloseableChangesCheck] as
+link:rest-api-changes.html#auto_closeable_changes_check_result[
+AutoCloseableChangesCheckResult] entity.
+|==================================================
+
 [[config-info]]
 === ConfigInfo
 The `ConfigInfo` entity contains information about the effective project
@@ -2879,7 +3103,8 @@ a new change is created for every commit not in target branch.
 link:#inherited-boolean-info[InheritedBooleanInfo] that tells whether a
 valid link:user-changeid.html[Change-Id] footer in any commit uploaded
 for review is required. This does not apply to commits pushed directly
-to a branch or tag.
+to a branch or tag. This property is deprecated and will be removed in
+a future release.
 |`enable_signed_push`|optional, not set if signed push is disabled|
 link:#inherited-boolean-info[InheritedBooleanInfo] that tells whether
 signed push validation is enabled on the project.
@@ -2889,10 +3114,13 @@ signed push validation is required on the project.
 |`reject_implicit_merges`|optional|
 link:#inherited-boolean-info[InheritedBooleanInfo] that tells whether
 implicit merges should be rejected on changes pushed to the project.
-|`private_by_default`     ||
+|`private_by_default`         ||
 link:#inherited-boolean-info[InheritedBooleanInfo] that tells whether
 all new changes are set as private by default.
-|`max_object_size_limit`     ||
+|`work_in_progress_by_default`||
+link:#inherited-boolean-info[InheritedBooleanInfo] that tells whether
+all new changes are set as work-in-progress by default.
+|`max_object_size_limit`      ||
 The link:config-gerrit.html#receive.maxObjectSizeLimit[max object size
 limit] of this project as a link:#max-object-size-limit-info[
 MaxObjectSizeLimitInfo] entity.
@@ -2968,6 +3196,8 @@ uploaded for review is required. This does not apply to commits pushed
 directly to a branch or tag. +
 Can be `TRUE`, `FALSE` or `INHERIT`. +
 If not set, this setting is not updated.
+This property is deprecated and will be removed in
+a future release.
 |`reject_implicit_merges`                  |optional|
 Whether a check for implicit merges will be performed when changes
 are pushed for review. +
@@ -3162,6 +3392,8 @@ The `IndexProjectInput` contains parameters for indexing a project.
 |Field Name         ||Description
 |`index_children`   ||
 If children should be indexed recursively.
+|`async`            ||
+If projects should be indexed asynchronously.
 |================================
 
 [[inherited-boolean-info]]
@@ -3203,7 +3435,7 @@ limit] of a project.
 |===============================
 |Field Name        ||Description
 |`value`           |optional|
-The effective value of the max object size limit as a formatted string. +
+The effective value in bytes of the max object size limit. +
 Not set if there is no limit for the object size.
 |`configured_value`|optional|
 The max object size limit that is configured on the project as a
@@ -3211,7 +3443,8 @@ formatted string. +
 Not set if there is no limit for the object size configured on project
 level.
 |`inherited_value` |optional|
-The max object size limit that is inherited as a formatted string. +
+The max object size limit that is inherited from the global config as a
+formatted string. +
 Not set if there is no global limit for the object size.
 |===============================
 
@@ -3333,6 +3566,8 @@ Whether content merge should be enabled for the project (`TRUE`,
 |`require_change_id`                           |`INHERIT` if not set|
 Whether the usage of Change-Ids is required for the project (`TRUE`,
 `FALSE`, `INHERIT`).
+This property is deprecated and will be removed in
+a future release.
 |`max_object_size_limit`     |optional|
 Max allowed Git object size for this project.
 Common unit suffixes of 'k', 'm', or 'g' are supported.

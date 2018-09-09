@@ -31,6 +31,8 @@
 
   let _pluginsPendingCount = -1;
 
+  const PRELOADED_PROTOCOL = 'preloaded:';
+
   const UNKNOWN_PLUGIN = 'unknown';
 
   const PANEL_ENDPOINTS_MAPPING = {
@@ -101,6 +103,21 @@
   // http://www.gwtproject.org/doc/latest/DevGuideCodingBasicsJSNI.html
   window.$wnd = window;
 
+  function flushPreinstalls() {
+    if (window.Gerrit.flushPreinstalls) {
+      window.Gerrit.flushPreinstalls();
+    }
+  }
+
+  function installPreloadedPlugins() {
+    if (!Gerrit._preloadedPlugins) { return; }
+    for (const name in Gerrit._preloadedPlugins) {
+      if (!Gerrit._preloadedPlugins.hasOwnProperty(name)) { continue; }
+      const callback = Gerrit._preloadedPlugins[name];
+      Gerrit.install(callback, API_VERSION, PRELOADED_PROTOCOL + name);
+    }
+  }
+
   function getPluginNameFromUrl(url) {
     if (!(url instanceof URL)) {
       try {
@@ -109,6 +126,9 @@
         console.warn(e);
         return null;
       }
+    }
+    if (url.protocol === PRELOADED_PROTOCOL) {
+      return url.pathname;
     }
     const base = Gerrit.BaseUrlBehavior.getBaseUrl();
     const pathname = url.pathname.replace(base, '');
@@ -147,6 +167,13 @@
 
     this._url = new URL(opt_url);
     this._name = getPluginNameFromUrl(this._url);
+    if (this._url.protocol === PRELOADED_PROTOCOL) {
+      // Original plugin URL is used in plugin assets URLs calculation.
+      const assetsBaseUrl = window.ASSETS_PATH ||
+          (window.location.origin + Gerrit.BaseUrlBehavior.getBaseUrl());
+      this._url = new URL(assetsBaseUrl + '/plugins/' + this._name +
+          '/static/' + this._name + '.js');
+    }
   }
 
   Plugin._sharedAPIElement = document.createElement('gr-js-api-interface');
@@ -421,6 +448,8 @@
     },
   };
 
+  flushPreinstalls();
+
   const Gerrit = window.Gerrit || {};
 
   let _resolveAllPluginsLoaded = null;
@@ -432,6 +461,8 @@
   const app = document.querySelector('#app');
   if (!app) {
     // No gr-app found (running tests)
+    Gerrit._installPreloadedPlugins = installPreloadedPlugins;
+    Gerrit._flushPreinstalls = flushPreinstalls;
     Gerrit._resetPlugins = () => {
       _allPluginsPromise = null;
       _pluginsInstalled = [];
@@ -622,5 +653,18 @@
     return `${pluginName}-screen-${screenName}`;
   };
 
+  Gerrit._isPluginPreloaded = function(url) {
+    const name = getPluginNameFromUrl(url);
+    if (name && Gerrit._preloadedPlugins) {
+      return name in Gerrit._preloadedPlugins;
+    } else {
+      return false;
+    }
+  };
+
   window.Gerrit = Gerrit;
+
+  // Preloaded plugins should be installed after Gerrit.install() is set,
+  // since plugin preloader substitutes Gerrit.install() temporarily.
+  installPreloadedPlugins();
 })(window);

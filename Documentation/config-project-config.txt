@@ -127,7 +127,11 @@ property is inherited from the parent project.
 +
 Controls whether or not the Change-Id must be included in the commit message
 in the last paragraph. Default is `INHERIT`, which means that this property
-is inherited from the parent project.
+is inherited from the parent project. The global default for new hosts
+is `true`
++
+This option is deprecated and future releases will behave as if this
+is always `true`.
 
 [[receive.maxObjectSizeLimit]]receive.maxObjectSizeLimit::
 +
@@ -136,12 +140,16 @@ is larger than the given size the pack-parsing will abort and the push
 operation will fail. If set to zero then there is no limit.
 +
 Project owners can use this setting to prevent developers from pushing
-objects which are too large to Gerrit. This setting can also be set it
-`gerrit.config` globally link:config-gerrit.html#receive.maxObjectSizeLimit[
-receive.maxObjectSizeLimit].
+objects which are too large to Gerrit. This setting can also be set in
+`gerrit.config` globally (link:config-gerrit.html#receive.maxObjectSizeLimit[
+receive.maxObjectSizeLimit]).
 +
-The project specific setting in `project.config` is only honored when it
-further reduces the global limit.
+The project specific setting in `project.config` may not set a value higher
+than the global limit (if configured). In other words, it is only honored when
+it further reduces the global limit.
++
+The setting is not inherited from the parent project; it must be explicitly
+set per project.
 +
 Default is zero.
 +
@@ -217,6 +225,19 @@ the Git push.
 Default is `INHERIT`, which means that this property is inherited from
 the parent project.
 
+[[change.workInProgressByDefault]]change.workInProgressByDefault::
++
+Controls whether all new changes in the project are set as WIP by default.
++
+Note that a new change will be ready if the `workInProgress` field in
+link:rest-api-changes.html#change-input[ChangeInput] is set to `false` explicitly
+when calling the link:rest-api-changes.html#create-change[CreateChange] REST API
+or the `ready` link:user-upload.html#wip[PushOption] is used during
+the Git push.
++
+Default is `INHERIT`, which means that this property is inherited from
+the parent project.
+
 [[submit-section]]
 === Submit section
 
@@ -238,7 +259,8 @@ Cherry Pick, Rebase Always, and (perhaps) Rebase If Necessary.
 
 - 'rejectEmptyCommit': Defines whether empty commits should be rejected when a change is merged.
 Changes might not seem empty at first but when attempting to merge, rebasing can lead to an empty
-commit. If this option is set to 'true' the merge would fail.
+commit. If this option is set to 'true' the merge would fail. An empty commit is still allowed as
+the initial commit on a branch.
 
 Merge strategy
 

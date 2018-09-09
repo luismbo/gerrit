@@ -166,7 +166,7 @@ public class StarredChangesUtil {
   private final GitReferenceUpdated gitRefUpdated;
   private final AllUsersName allUsers;
   private final Provider<ReviewDb> dbProvider;
-  private final PersonIdent serverIdent;
+  private final Provider<PersonIdent> serverIdent;
   private final ChangeIndexer indexer;
   private final Provider<InternalChangeQuery> queryProvider;
 
@@ -176,7 +176,7 @@ public class StarredChangesUtil {
       GitReferenceUpdated gitRefUpdated,
       AllUsersName allUsers,
       Provider<ReviewDb> dbProvider,
-      @GerritPersonIdent PersonIdent serverIdent,
+      @GerritPersonIdent Provider<PersonIdent> serverIdent,
       ChangeIndexer indexer,
       Provider<InternalChangeQuery> queryProvider) {
     this.repoManager = repoManager;
@@ -241,7 +241,7 @@ public class StarredChangesUtil {
         RevWalk rw = new RevWalk(repo)) {
       BatchRefUpdate batchUpdate = repo.getRefDatabase().newBatchUpdate();
       batchUpdate.setAllowNonFastForwards(true);
-      batchUpdate.setRefLogIdent(serverIdent);
+      batchUpdate.setRefLogIdent(serverIdent.get());
       batchUpdate.setRefLogMessage("Unstar change " + changeId.get(), true);
       for (Account.Id accountId : byChangeFromIndex(changeId).keySet()) {
         String refName = RefNames.refsStarredChanges(changeId, accountId);
@@ -376,6 +376,8 @@ public class StarredChangesUtil {
   }
 
   public static StarRef readLabels(Repository repo, String refName) throws IOException {
+    logger.atFine().log("Read star labels from %s", refName);
+
     Ref ref = repo.exactRef(refName);
     if (ref == null) {
       return StarRef.MISSING;
@@ -448,12 +450,13 @@ public class StarredChangesUtil {
   private void updateLabels(
       Repository repo, String refName, ObjectId oldObjectId, Collection<String> labels)
       throws IOException, OrmException, InvalidLabelsException {
+    logger.atFine().log("Update star labels in %s (labels=%s)", refName, labels);
     try (RevWalk rw = new RevWalk(repo)) {
       RefUpdate u = repo.updateRef(refName);
       u.setExpectedOldObjectId(oldObjectId);
       u.setForceUpdate(true);
       u.setNewObjectId(writeLabels(repo, labels));
-      u.setRefLogIdent(serverIdent);
+      u.setRefLogIdent(serverIdent.get());
       u.setRefLogMessage("Update star labels", true);
       RefUpdate.Result result = u.update(rw);
       switch (result) {
@@ -485,10 +488,11 @@ public class StarredChangesUtil {
       return;
     }
 
+    logger.atFine().log("Delete star labels in %s", refName);
     RefUpdate u = repo.updateRef(refName);
     u.setForceUpdate(true);
     u.setExpectedOldObjectId(oldObjectId);
-    u.setRefLogIdent(serverIdent);
+    u.setRefLogIdent(serverIdent.get());
     u.setRefLogMessage("Unstar change", true);
     RefUpdate.Result result = u.delete();
     switch (result) {

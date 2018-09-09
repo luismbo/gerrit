@@ -799,6 +799,43 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
   }
 
   @Test
+  public void byRepository() throws Exception {
+    TestRepository<Repo> repo1 = createProject("repo1");
+    TestRepository<Repo> repo2 = createProject("repo2");
+    Change change1 = insert(repo1, newChange(repo1));
+    Change change2 = insert(repo2, newChange(repo2));
+
+    assertQuery("repository:foo");
+    assertQuery("repository:repo");
+    assertQuery("repository:repo1", change1);
+    assertQuery("repository:repo2", change2);
+  }
+
+  @Test
+  public void byParentRepository() throws Exception {
+    TestRepository<Repo> repo1 = createProject("repo1");
+    TestRepository<Repo> repo2 = createProject("repo2", "repo1");
+    Change change1 = insert(repo1, newChange(repo1));
+    Change change2 = insert(repo2, newChange(repo2));
+
+    assertQuery("parentrepository:repo1", change2, change1);
+    assertQuery("parentrepository:repo2", change2);
+  }
+
+  @Test
+  public void byRepositoryPrefix() throws Exception {
+    TestRepository<Repo> repo1 = createProject("repo1");
+    TestRepository<Repo> repo2 = createProject("repo2");
+    Change change1 = insert(repo1, newChange(repo1));
+    Change change2 = insert(repo2, newChange(repo2));
+
+    assertQuery("repositories:foo");
+    assertQuery("repositories:repo1", change1);
+    assertQuery("repositories:repo2", change2);
+    assertQuery("repositories:repo", change2, change1);
+  }
+
+  @Test
   public void byBranchAndRef() throws Exception {
     TestRepository<Repo> repo = createProject("repo");
     Change change1 = insert(repo, newChangeForBranch(repo, "master"));
@@ -831,7 +868,13 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
     ChangeInserter ins4 = newChangeWithTopic(repo, "feature2-fixup");
     Change change4 = insert(repo, ins4);
 
-    Change change5 = insert(repo, newChange(repo));
+    ChangeInserter ins5 = newChangeWithTopic(repo, "https://gerrit.local");
+    Change change5 = insert(repo, ins5);
+
+    ChangeInserter ins6 = newChangeWithTopic(repo, "git_gerrit_training");
+    Change change6 = insert(repo, ins6);
+
+    Change change_no_topic = insert(repo, newChange(repo));
 
     assertQuery("intopic:foo");
     assertQuery("intopic:feature1", change1);
@@ -839,8 +882,9 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
     assertQuery("topic:feature2", change2);
     assertQuery("intopic:feature2", change4, change3, change2);
     assertQuery("intopic:fixup", change4);
-    assertQuery("topic:\"\"", change5);
-    assertQuery("intopic:\"\"", change5);
+    assertQuery("intopic:gerrit", change6, change5);
+    assertQuery("topic:\"\"", change_no_topic);
+    assertQuery("intopic:\"\"", change_no_topic);
   }
 
   @Test
@@ -896,6 +940,14 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
 
     assertQuery("message:gerrit", change2, change1);
     assertQuery("message:Gerrit", change2, change1);
+  }
+
+  @Test
+  public void byMessageSubstring() throws Exception {
+    TestRepository<Repo> repo = createProject("repo");
+    RevCommit commit1 = repo.parseBody(repo.commit().message("https://gerrit.local").create());
+    Change change1 = insert(repo, newChangeForCommit(repo, commit1));
+    assertQuery("message:gerrit", change1);
   }
 
   @Test
@@ -2931,6 +2983,13 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
 
     gApi.changes().id(change.getChangeId()).delete();
     assertQuery(query);
+  }
+
+  @Test
+  public void byUrlEncodedProject() throws Exception {
+    TestRepository<Repo> repo = createProject("repo+foo");
+    Change change = insert(repo, newChange(repo));
+    assertQuery("project:repo+foo", change);
   }
 
   protected ChangeInserter newChange(TestRepository<Repo> repo) throws Exception {

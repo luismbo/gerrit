@@ -32,7 +32,7 @@ import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.IdString;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.Response;
-import com.google.gerrit.extensions.restapi.RestCreateView;
+import com.google.gerrit.extensions.restapi.RestCollectionCreateView;
 import com.google.gerrit.extensions.restapi.TopLevelResource;
 import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.reviewdb.client.Account;
@@ -49,11 +49,13 @@ import com.google.gerrit.server.account.externalids.ExternalId;
 import com.google.gerrit.server.group.db.GroupsUpdate;
 import com.google.gerrit.server.group.db.InternalGroupUpdate;
 import com.google.gerrit.server.mail.send.OutgoingEmailValidator;
+import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.restapi.group.GroupsCollection;
 import com.google.gerrit.server.ssh.SshKeyCache;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
+import com.google.inject.Singleton;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -62,8 +64,9 @@ import java.util.Set;
 import org.eclipse.jgit.errors.ConfigInvalidException;
 
 @RequiresCapability(GlobalCapability.CREATE_ACCOUNT)
+@Singleton
 public class CreateAccount
-    implements RestCreateView<TopLevelResource, AccountResource, AccountInput> {
+    implements RestCollectionCreateView<TopLevelResource, AccountResource, AccountInput> {
   private final Sequences seq;
   private final GroupsCollection groupsCollection;
   private final VersionedAuthorizedKeys.Accessor authorizedKeys;
@@ -100,13 +103,13 @@ public class CreateAccount
   public Response<AccountInfo> apply(
       TopLevelResource rsrc, IdString id, @Nullable AccountInput input)
       throws BadRequestException, ResourceConflictException, UnprocessableEntityException,
-          OrmException, IOException, ConfigInvalidException {
+          OrmException, IOException, ConfigInvalidException, PermissionBackendException {
     return apply(id, input != null ? input : new AccountInput());
   }
 
   public Response<AccountInfo> apply(IdString id, AccountInput input)
       throws BadRequestException, ResourceConflictException, UnprocessableEntityException,
-          OrmException, IOException, ConfigInvalidException {
+          OrmException, IOException, ConfigInvalidException, PermissionBackendException {
     String username = id.get();
     if (input.username != null && !username.equals(input.username)) {
       throw new BadRequestException("username must match URL");

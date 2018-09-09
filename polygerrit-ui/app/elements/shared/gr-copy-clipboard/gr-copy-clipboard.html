@@ -20,7 +20,6 @@ limitations under the License.
 <link rel="import" href="../../../styles/shared-styles.html">
 <link rel="import" href="../../shared/gr-button/gr-button.html">
 <link rel="import" href="../../shared/gr-icons/gr-icons.html">
-<link rel="import" href="../../shared/gr-rest-api-interface/gr-rest-api-interface.html">
 
 <dom-module id="gr-copy-clipboard">
   <template>
@@ -30,28 +29,24 @@ limitations under the License.
         display: flex;
         flex-wrap: wrap;
       }
-      .text label {
-        flex: 0 0 100%;
-      }
       .copyText {
         flex-grow: 1;
         margin-right: .3em;
       }
-      .hideInput,
-      .hideLabel label {
+      .hideInput {
         display: none;
       }
       input {
         font-family: var(--monospace-font-family);
         font-size: inherit;
+        @apply --text-container-style;
       }
       #icon {
         height: 1.2em;
         width: 1.2em;
       }
     </style>
-    <div class$="text [[_computeLabelClass(hideLabel)]]">
-        <label>[[title]]</label>
+    <div class="text">
         <input id="input" is="iron-input"
             class$="copyText [[_computeInputClass(hideInput)]]"
             type="text"
@@ -66,8 +61,7 @@ limitations under the License.
             on-tap="_copyToClipboard">
           <iron-icon id="icon" icon="gr-icons:content-copy"></iron-icon>
         </gr-button>
-      </div>
-    <gr-rest-api-interface id="restAPI"></gr-rest-api-interface>
+    </div>
   </template>
   <script src="gr-copy-clipboard.js"></script>
 </dom-module>

@@ -146,7 +146,9 @@ public class ProjectCacheImpl implements ProjectCache {
     } catch (Exception e) {
       if (!(e.getCause() instanceof RepositoryNotFoundException)) {
         logger.atWarning().withCause(e).log("Cannot read project %s", projectName.get());
-        Throwables.throwIfInstanceOf(e.getCause(), IOException.class);
+        if (e.getCause() != null) {
+          Throwables.throwIfInstanceOf(e.getCause(), IOException.class);
+        }
         throw new IOException(e);
       }
       logger.atFine().withCause(e).log("Cannot find project %s", projectName.get());
@@ -176,6 +178,7 @@ public class ProjectCacheImpl implements ProjectCache {
   @Override
   public void evict(Project.NameKey p) throws IOException {
     if (p != null) {
+      logger.atFine().log("Evict project '%s'", p.get());
       byName.invalidate(p.get());
     }
     indexer.get().index(p);
@@ -267,11 +270,12 @@ public class ProjectCacheImpl implements ProjectCache {
 
     @Override
     public ProjectState load(String projectName) throws Exception {
+      logger.atFine().log("Loading project %s", projectName);
       long now = clock.read();
       Project.NameKey key = new Project.NameKey(projectName);
       try (Repository git = mgr.openRepository(key)) {
         ProjectConfig cfg = new ProjectConfig(key);
-        cfg.load(git);
+        cfg.load(key, git);
 
         ProjectState state = projectStateFactory.create(cfg);
         state.initLastCheck(now);
@@ -296,6 +300,7 @@ public class ProjectCacheImpl implements ProjectCache {
 
     @Override
     public ImmutableSortedSet<Project.NameKey> load(ListKey key) throws Exception {
+      logger.atFine().log("Loading project list");
       return ImmutableSortedSet.copyOf(mgr.list());
     }
   }

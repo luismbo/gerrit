@@ -38,12 +38,8 @@ limitations under the License.
     let sandbox;
 
     setup(() => {
-      stub('gr-rest-api-interface', {
-        saveChangeStarred() { return Promise.resolve({ok: true}); },
-      });
       sandbox = sinon.sandbox.create();
       element = fixture('basic');
-      element.title = 'Checkout';
       element.text = `git fetch http://gerrit@localhost:8080/a/test-project
           refs/changes/05/5/1 && git checkout FETCH_HEAD`;
       flushAsynchronousOperations();
@@ -78,13 +74,6 @@ limitations under the License.
       element.hideInput = true;
       flushAsynchronousOperations();
       assert.equal(getComputedStyle(element.$.input).display, 'none');
-    });
-
-    test('hideLabel', () => {
-      assert.notEqual(getComputedStyle(element.$$('label')).display, 'none');
-      element.hideLabel = true;
-      flushAsynchronousOperations();
-      assert.equal(getComputedStyle(element.$$('label')).display, 'none');
     });
   });
 </script>

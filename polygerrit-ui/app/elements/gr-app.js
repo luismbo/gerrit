@@ -99,6 +99,7 @@
       'page-error': '_handlePageError',
       'title-change': '_handleTitleChange',
       'location-change': '_handleLocationChange',
+      'rpc-log': '_handleRpcLog',
     },
 
     observers: [
@@ -127,6 +128,10 @@
       });
       this.$.restAPI.getConfig().then(config => {
         this._serverConfig = config;
+
+        if (config && config.gerrit && config.gerrit.report_bug_url) {
+          this._feedbackUrl = config.gerrit.report_bug_url;
+        }
       });
       this.$.restAPI.getVersion().then(version => {
         this._version = version;
@@ -331,6 +336,16 @@
       console.log(`Document loaded at: ${renderTime}`);
       console.log(`Please file bugs and feedback at: ${this._feedbackUrl}`);
       console.groupEnd();
+    },
+
+    /**
+     * Intercept RPC log events emitted by REST API interfaces.
+     * Note: the REST API interface cannot use gr-reporting directly because
+     * that would create a cyclic dependency.
+     */
+    _handleRpcLog(e) {
+      this.$.reporting.reportRpcTiming(e.detail.anonymizedUrl,
+          e.detail.elapsed);
     },
   });
 })();

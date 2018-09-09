@@ -14,37 +14,99 @@
 
 package com.google.gerrit.server.account.externalids;
 
+import static com.google.common.collect.ImmutableSetMultimap.toImmutableSetMultimap;
+import static java.util.stream.Collectors.toList;
+
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Strings;
-import com.google.common.collect.Multimap;
-import com.google.common.collect.MultimapBuilder;
-import com.google.common.collect.Multimaps;
+import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.SetMultimap;
-import com.google.gerrit.reviewdb.client.Account.Id;
+import com.google.gerrit.reviewdb.client.Account;
+import com.google.gerrit.server.cache.proto.Cache.AllExternalIdsProto;
+import com.google.gerrit.server.cache.proto.Cache.AllExternalIdsProto.ExternalIdProto;
+import com.google.gerrit.server.cache.serialize.CacheSerializer;
+import com.google.gerrit.server.cache.serialize.ProtoCacheSerializers;
+import com.google.gerrit.server.cache.serialize.ProtoCacheSerializers.ObjectIdConverter;
+import java.util.Collection;
 
-/**
- * Cache value containing all external IDs.
- *
- * <p>All returned fields are unmodifiable.
- */
+/** Cache value containing all external IDs. */
 @AutoValue
 public abstract class AllExternalIds {
-  static AllExternalIds create(Multimap<Id, ExternalId> byAccount) {
-    SetMultimap<String, ExternalId> byEmailCopy =
-        MultimapBuilder.hashKeys(byAccount.size()).hashSetValues(1).build();
-    byAccount
-        .values()
-        .stream()
-        .filter(e -> !Strings.isNullOrEmpty(e.email()))
-        .forEach(e -> byEmailCopy.put(e.email(), e));
-
+  static AllExternalIds create(SetMultimap<Account.Id, ExternalId> byAccount) {
     return new AutoValue_AllExternalIds(
-        Multimaps.unmodifiableSetMultimap(
-            MultimapBuilder.hashKeys(byAccount.size()).hashSetValues(5).build(byAccount)),
-        byEmailCopy);
+        ImmutableSetMultimap.copyOf(byAccount), byEmailCopy(byAccount.values()));
   }
 
-  public abstract SetMultimap<Id, ExternalId> byAccount();
+  static AllExternalIds create(Collection<ExternalId> externalIds) {
+    return new AutoValue_AllExternalIds(
+        externalIds.stream().collect(toImmutableSetMultimap(e -> e.accountId(), e -> e)),
+        byEmailCopy(externalIds));
+  }
 
-  public abstract SetMultimap<String, ExternalId> byEmail();
+  private static ImmutableSetMultimap<String, ExternalId> byEmailCopy(
+      Collection<ExternalId> externalIds) {
+    return externalIds
+        .stream()
+        .filter(e -> !Strings.isNullOrEmpty(e.email()))
+        .collect(toImmutableSetMultimap(e -> e.email(), e -> e));
+  }
+
+  public abstract ImmutableSetMultimap<Account.Id, ExternalId> byAccount();
+
+  public abstract ImmutableSetMultimap<String, ExternalId> byEmail();
+
+  enum Serializer implements CacheSerializer<AllExternalIds> {
+    INSTANCE;
+
+    @Override
+    public byte[] serialize(AllExternalIds object) {
+      ObjectIdConverter idConverter = ObjectIdConverter.create();
+      AllExternalIdsProto.Builder allBuilder = AllExternalIdsProto.newBuilder();
+      object
+          .byAccount()
+          .values()
+          .stream()
+          .map(extId -> toProto(idConverter, extId))
+          .forEach(allBuilder::addExternalId);
+      return ProtoCacheSerializers.toByteArray(allBuilder.build());
+    }
+
+    private static ExternalIdProto toProto(ObjectIdConverter idConverter, ExternalId externalId) {
+      ExternalIdProto.Builder b =
+          ExternalIdProto.newBuilder()
+              .setKey(externalId.key().get())
+              .setAccountId(externalId.accountId().get());
+      if (externalId.email() != null) {
+        b.setEmail(externalId.email());
+      }
+      if (externalId.password() != null) {
+        b.setPassword(externalId.password());
+      }
+      if (externalId.blobId() != null) {
+        b.setBlobId(idConverter.toByteString(externalId.blobId()));
+      }
+      return b.build();
+    }
+
+    @Override
+    public AllExternalIds deserialize(byte[] in) {
+      ObjectIdConverter idConverter = ObjectIdConverter.create();
+      return create(
+          ProtoCacheSerializers.parseUnchecked(AllExternalIdsProto.parser(), in)
+              .getExternalIdList()
+              .stream()
+              .map(proto -> toExternalId(idConverter, proto))
+              .collect(toList()));
+    }
+
+    private static ExternalId toExternalId(ObjectIdConverter idConverter, ExternalIdProto proto) {
+      return ExternalId.create(
+          ExternalId.Key.parse(proto.getKey()),
+          new Account.Id(proto.getAccountId()),
+          // ExternalId treats null and empty strings the same, so no need to distinguish here.
+          proto.getEmail(),
+          proto.getPassword(),
+          !proto.getBlobId().isEmpty() ? idConverter.fromByteString(proto.getBlobId()) : null);
+    }
+  }
 }

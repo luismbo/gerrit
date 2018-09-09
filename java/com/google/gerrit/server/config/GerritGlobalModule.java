@@ -91,7 +91,6 @@ import com.google.gerrit.server.account.GroupControl;
 import com.google.gerrit.server.account.GroupIncludeCacheImpl;
 import com.google.gerrit.server.account.VersionedAuthorizedKeys;
 import com.google.gerrit.server.account.externalids.ExternalIdModule;
-import com.google.gerrit.server.audit.AuditModule;
 import com.google.gerrit.server.auth.AuthBackend;
 import com.google.gerrit.server.auth.UniversalAuthBackend;
 import com.google.gerrit.server.auth.oauth.OAuthTokenCache;
@@ -172,6 +171,7 @@ import com.google.gerrit.server.query.change.ConflictsCacheImpl;
 import com.google.gerrit.server.restapi.change.SuggestReviewers;
 import com.google.gerrit.server.restapi.group.GroupModule;
 import com.google.gerrit.server.rules.DefaultSubmitRule;
+import com.google.gerrit.server.rules.IgnoreSelfApprovalRule;
 import com.google.gerrit.server.rules.PrologModule;
 import com.google.gerrit.server.rules.RulesCache;
 import com.google.gerrit.server.rules.SubmitRule;
@@ -246,6 +246,7 @@ public class GerritGlobalModule extends FactoryModule {
     install(new NoteDbModule(cfg));
     install(new PrologModule());
     install(new DefaultSubmitRule.Module());
+    install(new IgnoreSelfApprovalRule.Module());
     install(new ReceiveCommitsModule());
     install(new SshAddressesModule());
     install(ThreadLocalRequestContext.module());
@@ -302,7 +303,6 @@ public class GerritGlobalModule extends FactoryModule {
     bind(IdentifiedUser.GenericFactory.class).in(SINGLETON);
     bind(AccountControl.Factory.class);
 
-    install(new AuditModule());
     bind(UiActions.class);
 
     bind(GitReferenceUpdated.class);

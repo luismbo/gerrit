@@ -19,6 +19,8 @@
 /**
  * @param canonicalPath
  * @param staticResourcePath
+ * @param? assetsPath {string} URL to static assets root, if served from CDN.
+ * @param? assetsBundle {string} Assets bundle .html file, served from $assetsPath.
  * @param? faviconPath
  * @param? versionInfo
  * @param? deprecateGwtUi
@@ -36,6 +38,7 @@
     {if $deprecateGwtUi}window.DEPRECATE_GWT_UI = true;{/if}
     {if $versionInfo}window.VERSION_INFO = '{$versionInfo}';{/if}
     {if $staticResourcePath != ''}window.STATIC_RESOURCE_PATH = '{$staticResourcePath}';{/if}
+    {if $assetsPath}window.ASSETS_PATH = '{$assetsPath}';{/if}
   </script>{\n}
 
   {if $faviconPath}
@@ -46,12 +49,12 @@
 
   // RobotoMono fonts are used in styles/fonts.css
   // @see https://github.com/w3c/preload/issues/32 regarding crossorigin
-  <link rel="preload" href="{$staticResourcePath}/fonts/RobotoMono-Regular.woff2" as="font" type="font/woff2" crossorigin>{\n}
-  <link rel="preload" href="{$staticResourcePath}/fonts/RobotoMono-Regular.woff" as="font" type="font/woff" crossorigin>{\n}
-  <link rel="preload" href="{$staticResourcePath}/fonts/Roboto-Regular.woff2" as="font" type="font/woff2" crossorigin>{\n}
-  <link rel="preload" href="{$staticResourcePath}/fonts/Roboto-Regular.woff" as="font" type="font/woff" crossorigin>{\n}
-  <link rel="preload" href="{$staticResourcePath}/fonts/Roboto-Medium.woff2" as="font" type="font/woff2" crossorigin>{\n}
-  <link rel="preload" href="{$staticResourcePath}/fonts/Roboto-Medium.woff" as="font" type="font/woff" crossorigin>{\n}
+  <link rel="preload" href="{$staticResourcePath}/fonts/RobotoMono-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">{\n}
+  <link rel="preload" href="{$staticResourcePath}/fonts/RobotoMono-Regular.woff" as="font" type="font/woff" crossorigin="anonymous">{\n}
+  <link rel="preload" href="{$staticResourcePath}/fonts/Roboto-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">{\n}
+  <link rel="preload" href="{$staticResourcePath}/fonts/Roboto-Regular.woff" as="font" type="font/woff" crossorigin="anonymous">{\n}
+  <link rel="preload" href="{$staticResourcePath}/fonts/Roboto-Medium.woff2" as="font" type="font/woff2" crossorigin="anonymous">{\n}
+  <link rel="preload" href="{$staticResourcePath}/fonts/Roboto-Medium.woff" as="font" type="font/woff" crossorigin="anonymous">{\n}
   <link rel="stylesheet" href="{$staticResourcePath}/styles/fonts.css">{\n}
   <link rel="stylesheet" href="{$staticResourcePath}/styles/main.css">{\n}
   <script src="{$staticResourcePath}/bower_components/webcomponentsjs/webcomponents-lite.js"></script>{\n}
@@ -61,6 +64,10 @@
   // CC them on any changes that load content before gr-app.html.
   //
   // github.com/Polymer/polymer-resin/blob/master/getting-started.md#integrating
+  {if $assetsPath and $assetsBundle}
+    <link rel="import" href="{$assetsPath + $assetsBundle}">{\n}
+  {/if}
+
   <link rel="preload" href="{$staticResourcePath}/elements/gr-app.js" as="script" crossorigin="anonymous">{\n}
   <link rel="import" href="{$staticResourcePath}/elements/gr-app.html">{\n}
 

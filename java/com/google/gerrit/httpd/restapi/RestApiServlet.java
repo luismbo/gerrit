@@ -18,6 +18,7 @@ package com.google.gerrit.httpd.restapi;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.flogger.LazyArgs.lazy;
 import static com.google.common.net.HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS;
 import static com.google.common.net.HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS;
 import static com.google.common.net.HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS;
@@ -48,6 +49,7 @@ import static javax.servlet.http.HttpServletResponse.SC_OK;
 import static javax.servlet.http.HttpServletResponse.SC_PRECONDITION_FAILED;
 import static javax.servlet.http.HttpServletResponse.SC_SERVICE_UNAVAILABLE;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
@@ -68,8 +70,7 @@ import com.google.gerrit.common.RawInputUtil;
 import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.extensions.registration.DynamicItem;
 import com.google.gerrit.extensions.registration.DynamicMap;
-import com.google.gerrit.extensions.restapi.AcceptsDelete;
-import com.google.gerrit.extensions.restapi.AcceptsPost;
+import com.google.gerrit.extensions.registration.PluginName;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.BinaryResult;
@@ -87,7 +88,10 @@ import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.Response;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.RestCollection;
-import com.google.gerrit.extensions.restapi.RestCreateView;
+import com.google.gerrit.extensions.restapi.RestCollectionCreateView;
+import com.google.gerrit.extensions.restapi.RestCollectionDeleteMissingView;
+import com.google.gerrit.extensions.restapi.RestCollectionModifyView;
+import com.google.gerrit.extensions.restapi.RestCollectionView;
 import com.google.gerrit.extensions.restapi.RestModifyView;
 import com.google.gerrit.extensions.restapi.RestReadView;
 import com.google.gerrit.extensions.restapi.RestResource;
@@ -106,6 +110,7 @@ import com.google.gerrit.server.audit.ExtendedHttpAuditEvent;
 import com.google.gerrit.server.cache.PerThreadCache;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.git.LockFailureException;
+import com.google.gerrit.server.logging.TraceContext;
 import com.google.gerrit.server.permissions.GlobalPermission;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackendException;
@@ -130,6 +135,7 @@ import com.google.inject.TypeLiteral;
 import com.google.inject.util.Providers;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.FilterOutputStream;
 import java.io.IOException;
@@ -175,6 +181,8 @@ public class RestApiServlet extends HttpServlet {
   private static final String JSON_TYPE = "application/json";
 
   private static final String FORM_TYPE = "application/x-www-form-urlencoded";
+
+  @VisibleForTesting public static final String X_GERRIT_TRACE = "X-Gerrit-Trace";
 
   // HTTP 422 Unprocessable Entity.
   // TODO: Remove when HttpServletResponse.SC_UNPROCESSABLE_ENTITY is available
@@ -279,276 +287,347 @@ public class RestApiServlet extends HttpServlet {
     RestResource rsrc = TopLevelResource.INSTANCE;
     ViewData viewData = null;
 
-    try (PerThreadCache ignored = PerThreadCache.create()) {
-      if (isCorsPreflight(req)) {
-        doCorsPreflight(req, res);
-        return;
-      }
+    try (TraceContext traceContext = enableTracing(req, res)) {
+      try (PerThreadCache ignored = PerThreadCache.create()) {
+        logger.atFinest().log(
+            "Received REST request: %s %s (parameters: %s)",
+            req.getMethod(), req.getRequestURI(), getParameterNames(req));
+        logger.atFinest().log("Calling user: %s", globals.currentUser.get().getLoggableName());
 
-      qp = ParameterParser.getQueryParams(req);
-      checkCors(req, res, qp.hasXdOverride());
-      if (qp.hasXdOverride()) {
-        req = applyXdOverrides(req, qp);
-      }
-      checkUserSession(req);
-
-      List<IdString> path = splitPath(req);
-      RestCollection<RestResource, RestResource> rc = members.get();
-      globals
-          .permissionBackend
-          .currentUser()
-          .checkAny(GlobalPermission.fromAnnotation(rc.getClass()));
-
-      viewData = new ViewData(null, null);
-
-      if (path.isEmpty()) {
-        if (rc instanceof NeedsParams) {
-          ((NeedsParams) rc).setParams(qp.params());
+        if (isCorsPreflight(req)) {
+          doCorsPreflight(req, res);
+          return;
         }
 
-        if (isRead(req)) {
-          viewData = new ViewData(null, rc.list());
-        } else if (rc instanceof AcceptsPost && isPost(req)) {
-          @SuppressWarnings("unchecked")
-          AcceptsPost<RestResource> ac = (AcceptsPost<RestResource>) rc;
-          viewData = new ViewData(null, ac.post(rsrc));
-        } else {
-          throw new MethodNotAllowedException();
+        qp = ParameterParser.getQueryParams(req);
+        checkCors(req, res, qp.hasXdOverride());
+        if (qp.hasXdOverride()) {
+          req = applyXdOverrides(req, qp);
         }
-      } else {
-        IdString id = path.remove(0);
-        try {
-          rsrc = rc.parse(rsrc, id);
-          if (path.isEmpty()) {
-            checkPreconditions(req);
-          }
-        } catch (ResourceNotFoundException e) {
-          if (!path.isEmpty() || (!isPost(req) && !isPut(req))) {
-            throw e;
-          }
+        checkUserSession(req);
 
-          RestView<RestResource> createView = rc.views().get("gerrit", "CREATE./");
-          if (createView != null) {
-            viewData = new ViewData(null, createView);
-            status = SC_CREATED;
-            path.add(id);
-          } else {
-            throw e;
-          }
-        }
-        if (viewData.view == null) {
-          viewData = view(rsrc, rc, req.getMethod(), path);
-        }
-      }
-      checkRequiresCapability(viewData);
+        List<IdString> path = splitPath(req);
+        RestCollection<RestResource, RestResource> rc = members.get();
+        globals
+            .permissionBackend
+            .currentUser()
+            .checkAny(GlobalPermission.fromAnnotation(rc.getClass()));
 
-      while (viewData.view instanceof RestCollection<?, ?>) {
-        @SuppressWarnings("unchecked")
-        RestCollection<RestResource, RestResource> c =
-            (RestCollection<RestResource, RestResource>) viewData.view;
+        viewData = new ViewData(null, null);
 
         if (path.isEmpty()) {
-          if (isRead(req)) {
-            viewData = new ViewData(null, c.list());
-          } else if (c instanceof AcceptsPost && isPost(req)) {
-            @SuppressWarnings("unchecked")
-            AcceptsPost<RestResource> ac = (AcceptsPost<RestResource>) c;
-            viewData = new ViewData(null, ac.post(rsrc));
-          } else if (c instanceof AcceptsDelete && isDelete(req)) {
-            @SuppressWarnings("unchecked")
-            AcceptsDelete<RestResource> ac = (AcceptsDelete<RestResource>) c;
-            viewData = new ViewData(null, ac.delete(rsrc, null));
-          } else {
-            throw new MethodNotAllowedException();
-          }
-          break;
-        }
-        IdString id = path.remove(0);
-        try {
-          rsrc = c.parse(rsrc, id);
-          checkPreconditions(req);
-          viewData = new ViewData(null, null);
-        } catch (ResourceNotFoundException e) {
-          if (!path.isEmpty()) {
-            throw e;
+          if (rc instanceof NeedsParams) {
+            ((NeedsParams) rc).setParams(qp.params());
           }
 
-          if (isPost(req) || isPut(req)) {
-            RestView<RestResource> createView = c.views().get("gerrit", "CREATE./");
-            if (createView != null) {
-              viewData = new ViewData(null, createView);
-              status = SC_CREATED;
-              path.add(id);
+          if (isRead(req)) {
+            viewData = new ViewData(null, rc.list());
+          } else if (isPost(req)) {
+            RestView<RestResource> restCollectionView =
+                rc.views().get(PluginName.GERRIT, "POST_ON_COLLECTION./");
+            if (restCollectionView != null) {
+              viewData = new ViewData(null, restCollectionView);
+            } else {
+              throw methodNotAllowed(req);
+            }
+          } else {
+            // DELETE on root collections is not supported
+            throw methodNotAllowed(req);
+          }
+        } else {
+          IdString id = path.remove(0);
+          try {
+            rsrc = rc.parse(rsrc, id);
+            if (path.isEmpty()) {
+              checkPreconditions(req);
+            }
+          } catch (ResourceNotFoundException e) {
+            if (!path.isEmpty()) {
+              throw e;
+            }
+
+            if (isPost(req) || isPut(req)) {
+              RestView<RestResource> createView = rc.views().get(PluginName.GERRIT, "CREATE./");
+              if (createView != null) {
+                viewData = new ViewData(null, createView);
+                status = SC_CREATED;
+                path.add(id);
+              } else {
+                throw e;
+              }
+            } else if (isDelete(req)) {
+              RestView<RestResource> deleteView =
+                  rc.views().get(PluginName.GERRIT, "DELETE_MISSING./");
+              if (deleteView != null) {
+                viewData = new ViewData(null, deleteView);
+                status = SC_NO_CONTENT;
+                path.add(id);
+              } else {
+                throw e;
+              }
             } else {
               throw e;
             }
-          } else if (c instanceof AcceptsDelete && isDelete(req)) {
-            @SuppressWarnings("unchecked")
-            AcceptsDelete<RestResource> ac = (AcceptsDelete<RestResource>) c;
-            viewData = new ViewData(viewData.pluginName, ac.delete(rsrc, id));
-            status = SC_NO_CONTENT;
-          } else {
-            throw e;
           }
-        }
-        if (viewData.view == null) {
-          viewData = view(rsrc, c, req.getMethod(), path);
+          if (viewData.view == null) {
+            viewData = view(rc, req.getMethod(), path);
+          }
         }
         checkRequiresCapability(viewData);
-      }
 
-      if (notModified(req, rsrc, viewData.view)) {
-        res.sendError(SC_NOT_MODIFIED);
-        return;
-      }
+        while (viewData.view instanceof RestCollection<?, ?>) {
+          @SuppressWarnings("unchecked")
+          RestCollection<RestResource, RestResource> c =
+              (RestCollection<RestResource, RestResource>) viewData.view;
 
-      if (!globals.paramParser.get().parse(viewData.view, qp.params(), req, res)) {
-        return;
-      }
-
-      if (viewData.view instanceof RestReadView<?> && isRead(req)) {
-        result = ((RestReadView<RestResource>) viewData.view).apply(rsrc);
-      } else if (viewData.view instanceof RestModifyView<?, ?>) {
-        @SuppressWarnings("unchecked")
-        RestModifyView<RestResource, Object> m =
-            (RestModifyView<RestResource, Object>) viewData.view;
-
-        Type type = inputType(m);
-        inputRequestBody = parseRequest(req, type);
-        result = m.apply(rsrc, inputRequestBody);
-        if (inputRequestBody instanceof RawInput) {
-          try (InputStream is = req.getInputStream()) {
-            ServletUtils.consumeRequestBody(is);
+          if (path.isEmpty()) {
+            if (isRead(req)) {
+              viewData = new ViewData(null, c.list());
+            } else if (isPost(req)) {
+              RestView<RestResource> restCollectionView =
+                  c.views().get(viewData.pluginName, "POST_ON_COLLECTION./");
+              if (restCollectionView != null) {
+                viewData = new ViewData(null, restCollectionView);
+              } else {
+                throw methodNotAllowed(req);
+              }
+            } else if (isDelete(req)) {
+              RestView<RestResource> restCollectionView =
+                  c.views().get(viewData.pluginName, "DELETE_ON_COLLECTION./");
+              if (restCollectionView != null) {
+                viewData = new ViewData(null, restCollectionView);
+              } else {
+                throw methodNotAllowed(req);
+              }
+            } else {
+              throw methodNotAllowed(req);
+            }
+            break;
           }
-        }
-      } else if (viewData.view instanceof RestCreateView<?, ?, ?>) {
-        @SuppressWarnings("unchecked")
-        RestCreateView<RestResource, RestResource, Object> m =
-            (RestCreateView<RestResource, RestResource, Object>) viewData.view;
+          IdString id = path.remove(0);
+          try {
+            rsrc = c.parse(rsrc, id);
+            checkPreconditions(req);
+            viewData = new ViewData(null, null);
+          } catch (ResourceNotFoundException e) {
+            if (!path.isEmpty()) {
+              throw e;
+            }
 
-        Type type = inputType(m);
-        inputRequestBody = parseRequest(req, type);
-        result = m.apply(rsrc, path.get(0), inputRequestBody);
-        if (inputRequestBody instanceof RawInput) {
-          try (InputStream is = req.getInputStream()) {
-            ServletUtils.consumeRequestBody(is);
+            if (isPost(req) || isPut(req)) {
+              RestView<RestResource> createView = c.views().get(PluginName.GERRIT, "CREATE./");
+              if (createView != null) {
+                viewData = new ViewData(null, createView);
+                status = SC_CREATED;
+                path.add(id);
+              } else {
+                throw e;
+              }
+            } else if (isDelete(req)) {
+              RestView<RestResource> deleteView =
+                  c.views().get(PluginName.GERRIT, "DELETE_MISSING./");
+              if (deleteView != null) {
+                viewData = new ViewData(null, deleteView);
+                status = SC_NO_CONTENT;
+                path.add(id);
+              } else {
+                throw e;
+              }
+            } else {
+              throw e;
+            }
           }
+          if (viewData.view == null) {
+            viewData = view(c, req.getMethod(), path);
+          }
+          checkRequiresCapability(viewData);
         }
-      } else {
-        throw new ResourceNotFoundException();
-      }
 
-      if (result instanceof Response) {
-        @SuppressWarnings("rawtypes")
-        Response<?> r = (Response) result;
-        status = r.statusCode();
-        configureCaching(req, res, rsrc, viewData.view, r.caching());
-      } else if (result instanceof Response.Redirect) {
-        CacheHeaders.setNotCacheable(res);
-        res.sendRedirect(((Response.Redirect) result).location());
-        return;
-      } else if (result instanceof Response.Accepted) {
-        CacheHeaders.setNotCacheable(res);
-        res.setStatus(SC_ACCEPTED);
-        res.setHeader(HttpHeaders.LOCATION, ((Response.Accepted) result).location());
-        return;
-      } else {
-        CacheHeaders.setNotCacheable(res);
-      }
-      res.setStatus(status);
+        if (notModified(req, rsrc, viewData.view)) {
+          res.sendError(SC_NOT_MODIFIED);
+          return;
+        }
 
-      if (result != Response.none()) {
-        result = Response.unwrap(result);
-        if (result instanceof BinaryResult) {
-          responseBytes = replyBinaryResult(req, res, (BinaryResult) result);
+        if (!globals.paramParser.get().parse(viewData.view, qp.params(), req, res)) {
+          return;
+        }
+
+        if (viewData.view instanceof RestReadView<?> && isRead(req)) {
+          result = ((RestReadView<RestResource>) viewData.view).apply(rsrc);
+        } else if (viewData.view instanceof RestModifyView<?, ?>) {
+          @SuppressWarnings("unchecked")
+          RestModifyView<RestResource, Object> m =
+              (RestModifyView<RestResource, Object>) viewData.view;
+
+          Type type = inputType(m);
+          inputRequestBody = parseRequest(req, type);
+          result = m.apply(rsrc, inputRequestBody);
+          if (inputRequestBody instanceof RawInput) {
+            try (InputStream is = req.getInputStream()) {
+              ServletUtils.consumeRequestBody(is);
+            }
+          }
+        } else if (viewData.view instanceof RestCollectionCreateView<?, ?, ?>) {
+          @SuppressWarnings("unchecked")
+          RestCollectionCreateView<RestResource, RestResource, Object> m =
+              (RestCollectionCreateView<RestResource, RestResource, Object>) viewData.view;
+
+          Type type = inputType(m);
+          inputRequestBody = parseRequest(req, type);
+          result = m.apply(rsrc, path.get(0), inputRequestBody);
+          if (inputRequestBody instanceof RawInput) {
+            try (InputStream is = req.getInputStream()) {
+              ServletUtils.consumeRequestBody(is);
+            }
+          }
+        } else if (viewData.view instanceof RestCollectionDeleteMissingView<?, ?, ?>) {
+          @SuppressWarnings("unchecked")
+          RestCollectionDeleteMissingView<RestResource, RestResource, Object> m =
+              (RestCollectionDeleteMissingView<RestResource, RestResource, Object>) viewData.view;
+
+          Type type = inputType(m);
+          inputRequestBody = parseRequest(req, type);
+          result = m.apply(rsrc, path.get(0), inputRequestBody);
+          if (inputRequestBody instanceof RawInput) {
+            try (InputStream is = req.getInputStream()) {
+              ServletUtils.consumeRequestBody(is);
+            }
+          }
+        } else if (viewData.view instanceof RestCollectionModifyView<?, ?, ?>) {
+          @SuppressWarnings("unchecked")
+          RestCollectionModifyView<RestResource, RestResource, Object> m =
+              (RestCollectionModifyView<RestResource, RestResource, Object>) viewData.view;
+
+          Type type = inputType(m);
+          inputRequestBody = parseRequest(req, type);
+          result = m.apply(rsrc, inputRequestBody);
+          if (inputRequestBody instanceof RawInput) {
+            try (InputStream is = req.getInputStream()) {
+              ServletUtils.consumeRequestBody(is);
+            }
+          }
         } else {
-          responseBytes = replyJson(req, res, qp.config(), result);
+          throw new ResourceNotFoundException();
         }
-      }
-    } catch (MalformedJsonException | JsonParseException e) {
-      responseBytes =
-          replyError(req, res, status = SC_BAD_REQUEST, "Invalid " + JSON_TYPE + " in request", e);
-    } catch (BadRequestException e) {
-      responseBytes =
-          replyError(
-              req, res, status = SC_BAD_REQUEST, messageOr(e, "Bad Request"), e.caching(), e);
-    } catch (AuthException e) {
-      responseBytes =
-          replyError(req, res, status = SC_FORBIDDEN, messageOr(e, "Forbidden"), e.caching(), e);
-    } catch (AmbiguousViewException e) {
-      responseBytes = replyError(req, res, status = SC_NOT_FOUND, messageOr(e, "Ambiguous"), e);
-    } catch (ResourceNotFoundException e) {
-      responseBytes =
-          replyError(req, res, status = SC_NOT_FOUND, messageOr(e, "Not Found"), e.caching(), e);
-    } catch (MethodNotAllowedException e) {
-      responseBytes =
-          replyError(
-              req,
-              res,
-              status = SC_METHOD_NOT_ALLOWED,
-              messageOr(e, "Method Not Allowed"),
-              e.caching(),
-              e);
-    } catch (ResourceConflictException e) {
-      responseBytes =
-          replyError(req, res, status = SC_CONFLICT, messageOr(e, "Conflict"), e.caching(), e);
-    } catch (PreconditionFailedException e) {
-      responseBytes =
-          replyError(
-              req,
-              res,
-              status = SC_PRECONDITION_FAILED,
-              messageOr(e, "Precondition Failed"),
-              e.caching(),
-              e);
-    } catch (UnprocessableEntityException e) {
-      responseBytes =
-          replyError(
-              req,
-              res,
-              status = SC_UNPROCESSABLE_ENTITY,
-              messageOr(e, "Unprocessable Entity"),
-              e.caching(),
-              e);
-    } catch (NotImplementedException e) {
-      responseBytes =
-          replyError(req, res, status = SC_NOT_IMPLEMENTED, messageOr(e, "Not Implemented"), e);
-    } catch (UpdateException e) {
-      Throwable t = e.getCause();
-      if (t instanceof LockFailureException) {
+
+        if (result instanceof Response) {
+          @SuppressWarnings("rawtypes")
+          Response<?> r = (Response) result;
+          status = r.statusCode();
+          configureCaching(req, res, rsrc, viewData.view, r.caching());
+        } else if (result instanceof Response.Redirect) {
+          CacheHeaders.setNotCacheable(res);
+          String location = ((Response.Redirect) result).location();
+          res.sendRedirect(location);
+          logger.atFinest().log("REST call redirected to: %s", location);
+          return;
+        } else if (result instanceof Response.Accepted) {
+          CacheHeaders.setNotCacheable(res);
+          res.setStatus(SC_ACCEPTED);
+          res.setHeader(HttpHeaders.LOCATION, ((Response.Accepted) result).location());
+          logger.atFinest().log("REST call succeeded: %d", SC_ACCEPTED);
+          return;
+        } else {
+          CacheHeaders.setNotCacheable(res);
+        }
+        res.setStatus(status);
+        logger.atFinest().log("REST call succeeded: %d", status);
+
+        if (result != Response.none()) {
+          result = Response.unwrap(result);
+          if (result instanceof BinaryResult) {
+            responseBytes = replyBinaryResult(req, res, (BinaryResult) result);
+          } else {
+            responseBytes = replyJson(req, res, false, qp.config(), result);
+          }
+        }
+      } catch (MalformedJsonException | JsonParseException e) {
         responseBytes =
-            replyError(req, res, status = SC_SERVICE_UNAVAILABLE, messageOr(t, "Lock failure"), e);
-      } else {
+            replyError(
+                req, res, status = SC_BAD_REQUEST, "Invalid " + JSON_TYPE + " in request", e);
+      } catch (BadRequestException e) {
+        responseBytes =
+            replyError(
+                req, res, status = SC_BAD_REQUEST, messageOr(e, "Bad Request"), e.caching(), e);
+      } catch (AuthException e) {
+        responseBytes =
+            replyError(req, res, status = SC_FORBIDDEN, messageOr(e, "Forbidden"), e.caching(), e);
+      } catch (AmbiguousViewException e) {
+        responseBytes = replyError(req, res, status = SC_NOT_FOUND, messageOr(e, "Ambiguous"), e);
+      } catch (ResourceNotFoundException e) {
+        responseBytes =
+            replyError(req, res, status = SC_NOT_FOUND, messageOr(e, "Not Found"), e.caching(), e);
+      } catch (MethodNotAllowedException e) {
+        responseBytes =
+            replyError(
+                req,
+                res,
+                status = SC_METHOD_NOT_ALLOWED,
+                messageOr(e, "Method Not Allowed"),
+                e.caching(),
+                e);
+      } catch (ResourceConflictException e) {
+        responseBytes =
+            replyError(req, res, status = SC_CONFLICT, messageOr(e, "Conflict"), e.caching(), e);
+      } catch (PreconditionFailedException e) {
+        responseBytes =
+            replyError(
+                req,
+                res,
+                status = SC_PRECONDITION_FAILED,
+                messageOr(e, "Precondition Failed"),
+                e.caching(),
+                e);
+      } catch (UnprocessableEntityException e) {
+        responseBytes =
+            replyError(
+                req,
+                res,
+                status = SC_UNPROCESSABLE_ENTITY,
+                messageOr(e, "Unprocessable Entity"),
+                e.caching(),
+                e);
+      } catch (NotImplementedException e) {
+        responseBytes =
+            replyError(req, res, status = SC_NOT_IMPLEMENTED, messageOr(e, "Not Implemented"), e);
+      } catch (UpdateException e) {
+        Throwable t = e.getCause();
+        if (t instanceof LockFailureException) {
+          responseBytes =
+              replyError(
+                  req, res, status = SC_SERVICE_UNAVAILABLE, messageOr(t, "Lock failure"), e);
+        } else {
+          status = SC_INTERNAL_SERVER_ERROR;
+          responseBytes = handleException(e, req, res);
+        }
+      } catch (Exception e) {
         status = SC_INTERNAL_SERVER_ERROR;
         responseBytes = handleException(e, req, res);
+      } finally {
+        String metric =
+            viewData != null && viewData.view != null ? globals.metrics.view(viewData) : "_unknown";
+        globals.metrics.count.increment(metric);
+        if (status >= SC_BAD_REQUEST) {
+          globals.metrics.errorCount.increment(metric, status);
+        }
+        if (responseBytes != -1) {
+          globals.metrics.responseBytes.record(metric, responseBytes);
+        }
+        globals.metrics.serverLatency.record(
+            metric, System.nanoTime() - startNanos, TimeUnit.NANOSECONDS);
+        globals.auditService.dispatch(
+            new ExtendedHttpAuditEvent(
+                globals.webSession.get().getSessionId(),
+                globals.currentUser.get(),
+                req,
+                auditStartTs,
+                qp != null ? qp.params() : ImmutableListMultimap.of(),
+                inputRequestBody,
+                status,
+                result,
+                rsrc,
+                viewData == null ? null : viewData.view));
       }
-    } catch (Exception e) {
-      status = SC_INTERNAL_SERVER_ERROR;
-      responseBytes = handleException(e, req, res);
-    } finally {
-      String metric =
-          viewData != null && viewData.view != null ? globals.metrics.view(viewData) : "_unknown";
-      globals.metrics.count.increment(metric);
-      if (status >= SC_BAD_REQUEST) {
-        globals.metrics.errorCount.increment(metric, status);
-      }
-      if (responseBytes != -1) {
-        globals.metrics.responseBytes.record(metric, responseBytes);
-      }
-      globals.metrics.serverLatency.record(
-          metric, System.nanoTime() - startNanos, TimeUnit.NANOSECONDS);
-      globals.auditService.dispatch(
-          new ExtendedHttpAuditEvent(
-              globals.webSession.get().getSessionId(),
-              globals.currentUser.get(),
-              req,
-              auditStartTs,
-              qp != null ? qp.params() : ImmutableListMultimap.of(),
-              inputRequestBody,
-              status,
-              result,
-              rsrc,
-              viewData == null ? null : viewData.view));
     }
   }
 
@@ -760,14 +839,14 @@ public class RestApiServlet extends HttpServlet {
     return ((ParameterizedType) supertype).getActualTypeArguments()[1];
   }
 
-  private static Type inputType(RestCreateView<RestResource, RestResource, Object> m) {
-    // MyCreateView implements RestCreateView<SomeResource, SomeResource, MyInput>
+  private static Type inputType(RestCollectionView<RestResource, RestResource, Object> m) {
+    // MyCollectionView implements RestCollectionView<SomeResource, SomeResource, MyInput>
     TypeLiteral<?> typeLiteral = TypeLiteral.get(m.getClass());
 
-    // RestCreateView<SomeResource, SomeResource, MyInput>
+    // RestCollectionView<SomeResource, SomeResource, MyInput>
     // This is smart enough to resolve even when there are intervening subclasses, even if they have
     // reordered type arguments.
-    TypeLiteral<?> supertypeLiteral = typeLiteral.getSupertype(RestCreateView.class);
+    TypeLiteral<?> supertypeLiteral = typeLiteral.getSupertype(RestCollectionView.class);
 
     Type supertype = supertypeLiteral.getType();
     checkState(
@@ -911,9 +990,22 @@ public class RestApiServlet extends HttpServlet {
     throw new InstantiationException("Cannot make " + type);
   }
 
+  /**
+   * Sets a JSON reply on the given HTTP servlet response.
+   *
+   * @param req the HTTP servlet request
+   * @param res the HTTP servlet response on which the reply should be set
+   * @param allowTracing whether it is allowed to log the reply if tracing is enabled, must not be
+   *     set to {@code true} if the reply may contain sensitive data
+   * @param config config parameters for the JSON formatting
+   * @param result the object that should be formatted as JSON
+   * @return the length of the response
+   * @throws IOException
+   */
   public static long replyJson(
       @Nullable HttpServletRequest req,
       HttpServletResponse res,
+      boolean allowTracing,
       ListMultimap<String, String> config,
       Object result)
       throws IOException {
@@ -928,6 +1020,21 @@ public class RestApiServlet extends HttpServlet {
     }
     w.write('\n');
     w.flush();
+
+    if (allowTracing) {
+      logger.atFinest().log(
+          "JSON response body:\n%s",
+          lazy(
+              () -> {
+                try {
+                  ByteArrayOutputStream debugOut = new ByteArrayOutputStream();
+                  buf.writeTo(debugOut, null);
+                  return debugOut.toString(UTF_8.name());
+                } catch (IOException e) {
+                  return "<JSON formatting failed>";
+                }
+              }));
+    }
     return replyBinaryResult(
         req, res, asBinaryResult(buf).setContentType(JSON_TYPE).setCharacterEncoding(UTF_8));
   }
@@ -1109,10 +1216,7 @@ public class RestApiServlet extends HttpServlet {
   }
 
   private ViewData view(
-      RestResource rsrc,
-      RestCollection<RestResource, RestResource> rc,
-      String method,
-      List<IdString> path)
+      RestCollection<RestResource, RestResource> rc, String method, List<IdString> path)
       throws AmbiguousViewException, RestApiException {
     DynamicMap<RestView<RestResource>> views = rc.views();
     final IdString projection = path.isEmpty() ? IdString.fromUrl("/") : path.remove(0);
@@ -1136,24 +1240,21 @@ public class RestApiServlet extends HttpServlet {
         return new ViewData(p.get(0), view);
       }
       view = views.get(p.get(0), "GET." + viewname);
-      if (view != null && view instanceof AcceptsPost && "POST".equals(method)) {
-        @SuppressWarnings("unchecked")
-        AcceptsPost<RestResource> ap = (AcceptsPost<RestResource>) view;
-        return new ViewData(p.get(0), ap.post(rsrc));
+      if (view != null) {
+        return new ViewData(p.get(0), view);
       }
       throw new ResourceNotFoundException(projection);
     }
 
     String name = method + "." + p.get(0);
-    RestView<RestResource> core = views.get("gerrit", name);
+    RestView<RestResource> core = views.get(PluginName.GERRIT, name);
     if (core != null) {
-      return new ViewData(null, core);
+      return new ViewData(PluginName.GERRIT, core);
     }
-    core = views.get("gerrit", "GET." + p.get(0));
-    if (core instanceof AcceptsPost && "POST".equals(method)) {
-      @SuppressWarnings("unchecked")
-      AcceptsPost<RestResource> ap = (AcceptsPost<RestResource>) core;
-      return new ViewData(null, ap.post(rsrc));
+
+    core = views.get(PluginName.GERRIT, "GET." + p.get(0));
+    if (core != null) {
+      return new ViewData(PluginName.GERRIT, core);
     }
 
     Map<String, RestView<RestResource>> r = new TreeMap<>();
@@ -1214,6 +1315,20 @@ public class RestApiServlet extends HttpServlet {
     }
   }
 
+  private List<String> getParameterNames(HttpServletRequest req) {
+    List<String> parameterNames = new ArrayList<>(req.getParameterMap().keySet());
+    Collections.sort(parameterNames);
+    return parameterNames;
+  }
+
+  private TraceContext enableTracing(HttpServletRequest req, HttpServletResponse res) {
+    String traceValue = req.getParameter(ParameterParser.TRACE_PARAMETER);
+    return TraceContext.newTrace(
+        traceValue != null,
+        traceValue,
+        (tagName, traceId) -> res.setHeader(X_GERRIT_TRACE, traceId.toString()));
+  }
+
   private boolean isDelete(HttpServletRequest req) {
     return "DELETE".equals(req.getMethod());
   }
@@ -1228,6 +1343,19 @@ public class RestApiServlet extends HttpServlet {
 
   private static boolean isRead(HttpServletRequest req) {
     return "GET".equals(req.getMethod()) || "HEAD".equals(req.getMethod());
+  }
+
+  private static MethodNotAllowedException methodNotAllowed(HttpServletRequest req) {
+    return new MethodNotAllowedException(
+        String.format("Not implemented: %s %s", req.getMethod(), requestUri(req)));
+  }
+
+  private static String requestUri(HttpServletRequest req) {
+    String uri = req.getRequestURI();
+    if (uri.startsWith("/a/")) {
+      return uri.substring(2);
+    }
+    return uri;
   }
 
   private void checkRequiresCapability(ViewData d)
@@ -1277,16 +1405,33 @@ public class RestApiServlet extends HttpServlet {
     configureCaching(req, res, null, null, c);
     checkArgument(statusCode >= 400, "non-error status: %s", statusCode);
     res.setStatus(statusCode);
-    return replyText(req, res, msg);
+    logger.atFinest().log("REST call failed: %d", statusCode);
+    return replyText(req, res, true, msg);
   }
 
-  static long replyText(@Nullable HttpServletRequest req, HttpServletResponse res, String text)
+  /**
+   * Sets a text reply on the given HTTP servlet response.
+   *
+   * @param req the HTTP servlet request
+   * @param res the HTTP servlet response on which the reply should be set
+   * @param allowTracing whether it is allowed to log the reply if tracing is enabled, must not be
+   *     set to {@code true} if the reply may contain sensitive data
+   * @param text the text reply
+   * @return the length of the response
+   * @throws IOException
+   */
+  static long replyText(
+      @Nullable HttpServletRequest req, HttpServletResponse res, boolean allowTracing, String text)
       throws IOException {
     if ((req == null || isRead(req)) && isMaybeHTML(text)) {
-      return replyJson(req, res, ImmutableListMultimap.of("pp", "0"), new JsonPrimitive(text));
+      return replyJson(
+          req, res, allowTracing, ImmutableListMultimap.of("pp", "0"), new JsonPrimitive(text));
     }
     if (!text.endsWith("\n")) {
       text += "\n";
+    }
+    if (allowTracing) {
+      logger.atFinest().log("Text response body:\n%s", text);
     }
     return replyBinaryResult(req, res, BinaryResult.create(text).setContentType(PLAIN_TEXT));
   }

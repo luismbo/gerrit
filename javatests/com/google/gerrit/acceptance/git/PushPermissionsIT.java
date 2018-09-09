@@ -46,6 +46,7 @@ import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.transport.PushResult;
 import org.eclipse.jgit.transport.RefSpec;
+import org.eclipse.jgit.transport.RemoteRefUpdate.Status;
 import org.eclipse.jgit.transport.TrackingRefUpdate;
 import org.junit.Before;
 import org.junit.Test;
@@ -78,20 +79,40 @@ public class PushPermissionsIT extends AbstractDaemonTest {
   }
 
   @Test
+  public void mixingMagicAndRegularPush() throws Exception {
+    testRepo.branch("HEAD").commit().create();
+    PushResult r = push("HEAD:refs/heads/master", "HEAD:refs/for/master");
+
+    String msg = "cannot combine normal pushes and magic pushes";
+    assertThat(r.getRemoteUpdate("refs/heads/master")).isNotEqualTo(Status.OK);
+    assertThat(r.getRemoteUpdate("refs/for/master")).isNotEqualTo(Status.OK);
+    assertThat(r.getRemoteUpdate("refs/for/master").getMessage()).isEqualTo(msg);
+  }
+
+  @Test
+  public void mixingDirectChangesAndRegularPush() throws Exception {
+    testRepo.branch("HEAD").commit().create();
+    PushResult r = push("HEAD:refs/heads/master", "HEAD:refs/changes/01/101");
+
+    String msg = "cannot combine normal pushes and magic pushes";
+    assertThat(r.getRemoteUpdate("refs/heads/master")).isNotEqualTo(Status.OK);
+    assertThat(r.getRemoteUpdate("refs/changes/01/101")).isNotEqualTo(Status.OK);
+    assertThat(r.getRemoteUpdate("refs/heads/master").getMessage()).isEqualTo(msg);
+  }
+
+  @Test
   public void fastForwardUpdateDenied() throws Exception {
     testRepo.branch("HEAD").commit().create();
     PushResult r = push("HEAD:refs/heads/master");
     assertThat(r)
         .onlyRef("refs/heads/master")
-        .isRejected("prohibited by Gerrit: ref update access denied");
+        .isRejected("prohibited by Gerrit: not permitted: update");
     assertThat(r)
         .hasMessages(
-            "Branch refs/heads/master:",
-            "You are not allowed to perform this operation.",
+            "error: branch refs/heads/master:",
             "To push into this reference you need 'Push' rights.",
             "User: admin",
-            "Please read the documentation and contact an administrator",
-            "if you feel the configuration is incorrect");
+            "Contact an administrator to fix the permissions");
     assertThat(r).hasProcessed(ImmutableMap.of("refs", 1));
   }
 
@@ -99,24 +120,25 @@ public class PushPermissionsIT extends AbstractDaemonTest {
   public void nonFastForwardUpdateDenied() throws Exception {
     ObjectId commit = testRepo.commit().create();
     PushResult r = push("+" + commit.name() + ":refs/heads/master");
-    assertThat(r).onlyRef("refs/heads/master").isRejected("need 'Force Push' privilege.");
-    assertThat(r).hasNoMessages();
-    // TODO(dborowitz): Why does this not mention refs?
-    assertThat(r).hasProcessed(ImmutableMap.of());
+    assertThat(r)
+        .onlyRef("refs/heads/master")
+        .isRejected("prohibited by Gerrit: not permitted: force update");
+    assertThat(r).hasProcessed(ImmutableMap.of("refs", 1));
   }
 
   @Test
   public void deleteDenied() throws Exception {
     PushResult r = push(":refs/heads/master");
-    assertThat(r).onlyRef("refs/heads/master").isRejected("cannot delete references");
+    assertThat(r)
+        .onlyRef("refs/heads/master")
+        .isRejected("prohibited by Gerrit: not permitted: delete");
     assertThat(r)
         .hasMessages(
-            "Branch refs/heads/master:",
+            "error: branch refs/heads/master:",
             "You need 'Delete Reference' rights or 'Push' rights with the ",
             "'Force Push' flag set to delete references.",
             "User: admin",
-            "Please read the documentation and contact an administrator",
-            "if you feel the configuration is incorrect");
+            "Contact an administrator to fix the permissions");
     assertThat(r).hasProcessed(ImmutableMap.of("refs", 1));
   }
 
@@ -126,8 +148,8 @@ public class PushPermissionsIT extends AbstractDaemonTest {
     PushResult r = push("HEAD:refs/heads/newbranch");
     assertThat(r)
         .onlyRef("refs/heads/newbranch")
-        .isRejected("prohibited by Gerrit: create not permitted for refs/heads/newbranch");
-    assertThat(r).hasNoMessages();
+        .isRejected("prohibited by Gerrit: not permitted: create");
+    assertThat(r).containsMessages("You need 'Create' rights to create new references.");
     assertThat(r).hasProcessed(ImmutableMap.of("refs", 1));
   }
 
@@ -141,22 +163,20 @@ public class PushPermissionsIT extends AbstractDaemonTest {
 
     testRepo.branch("HEAD").commit().create();
     PushResult r = push(":refs/heads/foo", ":refs/heads/bar", "HEAD:refs/heads/master");
-    assertThat(r).ref("refs/heads/foo").isRejected("cannot delete references");
-    assertThat(r).ref("refs/heads/bar").isRejected("cannot delete references");
+    assertThat(r).ref("refs/heads/foo").isRejected("prohibited by Gerrit: not permitted: delete");
+    assertThat(r).ref("refs/heads/bar").isRejected("prohibited by Gerrit: not permitted: delete");
     assertThat(r)
         .ref("refs/heads/master")
-        .isRejected("prohibited by Gerrit: ref update access denied");
+        .isRejected("prohibited by Gerrit: not permitted: update");
     assertThat(r)
         .hasMessages(
-            "Branches refs/heads/foo, refs/heads/bar:",
+            "error: branches refs/heads/foo, refs/heads/bar:",
             "You need 'Delete Reference' rights or 'Push' rights with the ",
             "'Force Push' flag set to delete references.",
-            "Branch refs/heads/master:",
-            "You are not allowed to perform this operation.",
+            "error: branch refs/heads/master:",
             "To push into this reference you need 'Push' rights.",
             "User: admin",
-            "Please read the documentation and contact an administrator",
-            "if you feel the configuration is incorrect");
+            "Contact an administrator to fix the permissions");
   }
 
   @Test
@@ -188,16 +208,14 @@ public class PushPermissionsIT extends AbstractDaemonTest {
         // ReceiveCommits theoretically has a different message when a WRITE_CONFIG check fails, but
         // it never gets there, since DefaultPermissionBackend special-cases refs/meta/config and
         // denies UPDATE if the user is not a project owner.
-        .isRejected("prohibited by Gerrit: ref update access denied");
+        .isRejected("prohibited by Gerrit: not permitted: update");
     assertThat(r)
         .hasMessages(
-            "Branch refs/meta/config:",
-            "You are not allowed to perform this operation.",
+            "error: branch refs/meta/config:",
             "Configuration changes can only be pushed by project owners",
             "who also have 'Push' rights on refs/meta/config",
             "User: admin",
-            "Please read the documentation and contact an administrator",
-            "if you feel the configuration is incorrect");
+            "Contact an administrator to fix the permissions");
     assertThat(r).hasProcessed(ImmutableMap.of("refs", 1));
 
     grant(project, "refs/*", Permission.OWNER, false, REGISTERED_USERS);
@@ -216,15 +234,12 @@ public class PushPermissionsIT extends AbstractDaemonTest {
     PushResult r = push("HEAD:refs/for/master");
     assertThat(r)
         .onlyRef("refs/for/master")
-        .isRejected("create change not permitted for refs/heads/master");
+        .isRejected("prohibited by Gerrit: not permitted: create change on refs/heads/master");
     assertThat(r)
-        .hasMessages(
-            "Branch refs/heads/master:",
-            "You need 'Push' rights to upload code review requests.",
-            "Verify that you are pushing to the right branch.",
-            "User: admin",
-            "Please read the documentation and contact an administrator",
-            "if you feel the configuration is incorrect");
+        .containsMessages(
+            "error: branch refs/for/master:",
+            "You need 'Create Change' rights to upload code review requests.",
+            "Verify that you are pushing to the right branch.");
     assertThat(r).hasProcessed(ImmutableMap.of("refs", 1));
   }
 
@@ -239,8 +254,10 @@ public class PushPermissionsIT extends AbstractDaemonTest {
     PushResult r = push("HEAD:refs/for/master%submit");
     assertThat(r)
         .onlyRef("refs/for/master%submit")
-        .isRejected("update by submit not permitted for refs/heads/master");
-    assertThat(r).hasNoMessages();
+        .isRejected("prohibited by Gerrit: not permitted: update by submit on refs/heads/master");
+    assertThat(r)
+        .containsMessages(
+            "You need 'Submit' rights on refs/for/ to submit changes during change upload.");
     assertThat(r).hasProcessed(ImmutableMap.of("refs", 1));
   }
 
@@ -274,8 +291,11 @@ public class PushPermissionsIT extends AbstractDaemonTest {
         push(c -> c.setPushOptions(ImmutableList.of("skip-validation")), "HEAD:refs/heads/master");
     assertThat(r)
         .onlyRef("refs/heads/master")
-        .isRejected("skip validation not permitted for refs/heads/master");
-    assertThat(r).hasNoMessages();
+        .isRejected("prohibited by Gerrit: not permitted: skip validation");
+    assertThat(r)
+        .containsMessages(
+            "You need 'Forge Author', 'Forge Server', 'Forge Committer'",
+            "and 'Push Merge' rights to skip validation.");
     assertThat(r).hasProcessed(ImmutableMap.of("refs", 1));
   }
 

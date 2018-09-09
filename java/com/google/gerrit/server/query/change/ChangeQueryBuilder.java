@@ -39,6 +39,7 @@ import com.google.gerrit.index.query.Predicate;
 import com.google.gerrit.index.query.QueryBuilder;
 import com.google.gerrit.index.query.QueryParseException;
 import com.google.gerrit.index.query.QueryRequiresAuthException;
+import com.google.gerrit.mail.Address;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.Branch;
@@ -65,7 +66,6 @@ import com.google.gerrit.server.index.change.ChangeField;
 import com.google.gerrit.server.index.change.ChangeIndex;
 import com.google.gerrit.server.index.change.ChangeIndexCollection;
 import com.google.gerrit.server.index.change.ChangeIndexRewriter;
-import com.google.gerrit.server.mail.Address;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.notedb.NotesMigration;
 import com.google.gerrit.server.notedb.ReviewerStateInternal;
@@ -658,6 +658,21 @@ public class ChangeQueryBuilder extends QueryBuilder<ChangeData> {
   }
 
   @Operator
+  public Predicate<ChangeData> repository(String name) {
+    return project(name);
+  }
+
+  @Operator
+  public Predicate<ChangeData> repositories(String name) {
+    return projects(name);
+  }
+
+  @Operator
+  public Predicate<ChangeData> parentrepository(String name) {
+    return parentproject(name);
+  }
+
+  @Operator
   public Predicate<ChangeData> branch(String name) {
     if (name.startsWith("^")) {
       return ref("^" + RefNames.fullName(name.substring(1)));
@@ -1092,7 +1107,7 @@ public class ChangeQueryBuilder extends QueryBuilder<ChangeData> {
   public Predicate<ChangeData> query(String name) throws QueryParseException {
     try (Repository git = args.repoManager.openRepository(args.allUsersName)) {
       VersionedAccountQueries q = VersionedAccountQueries.forUser(self());
-      q.load(git);
+      q.load(args.allUsersName, git);
       String query = q.getQueryList().getQuery(name);
       if (query != null) {
         return parse(query);
@@ -1116,7 +1131,7 @@ public class ChangeQueryBuilder extends QueryBuilder<ChangeData> {
   public Predicate<ChangeData> destination(String name) throws QueryParseException {
     try (Repository git = args.repoManager.openRepository(args.allUsersName)) {
       VersionedAccountDestinations d = VersionedAccountDestinations.forUser(self());
-      d.load(git);
+      d.load(args.allUsersName, git);
       Set<Branch.NameKey> destinations = d.getDestinationList().getDestinations(name);
       if (destinations != null && !destinations.isEmpty()) {
         return new DestinationPredicate(destinations, name);

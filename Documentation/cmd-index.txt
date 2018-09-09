@@ -18,12 +18,14 @@ To download a client command or hook, use scp or an http client:
 For more details on how to determine the correct SSH port number,
 see link:user-upload.html#test_ssh[Testing Your SSH Connection].
 
-=== [[client_commands]]Commands
+[[client_commands]]
+=== Commands
 
 link:cmd-cherry-pick.html[gerrit-cherry-pick]::
 	Download and cherry-pick one or more changes (commits).
 
-=== [[client_hooks]]Hooks
+[[client_hooks]]
+=== Hooks
 
 Client hooks can be installed into a local Git repository, improving
 the developer experience when working with a Gerrit Code Review
@@ -47,7 +49,8 @@ from an ssh client, for example:
 For more details on how to determine the correct SSH port number,
 see link:user-upload.html#test_ssh[Testing Your SSH Connection].
 
-=== [[user_commands]]User Commands
+[[user_commands]]
+=== User Commands
 
 link:cmd-apropos.html[gerrit apropos]::
 	Search Gerrit documentation index.
@@ -85,6 +88,9 @@ link:cmd-set-head.html[gerrit set-head]::
 link:cmd-set-project.html[gerrit set-project]::
 	Change a project's settings.
 
+link:cmd-set-project-parent.html[gerrit set-project-parent]::
+	Change the project permissions are inherited from.
+
 link:cmd-set-reviewers.html[gerrit set-reviewers]::
 	Add or remove reviewers on a change.
 
@@ -103,8 +109,8 @@ review.  See link:user-upload.html#push_create[Creating Changes].
 git upload-pack::
 	Standard Git server side command for client side `git fetch`.
 
-[[admin_commands]]Administrator Commands
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[[admin_commands]]
+=== Administrator Commands
 
 link:cmd-close-connection.html[gerrit close-connection]::
 	Close the specified SSH connection.
@@ -178,9 +184,6 @@ link:cmd-set-account.html[gerrit set-account]::
 link:cmd-set-members.html[gerrit set-members]::
 	Set group members.
 
-link:cmd-set-project-parent.html[gerrit set-project-parent]::
-	Change the project permissions are inherited from.
-
 link:cmd-show-caches.html[gerrit show-caches]::
 	Display current cache statistics.
 
@@ -204,6 +207,36 @@ link:cmd-show-queue.html[ps]::
 
 link:cmd-suexec.html[suexec]::
 	Execute a command as any registered user account.
+
+[[trace]]
+=== Trace
+
+For executing SSH commands tracing can be enabled by setting the
+`--trace` and `--trace-id <trace-id>` options. It is recommended to use
+the ID of the issue that is being investigated as trace ID.
+
+----
+  $ ssh -p 29418 review.example.com gerrit create-project --trace --trace-id issue/123 foo/bar
+----
+
+It is also possible to omit the trace ID and get a unique trace ID
+generated.
+
+----
+  $ ssh -p 29418 review.example.com gerrit create-project --trace foo/bar
+----
+
+Enabling tracing results in additional logs with debug information that
+are written to the `error_log`. All logs that correspond to the traced
+request are associated with the trace ID. The trace ID is printed to
+the stderr command output:
+
+----
+  TRACE_ID: 1534174322774-7edf2a7b
+----
+
+Given the trace ID an administrator can find the corresponding logs and
+investigate issues more easily.
 
 GERRIT
 ------

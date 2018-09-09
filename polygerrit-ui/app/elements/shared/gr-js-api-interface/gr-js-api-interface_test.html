@@ -78,6 +78,16 @@ limitations under the License.
       assert.strictEqual(plugin, otherPlugin);
     });
 
+    test('flushes preinstalls if provided', () => {
+      assert.doesNotThrow(() => {
+        Gerrit._flushPreinstalls();
+      });
+      window.Gerrit.flushPreinstalls = sandbox.stub();
+      Gerrit._flushPreinstalls();
+      assert.isTrue(window.Gerrit.flushPreinstalls.calledOnce);
+      delete window.Gerrit.flushPreinstalls;
+    });
+
     test('url', () => {
       assert.equal(plugin.url(), 'http://test.com/plugins/testplugin/');
       assert.equal(plugin.url('/static/test.js'),
@@ -410,6 +420,33 @@ limitations under the License.
       assert.isTrue(getCallbacksStub.calledOnce);
       assert.equal(getCallbacksStub.lastCall.args[0],
           element.EventType.ADMIN_MENU_LINKS);
+    });
+
+    test('Gerrit._isPluginPreloaded', () => {
+      Gerrit._preloadedPlugins = {baz: ()=>{}};
+      assert.isFalse(Gerrit._isPluginPreloaded('plugins/foo/bar'));
+      assert.isFalse(Gerrit._isPluginPreloaded('http://a.com/42'));
+      assert.isTrue(Gerrit._isPluginPreloaded('preloaded:baz'));
+      Gerrit._preloadedPlugins = null;
+    });
+
+    test('preloaded plugins are installed', () => {
+      const installStub = sandbox.stub();
+      Gerrit._preloadedPlugins = {foo: installStub};
+      Gerrit._installPreloadedPlugins();
+      assert.isTrue(installStub.called);
+      const pluginApi = installStub.lastCall.args[0];
+      assert.strictEqual(pluginApi.getPluginName(), 'foo');
+    });
+
+    test('installing preloaded plugin', () => {
+      let plugin;
+      window.ASSETS_PATH = 'http://blips.com/chitz/';
+      Gerrit.install(p => { plugin = p; }, '0.1', 'preloaded:foo');
+      assert.strictEqual(plugin.getPluginName(), 'foo');
+      assert.strictEqual(plugin.url('/some/thing.html'),
+          'http://blips.com/plugins/foo/some/thing.html');
+      delete window.ASSETS_PATH;
     });
 
     suite('test plugin with base url', () => {

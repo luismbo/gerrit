@@ -711,11 +711,10 @@ limitations under the License.
       sandbox.spy(element, '_send');
       element.confirmEmail('foo');
       assert.isTrue(element._send.calledOnce);
-      assert.deepEqual(element._send.lastCall.args[0], {
-        method: 'PUT',
-        url: '/config/server/email.confirm',
-        body: {token: 'foo'},
-      });
+      assert.equal(element._send.lastCall.args[0].method, 'PUT');
+      assert.equal(element._send.lastCall.args[0].url,
+          '/config/server/email.confirm');
+      assert.deepEqual(element._send.lastCall.args[0].body, {token: 'foo'});
     });
 
     test('GrReviewerUpdatesParser.parse is used', () => {
@@ -924,41 +923,75 @@ limitations under the License.
       const fetchStub = sandbox.stub(element, '_getChangeURLAndFetch')
           .returns(Promise.resolve());
       return element.queryChangeFiles('42', 'edit', 'test/path.js').then(() => {
-        assert.deepEqual(fetchStub.lastCall.args[0], {
-          changeNum: '42',
-          endpoint: '/files?q=test%2Fpath.js',
-          patchNum: 'edit',
-        });
+        assert.equal(fetchStub.lastCall.args[0].changeNum, '42');
+        assert.equal(fetchStub.lastCall.args[0].endpoint,
+            '/files?q=test%2Fpath.js');
+        assert.equal(fetchStub.lastCall.args[0].patchNum, 'edit');
       });
     });
 
-    test('getRepos', () => {
-      sandbox.stub(element, '_fetchSharedCacheURL');
-      element.getRepos('test', 25);
-      assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
-          '/projects/?d&n=26&S=0&m=test');
+    suite('getRepos', () => {
+      const defaultQuery = 'state%3Aactive%20OR%20state%3Aread-only';
 
-      element.getRepos(null, 25);
-      assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
-          '/projects/?d&n=26&S=0');
+      setup(() => {
+        sandbox.stub(element, '_fetchSharedCacheURL');
+      });
 
-      element.getRepos('test', 25, 25);
-      assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
-          '/projects/?d&n=26&S=25&m=test');
-    });
+      test('normal use', () => {
+        element.getRepos('test', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/projects/?n=26&S=0&query=test');
 
-    test('getRepos filter', () => {
-      sandbox.stub(element, '_fetchSharedCacheURL');
-      element.getRepos('test/test/test', 25);
-      assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
-          '/projects/?d&n=26&S=0&m=test%2Ftest%2Ftest');
-    });
+        element.getRepos(null, 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            `/projects/?n=26&S=0&query=${defaultQuery}`);
 
-    test('getRepos filter regex', () => {
-      sandbox.stub(element, '_fetchSharedCacheURL');
-      element.getRepos('^test.*', 25);
-      assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
-          '/projects/?d&n=26&S=0&r=%5Etest.*');
+        element.getRepos('test', 25, 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/projects/?n=26&S=25&query=test');
+      });
+
+      test('with blank', () => {
+        element.getRepos('test/test', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/projects/?n=26&S=0&query=inname%3Atest%20AND%20inname%3Atest');
+      });
+
+      test('with hyphen', () => {
+        element.getRepos('foo-bar', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/projects/?n=26&S=0&query=inname%3Afoo%20AND%20inname%3Abar');
+      });
+
+      test('with leading hyphen', () => {
+        element.getRepos('-bar', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/projects/?n=26&S=0&query=inname%3Abar');
+      });
+
+      test('with trailing hyphen', () => {
+        element.getRepos('foo-bar-', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/projects/?n=26&S=0&query=inname%3Afoo%20AND%20inname%3Abar');
+      });
+
+      test('with underscore', () => {
+        element.getRepos('foo_bar', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/projects/?n=26&S=0&query=inname%3Afoo%20AND%20inname%3Abar');
+      });
+
+      test('with underscore', () => {
+        element.getRepos('foo_bar', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/projects/?n=26&S=0&query=inname%3Afoo%20AND%20inname%3Abar');
+      });
+
+      test('hyphen only', () => {
+        element.getRepos('-', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            `/projects/?n=26&S=0&query=${defaultQuery}`);
+      });
     });
 
     test('getGroups filter regex', () => {
@@ -1387,12 +1420,25 @@ limitations under the License.
       sandbox.stub(element._auth, 'fetch').returns(Promise.resolve(response));
       const startTime = 123;
       sandbox.stub(Date, 'now').returns(startTime);
-      return element._fetch(url, fetchOptions).then(() => {
+      const req = {url, fetchOptions};
+      return element._fetch(req).then(() => {
         assert.isTrue(logStub.calledOnce);
-        assert.isTrue(logStub.calledWith(
-            url, fetchOptions, startTime, response.status));
+        assert.isTrue(logStub.calledWith(req, startTime, response.status));
         assert.isFalse(response.text.called);
       });
+    });
+
+    test('_logCall only reports requests with anonymized URLss', () => {
+      sandbox.stub(Date, 'now').returns(200);
+      const handler = sinon.stub();
+      element.addEventListener('rpc-log', handler);
+
+      element._logCall({url: 'url'}, 100, 200);
+      assert.isFalse(handler.called);
+
+      element._logCall({url: 'url', anonymizedUrl: 'not url'}, 100, 200);
+      flushAsynchronousOperations();
+      assert.isTrue(handler.calledOnce);
     });
   });
 </script>

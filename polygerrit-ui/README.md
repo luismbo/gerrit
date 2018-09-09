@@ -8,7 +8,7 @@ to get and install Bazel.
 
 ## Installing [Node.js](https://nodejs.org/en/download/) and npm packages
 
-The minimum nodejs version supported is 6.x+
+The minimum nodejs version supported is 8.x+
 
 ```sh
 # Debian experimental
@@ -90,7 +90,7 @@ One-time setup:
 
 1. [Build Gerrit](https://gerrit-review.googlesource.com/Documentation/dev-bazel.html#_gerrit_development_war_file)
 2. Set up a local test site. Docs
-   [here](https://gerrit-review.googlesource.com/Documentation/install-quick.html) and
+   [here](https://gerrit-review.googlesource.com/Documentation/linux-quickstart.html) and
    [here](https://gerrit-review.googlesource.com/Documentation/dev-readme.html#init).
 
 When your project is set up and works using the classic UI, run a test server

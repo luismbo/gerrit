@@ -15,15 +15,26 @@
 package com.google.gerrit.server.query.project;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.TruthJUnit.assume;
 import static java.util.stream.Collectors.toList;
 
 import com.google.common.base.CharMatcher;
+import com.google.common.collect.ImmutableMap;
 import com.google.gerrit.extensions.api.GerritApi;
+import com.google.gerrit.extensions.api.access.AccessSectionInfo;
+import com.google.gerrit.extensions.api.access.PermissionInfo;
+import com.google.gerrit.extensions.api.access.PermissionRuleInfo;
+import com.google.gerrit.extensions.api.access.ProjectAccessInput;
+import com.google.gerrit.extensions.api.projects.ConfigInput;
 import com.google.gerrit.extensions.api.projects.ProjectInput;
 import com.google.gerrit.extensions.api.projects.Projects.QueryRequest;
+import com.google.gerrit.extensions.client.ProjectState;
 import com.google.gerrit.extensions.common.AccountInfo;
 import com.google.gerrit.extensions.common.ProjectInfo;
 import com.google.gerrit.extensions.restapi.BadRequestException;
+import com.google.gerrit.index.Schema;
+import com.google.gerrit.index.project.ProjectData;
+import com.google.gerrit.index.project.ProjectIndexCollection;
 import com.google.gerrit.lifecycle.LifecycleManager;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Project;
@@ -38,7 +49,7 @@ import com.google.gerrit.server.account.Accounts;
 import com.google.gerrit.server.account.AccountsUpdate;
 import com.google.gerrit.server.account.AuthRequest;
 import com.google.gerrit.server.config.AllProjectsName;
-import com.google.gerrit.server.query.account.InternalAccountQuery;
+import com.google.gerrit.server.group.SystemGroupBackend;
 import com.google.gerrit.server.schema.SchemaCreator;
 import com.google.gerrit.server.util.ManualRequestContext;
 import com.google.gerrit.server.util.OneOffRequestContext;
@@ -83,7 +94,7 @@ public abstract class AbstractQueryProjectsTest extends GerritServerTests {
 
   @Inject protected OneOffRequestContext oneOffRequestContext;
 
-  @Inject protected InternalAccountQuery internalAccountQuery;
+  @Inject protected ProjectIndexCollection indexes;
 
   @Inject protected AllProjectsName allProjects;
 
@@ -211,6 +222,30 @@ public abstract class AbstractQueryProjectsTest extends GerritServerTests {
   }
 
   @Test
+  public void byState() throws Exception {
+    assume().that(getSchemaVersion() >= 2).isTrue();
+
+    ProjectInfo project1 = createProjectWithState(name("project1"), ProjectState.ACTIVE);
+    ProjectInfo project2 = createProjectWithState(name("project2"), ProjectState.READ_ONLY);
+    assertQuery("state:active", project1);
+    assertQuery("state:read-only", project2);
+  }
+
+  @Test
+  public void byState_emptyQuery() throws Exception {
+    exception.expect(BadRequestException.class);
+    exception.expectMessage("state operator requires a value");
+    assertQuery("state:\"\"");
+  }
+
+  @Test
+  public void byState_badQuery() throws Exception {
+    exception.expect(BadRequestException.class);
+    exception.expectMessage("state operator must be either 'active' or 'read-only'");
+    assertQuery("state:bla");
+  }
+
+  @Test
   public void byDefaultField() throws Exception {
     ProjectInfo project1 = createProject(name("foo-project"));
     ProjectInfo project2 = createProject(name("project2"));
@@ -252,7 +287,7 @@ public abstract class AbstractQueryProjectsTest extends GerritServerTests {
 
   @Test
   public void asAnonymous() throws Exception {
-    ProjectInfo project = createProject(name("project"));
+    ProjectInfo project = createProjectRestrictedToRegisteredUsers(name("project"));
 
     setAnonymous();
     assertQuery("name:" + project.name);
@@ -289,6 +324,29 @@ public abstract class AbstractQueryProjectsTest extends GerritServerTests {
     in.name = name;
     in.description = description;
     return gApi.projects().create(in).get();
+  }
+
+  protected ProjectInfo createProjectWithState(String name, ProjectState state) throws Exception {
+    ProjectInfo info = createProject(name);
+    ConfigInput config = new ConfigInput();
+    config.state = state;
+    gApi.projects().name(info.name).config(config);
+    return info;
+  }
+
+  protected ProjectInfo createProjectRestrictedToRegisteredUsers(String name) throws Exception {
+    createProject(name);
+
+    ProjectAccessInput accessInput = new ProjectAccessInput();
+    AccessSectionInfo accessSection = new AccessSectionInfo();
+    PermissionInfo read = new PermissionInfo(null, null);
+    PermissionRuleInfo pri = new PermissionRuleInfo(PermissionRuleInfo.Action.BLOCK, false);
+    read.rules = ImmutableMap.of(SystemGroupBackend.ANONYMOUS_USERS.get(), pri);
+    accessSection.permissions = ImmutableMap.of("read", read);
+    accessInput.add = ImmutableMap.of("refs/*", accessSection);
+    gApi.projects().name(name).access(accessInput);
+
+    return gApi.projects().name(name).get();
   }
 
   protected ProjectInfo getProject(Project.NameKey nameKey) throws Exception {
@@ -352,6 +410,14 @@ public abstract class AbstractQueryProjectsTest extends GerritServerTests {
     }
     b.append("]");
     return b.toString();
+  }
+
+  protected int getSchemaVersion() {
+    return getSchema().getVersion();
+  }
+
+  protected Schema<ProjectData> getSchema() {
+    return indexes.getSearchIndex().getSchema();
   }
 
   protected static Iterable<String> names(ProjectInfo... projects) {

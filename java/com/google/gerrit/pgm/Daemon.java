@@ -26,6 +26,7 @@ import com.google.gerrit.elasticsearch.ElasticIndexModule;
 import com.google.gerrit.extensions.client.AuthType;
 import com.google.gerrit.gpg.GpgModule;
 import com.google.gerrit.httpd.AllRequestFilter;
+import com.google.gerrit.httpd.GerritAuthModule;
 import com.google.gerrit.httpd.GetUserFilter;
 import com.google.gerrit.httpd.GitOverHttpModule;
 import com.google.gerrit.httpd.H2CacheBasedWebSession;
@@ -56,6 +57,7 @@ import com.google.gerrit.server.account.AccountDeactivator;
 import com.google.gerrit.server.account.InternalAccountDirectory;
 import com.google.gerrit.server.api.GerritApiModule;
 import com.google.gerrit.server.api.PluginApiModule;
+import com.google.gerrit.server.audit.AuditModule;
 import com.google.gerrit.server.cache.h2.H2CacheModule;
 import com.google.gerrit.server.cache.mem.DefaultMemoryCacheModule;
 import com.google.gerrit.server.change.ChangeCleanupRunner;
@@ -422,6 +424,7 @@ public class Daemon extends SiteProgram {
     modules.add(cfgInjector.getInstance(GerritGlobalModule.class));
     modules.add(new GerritApiModule());
     modules.add(new PluginApiModule());
+    modules.add(new AuditModule());
 
     modules.add(new SearchingChangeCacheImpl.Module(slave));
     modules.add(new InternalAccountDirectory.Module());
@@ -573,10 +576,11 @@ public class Daemon extends SiteProgram {
       modules.add(new ProjectQoSFilter.Module());
     }
     modules.add(RequestContextFilter.module());
-    modules.add(AllRequestFilter.module());
     modules.add(RequestMetricsFilter.module());
     modules.add(H2CacheBasedWebSession.module());
+    modules.add(sysInjector.getInstance(GerritAuthModule.class));
     modules.add(sysInjector.getInstance(GitOverHttpModule.class));
+    modules.add(AllRequestFilter.module());
     modules.add(sysInjector.getInstance(WebModule.class));
     modules.add(sysInjector.getInstance(RequireSslFilter.Module.class));
     modules.add(new HttpPluginModule());

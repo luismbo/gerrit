@@ -24,6 +24,7 @@ import com.google.gerrit.extensions.api.projects.ProjectApi.ListRefsRequest;
 import com.google.gerrit.extensions.common.ActionInfo;
 import com.google.gerrit.extensions.common.WebLinkInfo;
 import com.google.gerrit.extensions.registration.DynamicMap;
+import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.RestReadView;
@@ -45,7 +46,6 @@ import com.google.inject.Inject;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
@@ -185,9 +185,13 @@ public class ListBranches implements RestReadView<ProjectResource> {
         // showing the resolved value, show the name it references.
         //
         String target = ref.getTarget().getName();
-        if (!perm.ref(target).test(RefPermission.READ)) {
+
+        try {
+          perm.ref(target).check(RefPermission.READ);
+        } catch (AuthException e) {
           continue;
         }
+
         if (target.startsWith(Constants.R_HEADS)) {
           target = target.substring(Constants.R_HEADS.length());
         }
@@ -212,13 +216,16 @@ public class ListBranches implements RestReadView<ProjectResource> {
         continue;
       }
 
-      if (perm.ref(ref.getName()).test(RefPermission.READ)) {
+      try {
+        perm.ref(ref.getName()).check(RefPermission.READ);
         branches.add(
             createBranchInfo(
                 perm.ref(ref.getName()), ref, rsrc.getProjectState(), rsrc.getUser(), targets));
+      } catch (AuthException e) {
+        // Do nothing.
       }
     }
-    Collections.sort(branches, new BranchComparator());
+    branches.sort(new BranchComparator());
     return branches;
   }
 

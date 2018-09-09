@@ -204,10 +204,44 @@
 
     _computeChangeContainerClass(currentChange, relatedChange) {
       const classes = ['changeContainer'];
-      if (relatedChange.change_id === currentChange.change_id) {
+      if (this._changesEqual(relatedChange, currentChange)) {
         classes.push('thisChange');
       }
       return classes.join(' ');
+    },
+
+    /**
+     * Do the given objects describe the same change? Compares the changes by
+     * their numbers.
+     * @see /Documentation/rest-api-changes.html#change-info
+     * @see /Documentation/rest-api-changes.html#related-change-and-commit-info
+     * @param {!Object} a Either ChangeInfo or RelatedChangeAndCommitInfo
+     * @param {!Object} b Either ChangeInfo or RelatedChangeAndCommitInfo
+     * @return {boolean}
+     */
+    _changesEqual(a, b) {
+      const aNum = this._getChangeNumber(a);
+      const bNum = this._getChangeNumber(b);
+      return aNum === bNum;
+    },
+
+    /**
+     * Get the change number from either a ChangeInfo (such as those included in
+     * SubmittedTogetherInfo responses) or get the change number from a
+     * RelatedChangeAndCommitInfo (such as those included in a
+     * RelatedChangesInfo response).
+     * @see /Documentation/rest-api-changes.html#change-info
+     * @see /Documentation/rest-api-changes.html#related-change-and-commit-info
+     *
+     * @param {!Object} change Either a ChangeInfo or a
+     *     RelatedChangeAndCommitInfo object.
+     * @return {number}
+     */
+    _getChangeNumber(change) {
+      if (change.hasOwnProperty('_change_number')) {
+        return change._change_number;
+      }
+      return change._number;
     },
 
     _computeLinkClass(change) {

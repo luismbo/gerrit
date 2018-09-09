@@ -15,18 +15,10 @@
 package com.google.gerrit.server.restapi.change;
 
 import com.google.gerrit.extensions.common.Input;
-import com.google.gerrit.extensions.registration.DynamicMap;
-import com.google.gerrit.extensions.restapi.AcceptsPost;
 import com.google.gerrit.extensions.restapi.AuthException;
-import com.google.gerrit.extensions.restapi.ChildCollection;
-import com.google.gerrit.extensions.restapi.IdString;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
-import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.Response;
-import com.google.gerrit.extensions.restapi.RestApiException;
-import com.google.gerrit.extensions.restapi.RestView;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.server.change.ChangeEditResource;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.edit.ChangeEditModifier;
 import com.google.gerrit.server.git.GitRepositoryManager;
@@ -42,67 +34,30 @@ import java.io.IOException;
 import org.eclipse.jgit.lib.Repository;
 
 @Singleton
-public class RebaseChangeEdit
-    implements ChildCollection<ChangeResource, ChangeEditResource.Rebase>,
-        AcceptsPost<ChangeResource> {
-
-  private final DynamicMap<RestView<ChangeEditResource.Rebase>> views;
-  private final Rebase rebase;
+public class RebaseChangeEdit extends RetryingRestModifyView<ChangeResource, Input, Response<?>> {
+  private final GitRepositoryManager repositoryManager;
+  private final ChangeEditModifier editModifier;
 
   @Inject
-  RebaseChangeEdit(DynamicMap<RestView<ChangeEditResource.Rebase>> views, Rebase rebase) {
-    this.views = views;
-    this.rebase = rebase;
+  RebaseChangeEdit(
+      RetryHelper retryHelper,
+      GitRepositoryManager repositoryManager,
+      ChangeEditModifier editModifier) {
+    super(retryHelper);
+    this.repositoryManager = repositoryManager;
+    this.editModifier = editModifier;
   }
 
   @Override
-  public DynamicMap<RestView<ChangeEditResource.Rebase>> views() {
-    return views;
-  }
-
-  @Override
-  public RestView<ChangeResource> list() throws ResourceNotFoundException {
-    throw new ResourceNotFoundException();
-  }
-
-  @Override
-  public ChangeEditResource.Rebase parse(ChangeResource parent, IdString id)
-      throws ResourceNotFoundException {
-    throw new ResourceNotFoundException();
-  }
-
-  @Override
-  public Rebase post(ChangeResource parent) throws RestApiException {
-    return rebase;
-  }
-
-  @Singleton
-  public static class Rebase extends RetryingRestModifyView<ChangeResource, Input, Response<?>> {
-    private final GitRepositoryManager repositoryManager;
-    private final ChangeEditModifier editModifier;
-
-    @Inject
-    Rebase(
-        RetryHelper retryHelper,
-        GitRepositoryManager repositoryManager,
-        ChangeEditModifier editModifier) {
-      super(retryHelper);
-      this.repositoryManager = repositoryManager;
-      this.editModifier = editModifier;
+  protected Response<?> applyImpl(BatchUpdate.Factory updateFactory, ChangeResource rsrc, Input in)
+      throws AuthException, ResourceConflictException, IOException, OrmException,
+          PermissionBackendException {
+    Project.NameKey project = rsrc.getProject();
+    try (Repository repository = repositoryManager.openRepository(project)) {
+      editModifier.rebaseEdit(repository, rsrc.getNotes());
+    } catch (InvalidChangeOperationException e) {
+      throw new ResourceConflictException(e.getMessage());
     }
-
-    @Override
-    protected Response<?> applyImpl(
-        BatchUpdate.Factory updateFactory, ChangeResource rsrc, Input in)
-        throws AuthException, ResourceConflictException, IOException, OrmException,
-            PermissionBackendException {
-      Project.NameKey project = rsrc.getProject();
-      try (Repository repository = repositoryManager.openRepository(project)) {
-        editModifier.rebaseEdit(repository, rsrc.getNotes());
-      } catch (InvalidChangeOperationException e) {
-        throw new ResourceConflictException(e.getMessage());
-      }
-      return Response.none();
-    }
+    return Response.none();
   }
 }

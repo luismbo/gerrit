@@ -48,7 +48,7 @@ public class ConfigInfoImpl extends ConfigInfo {
       boolean serverEnableSignedPush,
       ProjectState projectState,
       CurrentUser user,
-      TransferConfig config,
+      TransferConfig transferConfig,
       DynamicMap<ProjectConfigEntry> pluginConfigEntries,
       PluginConfigFactory cfgFactory,
       AllProjectsName allProjects,
@@ -72,14 +72,7 @@ public class ConfigInfoImpl extends ConfigInfo {
       this.requireSignedPush = null;
     }
 
-    MaxObjectSizeLimitInfo maxObjectSizeLimit = new MaxObjectSizeLimitInfo();
-    maxObjectSizeLimit.value =
-        config.getEffectiveMaxObjectSizeLimit(projectState) == config.getMaxObjectSizeLimit()
-            ? config.getFormattedMaxObjectSizeLimit()
-            : p.getMaxObjectSizeLimit();
-    maxObjectSizeLimit.configuredValue = p.getMaxObjectSizeLimit();
-    maxObjectSizeLimit.inheritedValue = config.getFormattedMaxObjectSizeLimit();
-    this.maxObjectSizeLimit = maxObjectSizeLimit;
+    this.maxObjectSizeLimit = getMaxObjectSizeLimit(projectState, transferConfig, p);
 
     this.defaultSubmitType = new SubmitTypeInfo();
     this.defaultSubmitType.value = projectState.getSubmitType();
@@ -112,6 +105,16 @@ public class ConfigInfoImpl extends ConfigInfo {
     this.theme = projectState.getTheme();
 
     this.extensionPanelNames = projectState.getConfig().getExtensionPanelSections();
+  }
+
+  private MaxObjectSizeLimitInfo getMaxObjectSizeLimit(
+      ProjectState projectState, TransferConfig transferConfig, Project p) {
+    MaxObjectSizeLimitInfo info = new MaxObjectSizeLimitInfo();
+    long value = projectState.getEffectiveMaxObjectSizeLimit();
+    info.value = value == 0 ? null : String.valueOf(value);
+    info.configuredValue = p.getMaxObjectSizeLimit();
+    info.inheritedValue = transferConfig.getFormattedMaxObjectSizeLimit();
+    return info;
   }
 
   private Map<String, Map<String, ConfigParameterInfo>> getPluginConfig(

@@ -34,10 +34,13 @@
 
 package com.google.gerrit.util.cli;
 
+import static com.google.gerrit.util.cli.Localizable.localizable;
+
 import com.google.common.base.Strings;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.MultimapBuilder;
+import com.google.common.flogger.FluentLogger;
 import com.google.inject.Inject;
 import com.google.inject.assistedinject.Assisted;
 import java.io.StringWriter;
@@ -75,6 +78,8 @@ import org.kohsuke.args4j.spi.Setters;
  * from the GNU style format to the args4j style format prior to invoking args4j for parsing.
  */
 public class CmdLineParser {
+  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
+
   public interface Factory {
     CmdLineParser create(Object bean);
   }
@@ -233,6 +238,7 @@ public class CmdLineParser {
   }
 
   public void parseOptionMap(ListMultimap<String, String> params) throws CmdLineException {
+    logger.atFinest().log("Command-line parameters: %s", params.keySet());
     List<String> tmp = Lists.newArrayListWithCapacity(2 * params.size());
     for (String key : params.keySet()) {
       String name = makeOption(key);
@@ -320,12 +326,12 @@ public class CmdLineParser {
       return false;
     }
 
-    throw new CmdLineException(parser, String.format("invalid boolean \"%s=%s\"", name, value));
+    throw new CmdLineException(parser, localizable("invalid boolean \"%s=%s\""), name, value);
   }
 
   private static class PrefixedOption implements Option {
-    String prefix;
-    Option o;
+    private final String prefix;
+    private final Option o;
 
     PrefixedOption(String prefix, Option o) {
       this.prefix = prefix;
@@ -375,6 +381,16 @@ public class CmdLineParser {
     @Override
     public String[] depends() {
       return o.depends();
+    }
+
+    @Override
+    public String[] forbids() {
+      return null;
+    }
+
+    @Override
+    public boolean help() {
+      return false;
     }
 
     @Override
@@ -563,9 +579,19 @@ public class CmdLineParser {
     public boolean isMultiValued() {
       return false;
     }
+
+    @Override
+    public String[] forbids() {
+      return null;
+    }
+
+    @Override
+    public boolean help() {
+      return false;
+    }
   }
 
   public CmdLineException reject(String message) {
-    return new CmdLineException(parser, message);
+    return new CmdLineException(parser, localizable(message));
   }
 }

@@ -541,17 +541,19 @@ public abstract class AbstractQueryAccountsTest extends GerritServerTests {
 
   @Test
   public void withSecondaryEmailsWithoutModifyAccountCapability() throws Exception {
-    AccountInfo user = newAccount("myuser", "My User", "abc@example.com", true);
+    AccountInfo user = newAccount("myuser", "My User", "other@example.com", true);
+
+    AccountInfo otherUser = newAccount("otheruser", "Other User", "abc@example.com", true);
     String[] secondaryEmails = new String[] {"dfg@example.com", "hij@example.com"};
-    addEmails(user, secondaryEmails);
+    addEmails(otherUser, secondaryEmails);
 
     requestContext.setContext(newRequestContext(new Account.Id(user._accountId)));
 
-    List<AccountInfo> result = newQuery(user.username).withSuggest(true).get();
+    List<AccountInfo> result = newQuery(otherUser.username).withSuggest(true).get();
     assertThat(result.get(0).secondaryEmails).isNull();
 
     exception.expect(AuthException.class);
-    newQuery(user.username).withOption(ListAccountsOption.ALL_EMAILS).get();
+    newQuery(otherUser.username).withOption(ListAccountsOption.ALL_EMAILS).get();
   }
 
   @Test
@@ -577,7 +579,7 @@ public abstract class AbstractQueryAccountsTest extends GerritServerTests {
       PersonIdent ident = serverIdent.get();
       md.getCommitBuilder().setAuthor(ident);
       md.getCommitBuilder().setCommitter(ident);
-      new AccountConfig(accountId, repo)
+      new AccountConfig(accountId, allUsers, repo)
           .load()
           .setAccountUpdate(InternalAccountUpdate.builder().setFullName(newName).build())
           .commit(md);

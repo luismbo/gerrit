@@ -27,6 +27,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toList;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
@@ -154,11 +155,12 @@ public abstract class AbstractSubmit extends AbstractDaemonTest {
   @Test
   @TestProjectInput(createEmptyCommit = false)
   public void submitToEmptyRepo() throws Exception {
-    RevCommit initialHead = getRemoteHead();
+    assertThat(getRemoteHead()).isNull();
     PushOneCommit.Result change = createChange();
+    assertThat(change.getCommit().getParents()).isEmpty();
     Map<Branch.NameKey, ObjectId> actual = fetchFromSubmitPreview(change.getChangeId());
     RevCommit headAfterSubmitPreview = getRemoteHead();
-    assertThat(headAfterSubmitPreview).isEqualTo(initialHead);
+    assertThat(headAfterSubmitPreview).isNull();
     assertThat(actual).hasSize(1);
 
     submit(change.getChangeId());
@@ -1070,6 +1072,45 @@ public abstract class AbstractSubmit extends AbstractDaemonTest {
     change.current().submit();
   }
 
+  @Test
+  @TestProjectInput(createEmptyCommit = false, rejectEmptyCommit = InheritableBoolean.TRUE)
+  public void submitNonemptyCommitToEmptyRepoWithRejectEmptyCommit_allowed() throws Exception {
+    assertThat(getRemoteHead()).isNull();
+    PushOneCommit.Result change = createChange();
+    assertThat(change.getCommit().getParents()).isEmpty();
+    Map<Branch.NameKey, ObjectId> actual = fetchFromSubmitPreview(change.getChangeId());
+    RevCommit headAfterSubmitPreview = getRemoteHead();
+    assertThat(headAfterSubmitPreview).isNull();
+    assertThat(actual).hasSize(1);
+
+    submit(change.getChangeId());
+    assertThat(getRemoteHead().getId()).isEqualTo(change.getCommit());
+    assertTrees(project, actual);
+  }
+
+  @Test
+  @TestProjectInput(createEmptyCommit = false, rejectEmptyCommit = InheritableBoolean.TRUE)
+  public void submitEmptyCommitToEmptyRepoWithRejectEmptyCommit_allowed() throws Exception {
+    assertThat(getRemoteHead()).isNull();
+    PushOneCommit.Result change =
+        pushFactory
+            .create(db, admin.getIdent(), testRepo, "Change 1", ImmutableMap.of())
+            .to("refs/for/master");
+    change.assertOkStatus();
+    // TODO(dborowitz): Use EMPTY_TREE_ID after upgrading to https://git.eclipse.org/r/127473
+    assertThat(change.getCommit().getTree())
+        .isEqualTo(ObjectId.fromString("4b825dc642cb6eb9a060e54bf8d69288fbee4904"));
+
+    Map<Branch.NameKey, ObjectId> actual = fetchFromSubmitPreview(change.getChangeId());
+    RevCommit headAfterSubmitPreview = getRemoteHead();
+    assertThat(headAfterSubmitPreview).isNull();
+    assertThat(actual).hasSize(1);
+
+    submit(change.getChangeId());
+    assertThat(getRemoteHead().getId()).isEqualTo(change.getCommit());
+    assertTrees(project, actual);
+  }
+
   private void setChangeStatusToNew(PushOneCommit.Result... changes) throws Exception {
     for (PushOneCommit.Result change : changes) {
       try (BatchUpdate bu =
@@ -1283,7 +1324,7 @@ public abstract class AbstractSubmit extends AbstractDaemonTest {
 
   protected void addOnSubmitValidationListener(OnSubmitValidationListener listener) {
     assertThat(onSubmitValidatorHandle).isNull();
-    onSubmitValidatorHandle = onSubmitValidationListeners.add(listener);
+    onSubmitValidatorHandle = onSubmitValidationListeners.add("gerrit", listener);
   }
 
   private String getLatestDiff(Repository repo) throws Exception {

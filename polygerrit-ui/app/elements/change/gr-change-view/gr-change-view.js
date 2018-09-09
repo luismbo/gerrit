@@ -122,7 +122,7 @@
       _changeComments: Object,
       _canStartReview: {
         type: Boolean,
-        computed: '_computeCanStartReview(_loggedIn, _change, _account)',
+        computed: '_computeCanStartReview(_change)',
       },
       _comments: Object,
       /** @type {?} */
@@ -145,7 +145,7 @@
       _hideEditCommitMessage: {
         type: Boolean,
         computed: '_computeHideEditCommitMessage(_loggedIn, ' +
-            '_editingCommitMessage, _change)',
+            '_editingCommitMessage, _change, _editMode)',
       },
       _diffAgainst: String,
       /** @type {?string} */
@@ -394,8 +394,9 @@
       return this.changeStatuses(change, options);
     },
 
-    _computeHideEditCommitMessage(loggedIn, editing, change) {
-      if (!loggedIn || editing || change.status === this.ChangeStatus.MERGED) {
+    _computeHideEditCommitMessage(loggedIn, editing, change, editMode) {
+      if (!loggedIn || editing || change.status === this.ChangeStatus.MERGED ||
+          editMode) {
         return true;
       }
 
@@ -533,6 +534,14 @@
 
     _handleDownloadDialogClose(e) {
       this.$.downloadOverlay.close();
+    },
+
+    _handleOpenUploadHelpDialog(e) {
+      this.$.uploadHelpOverlay.open();
+    },
+
+    _handleCloseUploadHelpDialog(e) {
+      this.$.uploadHelpOverlay.close();
     },
 
     _handleMessageReply(e) {
@@ -952,9 +961,10 @@
     },
 
     _determinePageBack() {
-      // Default backPage to '/' if user came to change view page
+      // Default backPage to root if user came to change view page
       // via an email link, etc.
-      Gerrit.Nav.navigateToRelativeUrl(this.backPage || '/');
+      Gerrit.Nav.navigateToRelativeUrl(this.backPage ||
+          Gerrit.Nav.getUrlForRoot());
     },
 
     _handleLabelRemoved(splices, path) {
@@ -1331,9 +1341,9 @@
       });
     },
 
-    _computeCanStartReview(loggedIn, change, account) {
-      return !!(loggedIn && change.work_in_progress &&
-          change.owner._account_id === account._account_id);
+    _computeCanStartReview(change) {
+      return !!(change.actions && change.actions.ready &&
+          change.actions.ready.enabled);
     },
 
     _computeReplyDisabled() { return false; },
@@ -1621,6 +1631,11 @@
 
     _resetReplyOverlayFocusStops() {
       this.$.replyOverlay.setFocusStops(this.$.replyDialog.getFocusStops());
+    },
+
+    _handleToggleStar(e) {
+      this.$.restAPI.saveChangeStarred(e.detail.change._number,
+          e.detail.starred);
     },
   });
 })();

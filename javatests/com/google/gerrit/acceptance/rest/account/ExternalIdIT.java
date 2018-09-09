@@ -60,7 +60,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -105,8 +104,6 @@ public class ExternalIdIT extends AbstractDaemonTest {
             .fromJson(
                 response.getReader(), new TypeToken<List<AccountExternalIdInfo>>() {}.getType());
 
-    Collections.sort(expectedIdInfos);
-    Collections.sort(results);
     assertThat(results).containsExactlyElementsIn(expectedIdInfos);
   }
 
@@ -133,8 +130,6 @@ public class ExternalIdIT extends AbstractDaemonTest {
             .fromJson(
                 response.getReader(), new TypeToken<List<AccountExternalIdInfo>>() {}.getType());
 
-    Collections.sort(expectedIdInfos);
-    Collections.sort(results);
     assertThat(results).containsExactlyElementsIn(expectedIdInfos);
   }
 
@@ -927,7 +922,7 @@ public class ExternalIdIT extends AbstractDaemonTest {
   private void insertExtIdBehindGerritsBack(ExternalId extId) throws Exception {
     try (Repository repo = repoManager.openRepository(allUsers)) {
       // Inserting an external ID "behind Gerrit's back" means that the caches are not updated.
-      ExternalIdNotes extIdNotes = ExternalIdNotes.loadNoCacheUpdate(repo);
+      ExternalIdNotes extIdNotes = ExternalIdNotes.loadNoCacheUpdate(allUsers, repo);
       extIdNotes.insert(extId);
       try (MetaDataUpdate metaDataUpdate =
           new MetaDataUpdate(GitReferenceUpdated.DISABLED, null, repo)) {
@@ -980,7 +975,7 @@ public class ExternalIdIT extends AbstractDaemonTest {
 
   private void assertRefUpdateFailure(RemoteRefUpdate update, String msg) {
     assertThat(update.getStatus()).isEqualTo(Status.REJECTED_OTHER_REASON);
-    assertThat(update.getMessage()).isEqualTo(msg);
+    assertThat(update.getMessage()).contains(msg);
   }
 
   private AutoCloseable createFailOnLoadContext() {

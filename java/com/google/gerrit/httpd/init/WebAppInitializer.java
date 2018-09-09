@@ -23,6 +23,7 @@ import com.google.gerrit.elasticsearch.ElasticIndexModule;
 import com.google.gerrit.extensions.client.AuthType;
 import com.google.gerrit.gpg.GpgModule;
 import com.google.gerrit.httpd.AllRequestFilter;
+import com.google.gerrit.httpd.GerritAuthModule;
 import com.google.gerrit.httpd.GetUserFilter;
 import com.google.gerrit.httpd.GitOverHttpModule;
 import com.google.gerrit.httpd.H2CacheBasedWebSession;
@@ -47,6 +48,7 @@ import com.google.gerrit.server.StartupChecks;
 import com.google.gerrit.server.account.AccountDeactivator;
 import com.google.gerrit.server.account.InternalAccountDirectory;
 import com.google.gerrit.server.api.GerritApiModule;
+import com.google.gerrit.server.audit.AuditModule;
 import com.google.gerrit.server.cache.h2.H2CacheModule;
 import com.google.gerrit.server.cache.mem.DefaultMemoryCacheModule;
 import com.google.gerrit.server.change.ChangeCleanupRunner;
@@ -342,6 +344,7 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
     modules.add(new SmtpEmailSender.Module());
     modules.add(new SignedTokenEmailTokenVerifier.Module());
     modules.add(new LocalMergeSuperSetComputation.Module());
+    modules.add(new AuditModule());
 
     // Plugin module needs to be inserted *before* the index module.
     // There is the concept of LifecycleModule, in Gerrit's own extension
@@ -420,9 +423,10 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
   private Injector createWebInjector() {
     final List<Module> modules = new ArrayList<>();
     modules.add(RequestContextFilter.module());
-    modules.add(AllRequestFilter.module());
     modules.add(RequestMetricsFilter.module());
+    modules.add(sysInjector.getInstance(GerritAuthModule.class));
     modules.add(sysInjector.getInstance(GitOverHttpModule.class));
+    modules.add(AllRequestFilter.module());
     modules.add(sysInjector.getInstance(WebModule.class));
     modules.add(sysInjector.getInstance(RequireSslFilter.Module.class));
     if (sshInjector != null) {

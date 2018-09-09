@@ -5,6 +5,7 @@
 . link:linux-quickstart.html[Quickstart for Installing Gerrit on Linux]
 
 == About Gerrit
+. link:intro-rockstar.html[Why Code Review?]
 . link:intro-quick.html[Product Overview]
 . link:intro-how-gerrit-works.html[How Gerrit Works]
 . link:intro-gerrit-walkthrough.html[Basic Gerrit Walkthrough]
@@ -66,6 +67,7 @@
 . link:config-reverseproxy.html[Reverse Proxy]
 . link:config-auto-site-initialization.html[Automatic Site Initialization on Startup]
 . link:pgm-index.html[Server Side Administrative Tools]
+. link:user-request-tracing.html[Request Tracing]
 . link:note-db.html[NoteDb]
 . link:config-accounts.html[Accounts on NoteDb]
 . link:config-groups.html[Groups on NoteDb]

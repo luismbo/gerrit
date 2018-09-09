@@ -187,5 +187,33 @@ limitations under the License.
       element.importHref.secondCall.args[2]();
       assert.equal(Gerrit._pluginInstallError.callCount, 2);
     });
+
+    test('default theme is loaded with html plugins', () => {
+      sandbox.stub(Gerrit, '_setPluginsPending');
+      element.config = {
+        default_theme: '/oof',
+        plugin: {},
+      };
+      assert.isTrue(Gerrit._setPluginsPending.calledWith([url + '/oof']));
+    });
+
+    test('skips preloaded plugins', () => {
+      sandbox.stub(Gerrit, '_isPluginPreloaded')
+          .withArgs(url + '/plugins/foo/bar').returns(true)
+          .withArgs(url + '/plugins/42').returns(true);
+      sandbox.stub(Gerrit, '_setPluginsCount');
+      sandbox.stub(Gerrit, '_setPluginsPending');
+      sandbox.stub(element, '_createScriptTag');
+      element.config = {
+        plugin: {
+          html_resource_paths: ['plugins/foo/bar', 'plugins/baz'],
+          js_resource_paths: ['plugins/42'],
+        },
+      };
+      assert.isTrue(
+          Gerrit._setPluginsPending.calledWith([url + '/plugins/baz']));
+      assert.equal(element._createScriptTag.callCount, 0);
+      assert.isTrue(element.importHref.calledWith(url + '/plugins/baz'));
+    });
   });
 </script>

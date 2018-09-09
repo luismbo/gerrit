@@ -71,6 +71,7 @@ import com.google.gerrit.extensions.common.EditInfo;
 import com.google.gerrit.extensions.common.LabelInfo;
 import com.google.gerrit.extensions.common.RevisionInfo;
 import com.google.gerrit.extensions.common.testing.EditInfoSubject;
+import com.google.gerrit.mail.Address;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.BooleanProjectConfig;
 import com.google.gerrit.reviewdb.client.Change;
@@ -84,7 +85,6 @@ import com.google.gerrit.server.git.receive.NoteDbPushOption;
 import com.google.gerrit.server.git.receive.ReceiveConstants;
 import com.google.gerrit.server.git.validators.CommitValidators.ChangeIdValidator;
 import com.google.gerrit.server.group.SystemGroupBackend;
-import com.google.gerrit.server.mail.Address;
 import com.google.gerrit.server.project.testing.Util;
 import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gerrit.testing.FakeEmailSender.Message;
@@ -103,6 +103,7 @@ import java.util.stream.Stream;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.junit.TestRepository;
 import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.RefUpdate;
 import org.eclipse.jgit.lib.RefUpdate.Result;
 import org.eclipse.jgit.lib.Repository;
@@ -212,6 +213,24 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
   }
 
   @Test
+  @TestProjectInput(createEmptyCommit = false)
+  public void validateConnected() throws Exception {
+    RevCommit c = testRepo.commit().message("Initial commit").insertChangeId().create();
+    testRepo.reset(c);
+
+    String r = "refs/heads/master";
+    PushResult pr = pushHead(testRepo, r, false);
+    assertPushOk(pr, r);
+
+    RevCommit amended =
+        testRepo.amend(c).message("different initial commit").insertChangeId().create();
+    testRepo.reset(amended);
+    r = "refs/for/master";
+    pr = pushHead(testRepo, r, false);
+    assertPushRejected(pr, r, "no common ancestry");
+  }
+
+  @Test
   public void pushInitialCommitForRefsMetaConfigBranch() throws Exception {
     // delete refs/meta/config
     try (Repository repo = repoManager.openRepository(project);
@@ -301,12 +320,13 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
     r2.assertOkStatus();
     r2.assertChange(Change.Status.NEW, null);
     r2.assertMessage(
-        "New changes:\n"
+        "success\n"
+            + "\n"
+            + "New changes:\n"
             + "  "
             + url
             + id2
             + " another commit\n"
-            + "\n"
             + "\n"
             + "Updated changes:\n"
             + "  "
@@ -336,6 +356,20 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
     ChangeInfo change = gApi.changes().id(r.getChange().getId().get()).get();
     assertThat(Iterables.getLast(change.messages).message)
         .isEqualTo("Change has been successfully pushed.");
+  }
+
+  @Test
+  public void pushWithoutChangeIdDeprecated() throws Exception {
+    setRequireChangeId(InheritableBoolean.FALSE);
+    testRepo
+        .branch("HEAD")
+        .commit()
+        .message("A change")
+        .author(admin.getIdent())
+        .committer(new PersonIdent(admin.getIdent(), testRepo.getDate()))
+        .create();
+    PushResult result = pushHead(testRepo, "refs/for/master");
+    assertThat(result.getMessages()).contains("warning: pushing without Change-Id is deprecated");
   }
 
   @Test
@@ -1155,7 +1189,7 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
         pushFactory.create(
             db, admin.getIdent(), testRepo, PushOneCommit.SUBJECT, "b.txt", "anotherContent");
     r = push.to("refs/for/master");
-    r.assertErrorStatus("not Signed-off-by author/committer/uploader in commit message footer");
+    r.assertErrorStatus("not Signed-off-by author/committer/uploader in message footer");
   }
 
   @Test
@@ -1228,7 +1262,7 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
 
     // BatchUpdate implementations differ in how they hook into progress monitors. We mostly just
     // care that there is a new change.
-    assertThat(pr.getMessages()).containsMatch("changes: new: 1,( refs: 1)? done");
+    assertThat(pr.getMessages()).containsMatch("changes: .*new: 1.*done");
     assertTwoChangesWithSameRevision(r);
   }
 
@@ -1359,7 +1393,7 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
   private void testPushWithoutChangeId() throws Exception {
     RevCommit c = createCommit(testRepo, "Message without Change-Id");
     assertThat(GitUtil.getChangeId(testRepo, c)).isEmpty();
-    pushForReviewRejected(testRepo, "missing Change-Id in commit message footer");
+    pushForReviewRejected(testRepo, "missing Change-Id in message footer");
 
     setRequireChangeId(InheritableBoolean.FALSE);
     pushForReviewOk(testRepo);
@@ -1384,8 +1418,9 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
     r = push.to("refs/changes/" + r.getChange().change().getId().get());
     r.assertErrorStatus(
         String.format(
-            ChangeIdValidator.CHANGE_ID_MISMATCH_MSG,
-            r.getCommit().abbreviate(RevId.ABBREV_LEN).name()));
+            "commit %s: %s",
+            r.getCommit().abbreviate(RevId.ABBREV_LEN).name(),
+            ChangeIdValidator.CHANGE_ID_MISMATCH_MSG));
   }
 
   @Test
@@ -1406,10 +1441,10 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
             + "\n"
             + "Change-Id: I10f98c2ef76e52e23aa23be5afeb71e40b350e86\n"
             + "Change-Id: Ie9a132e107def33bdd513b7854b50de911edba0a\n");
-    pushForReviewRejected(testRepo, "multiple Change-Id lines in commit message footer");
+    pushForReviewRejected(testRepo, "multiple Change-Id lines in message footer");
 
     setRequireChangeId(InheritableBoolean.FALSE);
-    pushForReviewRejected(testRepo, "multiple Change-Id lines in commit message footer");
+    pushForReviewRejected(testRepo, "multiple Change-Id lines in message footer");
   }
 
   @Test
@@ -1425,10 +1460,10 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
 
   private void testpushWithInvalidChangeId() throws Exception {
     createCommit(testRepo, "Message with invalid Change-Id\n\nChange-Id: X\n");
-    pushForReviewRejected(testRepo, "invalid Change-Id line format in commit message footer");
+    pushForReviewRejected(testRepo, "invalid Change-Id line format in message footer");
 
     setRequireChangeId(InheritableBoolean.FALSE);
-    pushForReviewRejected(testRepo, "invalid Change-Id line format in commit message footer");
+    pushForReviewRejected(testRepo, "invalid Change-Id line format in message footer");
   }
 
   @Test
@@ -1449,19 +1484,19 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
         "Message with invalid Change-Id\n"
             + "\n"
             + "Change-Id: I0000000000000000000000000000000000000000\n");
-    pushForReviewRejected(testRepo, "invalid Change-Id line format in commit message footer");
+    pushForReviewRejected(testRepo, "invalid Change-Id line format in message footer");
 
     setRequireChangeId(InheritableBoolean.FALSE);
-    pushForReviewRejected(testRepo, "invalid Change-Id line format in commit message footer");
+    pushForReviewRejected(testRepo, "invalid Change-Id line format in message footer");
   }
 
   @Test
   public void pushWithChangeIdInSubjectLine() throws Exception {
     createCommit(testRepo, "Change-Id: I1234000000000000000000000000000000000000");
-    pushForReviewRejected(testRepo, "missing subject; Change-Id must be in commit message footer");
+    pushForReviewRejected(testRepo, "missing subject; Change-Id must be in message footer");
 
     setRequireChangeId(InheritableBoolean.FALSE);
-    pushForReviewRejected(testRepo, "missing subject; Change-Id must be in commit message footer");
+    pushForReviewRejected(testRepo, "missing subject; Change-Id must be in message footer");
   }
 
   @Test
@@ -2037,7 +2072,8 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
     assertPushOk(pushHead(testRepo, master), master);
 
     commits.addAll(initChanges(3));
-    assertPushRejected(pushHead(testRepo, master), master, "too many commits");
+    assertPushRejected(
+        pushHead(testRepo, master), master, "more than 2 commits, and skip-validation not set");
 
     grantSkipValidation(project, master, SystemGroupBackend.REGISTERED_USERS);
     PushResult r =
@@ -2079,7 +2115,7 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
 
     allowGlobalCapabilities(REGISTERED_USERS, GlobalCapability.ACCESS_DATABASE);
     pr = pushOne(testRepo, c.name(), ref, false, false, opts);
-    assertPushRejected(pr, ref, "prohibited by Gerrit: create not permitted for " + ref);
+    assertPushRejected(pr, ref, "prohibited by Gerrit: not permitted: create");
 
     grant(project, "refs/changes/*", Permission.CREATE);
     grant(project, "refs/changes/*", Permission.PUSH);
@@ -2101,11 +2137,11 @@ public abstract class AbstractPushForReview extends AbstractDaemonTest {
                 .push()
                 .setRefSpecs(
                     new RefSpec(noteDbCommit.name() + ":" + ref),
-                    new RefSpec(changeCommit.name() + ":refs/for/master"))
+                    new RefSpec(changeCommit.name() + ":refs/heads/permitted"))
                 .call());
 
     assertPushRejected(pr, ref, "NoteDb update requires -o notedb=allow");
-    assertPushOk(pr, "refs/for/master");
+    assertPushOk(pr, "refs/heads/permitted");
   }
 
   private DraftInput newDraft(String path, int line, String message) {

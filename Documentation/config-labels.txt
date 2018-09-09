@@ -238,7 +238,9 @@ determining whether a change is submittable.
 The `PatchSetLock` function provides a locking mechanism for patch
 sets.  This function's values are not considered when determining
 whether a change is submittable. When set, no new patchsets can be
-created and rebase and abandon are blocked.
+created and rebase and abandon are blocked. This is useful to prevent
+updates to a change while (potentially expensive) CI
+validation is running.
 +
 This function is designed to allow overlapping locks, so several lock
 accounts could lock the same change.
@@ -368,6 +370,18 @@ assign permissions for that label on a branch, but this permission is then
 ignored if the label doesn't apply for that branch.
 Additionally, the `branch` modifier has no effect when the submit rule
 is customized in the rules.pl of the project or inherited from parent projects.
+Branch can be a ref pattern similar to what is documented
+link:access-control.html#reference[here], but must not contain `${username}` or
+`${shardeduserid}`.
+
+[[label_ignoreSelfApproval]]
+=== `label.Label-Name.ignoreSelfApproval`
+
+If true, the label may be voted on by the uploader of the latest patch set,
+but their approval does not make a change submittable. Instead, a
+non-uploader who has the right to vote has to approve the change.
+
+Defaults to false.
 
 [[label_example]]
 === Example

@@ -29,7 +29,7 @@ import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.IdString;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
-import com.google.gerrit.extensions.restapi.RestCreateView;
+import com.google.gerrit.extensions.restapi.RestCollectionCreateView;
 import com.google.gerrit.extensions.restapi.TopLevelResource;
 import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.extensions.restapi.Url;
@@ -50,12 +50,14 @@ import com.google.gerrit.server.group.SystemGroupBackend;
 import com.google.gerrit.server.group.db.GroupsUpdate;
 import com.google.gerrit.server.group.db.InternalGroupCreation;
 import com.google.gerrit.server.group.db.InternalGroupUpdate;
+import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.validators.GroupCreationValidationListener;
 import com.google.gerrit.server.validators.ValidationException;
 import com.google.gwtorm.server.OrmDuplicateKeyException;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
+import com.google.inject.Singleton;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -68,7 +70,9 @@ import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.PersonIdent;
 
 @RequiresCapability(GlobalCapability.CREATE_GROUP)
-public class CreateGroup implements RestCreateView<TopLevelResource, GroupResource, GroupInput> {
+@Singleton
+public class CreateGroup
+    implements RestCollectionCreateView<TopLevelResource, GroupResource, GroupInput> {
   private final Provider<IdentifiedUser> self;
   private final PersonIdent serverIdent;
   private final Provider<GroupsUpdate> groupsUpdateProvider;
@@ -121,7 +125,7 @@ public class CreateGroup implements RestCreateView<TopLevelResource, GroupResour
   public GroupInfo apply(TopLevelResource resource, IdString id, GroupInput input)
       throws AuthException, BadRequestException, UnprocessableEntityException,
           ResourceConflictException, OrmException, IOException, ConfigInvalidException,
-          ResourceNotFoundException {
+          ResourceNotFoundException, PermissionBackendException {
     String name = id.get();
     if (input == null) {
       input = new GroupInput();

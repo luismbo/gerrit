@@ -21,11 +21,9 @@
   const ERR_COMMENT_ON_EDIT_BASE = 'You cannot comment on the base patch set ' +
       'of an edit.';
   const ERR_INVALID_LINE = 'Invalid line number: ';
-  const MSG_EMPTY_BLAME = 'No blame information for this diff.';
 
-  const EVENT_AGAINST_PARENT = 'diff-against-parent';
-  const EVENT_ZERO_REBASE = 'rebase-percent-zero';
-  const EVENT_NONZERO_REBASE = 'rebase-percent-nonzero';
+  const NO_NEWLINE_BASE = 'No newline at end of base file.';
+  const NO_NEWLINE_REVISION = 'No newline at end of revision file.';
 
   const DiffViewMode = {
     SIDE_BY_SIDE: 'SIDE_BY_SIDE',
@@ -61,6 +59,12 @@
      * @event diff-comments-modified
      */
 
+     /**
+      * Fired when a draft is added or edited.
+      *
+      * @event draft-interaction
+      */
+
     properties: {
       changeNum: String,
       noAutoRender: {
@@ -85,21 +89,17 @@
       },
       isImageDiff: {
         type: Boolean,
-        computed: '_computeIsImageDiff(_diff)',
-        notify: true,
       },
       commitRange: Object,
-      filesWeblinks: {
-        type: Object,
-        value() { return {}; },
-        notify: true,
-      },
       hidden: {
         type: Boolean,
         reflectToAttribute: true,
       },
       noRenderOnPrefsChange: Boolean,
-      comments: Object,
+      comments: {
+        type: Object,
+        value: {left: [], right: []},
+      },
       lineWrapping: {
         type: Boolean,
         value: false,
@@ -120,24 +120,33 @@
        */
       lineOfInterest: Object,
 
-      _loggedIn: {
+      loading: {
+        type: Boolean,
+        value: false,
+        observer: '_loadingChanged',
+      },
+
+      loggedIn: {
         type: Boolean,
         value: false,
       },
-      _diff: Object,
+      diff: {
+        type: Object,
+        observer: '_diffChanged',
+      },
       _diffHeaderItems: {
         type: Array,
         value: [],
-        computed: '_computeDiffHeaderItems(_diff.*)',
+        computed: '_computeDiffHeaderItems(diff.*)',
       },
       _diffTableClass: {
         type: String,
         value: '',
       },
       /** @type {?Object} */
-      _baseImage: Object,
+      baseImage: Object,
       /** @type {?Object} */
-      _revisionImage: Object,
+      revisionImage: Object,
 
       /**
        * Whether the safety check for large diffs when whole-file is set has
@@ -154,20 +163,37 @@
 
       _showWarning: Boolean,
 
-      /** @type {?Object} */
-      _blame: {
-        type: Object,
+      /** @type {?string} */
+      errorMessage: {
+        type: String,
         value: null,
       },
-      isBlameLoaded: {
-        type: Boolean,
-        notify: true,
-        computed: '_computeIsBlameLoaded(_blame)',
+
+      /** @type {?Object} */
+      blame: {
+        type: Object,
+        value: null,
+        observer: '_blameChanged',
       },
 
       _parentIndex: {
         type: Number,
         computed: '_computeParentIndex(patchRange.*)',
+      },
+
+      _newlineWarning: {
+        type: String,
+        computed: '_computeNewlineWarning(diff)',
+      },
+
+      /**
+       * @type {function(number, boolean, !string)}
+       */
+      _createThreadGroupFn: {
+        type: Function,
+        value() {
+          return this._createCommentThreadGroup.bind(this);
+        },
       },
     },
 
@@ -180,41 +206,6 @@
       'comment-update': '_handleCommentUpdate',
       'comment-save': '_handleCommentSave',
       'create-comment': '_handleCreateComment',
-    },
-
-    attached() {
-      this._getLoggedIn().then(loggedIn => {
-        this._loggedIn = loggedIn;
-      });
-    },
-
-    ready() {
-      if (this._canRender()) {
-        this.reload();
-      }
-    },
-
-    /** @return {!Promise} */
-    reload() {
-      this.cancel();
-      this.clearBlame();
-      this._safetyBypass = null;
-      this._showWarning = false;
-      this.clearDiffContent();
-
-      const promises = [];
-
-      promises.push(this._getDiff().then(diff => {
-        this._diff = diff;
-        return this._loadDiffAssets();
-      }));
-
-      return Promise.all(promises).then(() => {
-        if (this.prefs) {
-          return this._renderDiffTable();
-        }
-        return Promise.resolve();
-      });
     },
 
     /** Cancel any remaining diff builder rendering work. */
@@ -240,48 +231,18 @@
       this.toggleClass('no-left');
     },
 
-    /**
-     * Load and display blame information for the base of the diff.
-     * @return {Promise} A promise that resolves when blame finishes rendering.
-     */
-    loadBlame() {
-      return this.$.restAPI.getBlame(this.changeNum, this.patchRange.patchNum,
-          this.path, true)
-          .then(blame => {
-            if (!blame.length) {
-              this.fire('show-alert', {message: MSG_EMPTY_BLAME});
-              return Promise.reject(MSG_EMPTY_BLAME);
-            }
-
-            this._blame = blame;
-
-            this.$.diffBuilder.setBlame(blame);
-            this.classList.add('showBlame');
-          });
-    },
-
-    _computeIsBlameLoaded(blame) {
-      return !!blame;
-    },
-
-    /**
-     * Unload blame information for the diff.
-     */
-    clearBlame() {
-      this._blame = null;
-      this.$.diffBuilder.setBlame(null);
-      this.classList.remove('showBlame');
+    _blameChanged(newValue) {
+      this.$.diffBuilder.setBlame(newValue);
+      if (newValue) {
+        this.classList.add('showBlame');
+      } else {
+        this.classList.remove('showBlame');
+      }
     },
 
     _handleCommentSaveOrDiscard() {
       this.dispatchEvent(new CustomEvent('diff-comments-modified',
           {bubbles: true}));
-    },
-
-    /** @return {boolean}} */
-    _canRender() {
-      return !!this.changeNum && !!this.patchRange && !!this.path &&
-          !this.noAutoRender;
     },
 
     /** @return {!Array<!HTMLElement>} */
@@ -345,20 +306,18 @@
 
     addDraftAtLine(el) {
       this._selectLine(el);
-      this._isValidElForComment(el).then(valid => {
-        if (!valid) { return; }
+      if (!this._isValidElForComment(el)) { return; }
 
-        const value = el.getAttribute('data-value');
-        let lineNum;
-        if (value !== GrDiffLine.FILE) {
-          lineNum = parseInt(value, 10);
-          if (isNaN(lineNum)) {
-            this.fire('show-alert', {message: ERR_INVALID_LINE + value});
-            return;
-          }
+      const value = el.getAttribute('data-value');
+      let lineNum;
+      if (value !== GrDiffLine.FILE) {
+        lineNum = parseInt(value, 10);
+        if (isNaN(lineNum)) {
+          this.fire('show-alert', {message: ERR_INVALID_LINE + value});
+          return;
         }
-        this._createComment(el, lineNum);
-      });
+      }
+      this._createComment(el, lineNum);
     },
 
     _handleCreateComment(e) {
@@ -366,36 +325,34 @@
       const side = e.detail.side;
       const lineNum = range.endLine;
       const lineEl = this.$.diffBuilder.getLineElByNumber(lineNum, side);
-      this._isValidElForComment(lineEl).then(valid => {
-        if (!valid) { return; }
 
+      if (this._isValidElForComment(lineEl)) {
         this._createComment(lineEl, lineNum, side, range);
-      });
+      }
     },
 
+    /** @return {boolean} */
     _isValidElForComment(el) {
-      return this._getLoggedIn().then(loggedIn => {
-        if (!loggedIn) {
-          this.fire('show-auth-required');
-          return false;
-        }
-        const patchNum = el.classList.contains(DiffSide.LEFT) ?
-            this.patchRange.basePatchNum :
-            this.patchRange.patchNum;
+      if (!this.loggedIn) {
+        this.fire('show-auth-required');
+        return false;
+      }
+      const patchNum = el.classList.contains(DiffSide.LEFT) ?
+          this.patchRange.basePatchNum :
+          this.patchRange.patchNum;
 
-        const isEdit = this.patchNumEquals(patchNum, this.EDIT_NAME);
-        const isEditBase = this.patchNumEquals(patchNum, this.PARENT_NAME) &&
-            this.patchNumEquals(this.patchRange.patchNum, this.EDIT_NAME);
+      const isEdit = this.patchNumEquals(patchNum, this.EDIT_NAME);
+      const isEditBase = this.patchNumEquals(patchNum, this.PARENT_NAME) &&
+          this.patchNumEquals(this.patchRange.patchNum, this.EDIT_NAME);
 
-        if (isEdit) {
-          this.fire('show-alert', {message: ERR_COMMENT_ON_EDIT});
-          return false;
-        } else if (isEditBase) {
-          this.fire('show-alert', {message: ERR_COMMENT_ON_EDIT_BASE});
-          return false;
-        }
-        return true;
-      });
+      if (isEdit) {
+        this.fire('show-alert', {message: ERR_COMMENT_ON_EDIT});
+        return false;
+      } else if (isEditBase) {
+        this.fire('show-alert', {message: ERR_COMMENT_ON_EDIT_BASE});
+        return false;
+      }
+      return true;
     },
 
     /**
@@ -405,7 +362,7 @@
      * @param {!Object=} opt_range
      */
     _createComment(lineEl, opt_lineNum, opt_side, opt_range) {
-      this.$.reporting.recordDraftInteraction();
+      this.dispatchEvent(new CustomEvent('draft-interaction', {bubbles: true}));
       const contentText = this.$.diffBuilder.getContentByLineEl(lineEl);
       const contentEl = contentText.parentElement;
       const side = opt_side ||
@@ -436,20 +393,6 @@
     },
 
     /**
-     * @param {string} commentSide
-     * @param {!Object=} opt_range
-     */
-    _getRangeString(commentSide, opt_range) {
-      return opt_range ?
-        'range-' +
-        opt_range.startLine + '-' +
-        opt_range.startChar + '-' +
-        opt_range.endLine + '-' +
-        opt_range.endChar + '-' +
-        commentSide : 'line-' + commentSide;
-    },
-
-    /**
      * Gets or creates a comment thread for a specific spot on a diff.
      * May include a range, if the comment is a range comment.
      *
@@ -465,8 +408,8 @@
       // Check if thread group exists.
       let threadGroupEl = this._getThreadGroupForLine(contentEl);
       if (!threadGroupEl) {
-        threadGroupEl = this.$.diffBuilder.createCommentThreadGroup(
-            this.changeNum, patchNum, this.path, isOnParent, commentSide);
+        threadGroupEl = this._createCommentThreadGroup(patchNum, isOnParent,
+            commentSide);
         contentEl.appendChild(threadGroupEl);
       }
 
@@ -478,6 +421,25 @@
         threadEl = this._getThread(threadGroupEl, commentSide, opt_range);
       }
       return threadEl;
+    },
+
+    /**
+     * @param {number} patchNum
+     * @param {boolean} isOnParent
+     * @param {!string} commentSide
+     * @return {!Object}
+     */
+    _createCommentThreadGroup(patchNum, isOnParent, commentSide) {
+      const threadGroupEl =
+          document.createElement('gr-diff-comment-thread-group');
+      threadGroupEl.changeNum = this.changeNum;
+      threadGroupEl.commentSide = commentSide;
+      threadGroupEl.patchForNewThreads = patchNum;
+      threadGroupEl.path = this.path;
+      threadGroupEl.isOnParent = isOnParent;
+      threadGroupEl.projectName = this.projectName;
+      threadGroupEl.parentIndex = this._parentIndex;
+      return threadGroupEl;
     },
 
     /**
@@ -616,6 +578,17 @@
       this._prefsChanged(this.prefs);
     },
 
+    /** @param {boolean} newValue */
+    _loadingChanged(newValue) {
+      if (newValue) {
+        this.cancel();
+        this._blame = null;
+        this._safetyBypass = null;
+        this._showWarning = false;
+        this.clearDiffContent();
+      }
+    },
+
     _lineWrappingObserver() {
       this._prefsChanged(this.prefs);
     },
@@ -623,7 +596,7 @@
     _prefsChanged(prefs) {
       if (!prefs) { return; }
 
-      this.clearBlame();
+      this._blame = null;
 
       const stylesToUpdate = {};
 
@@ -644,21 +617,32 @@
 
       this.updateStyles(stylesToUpdate);
 
-      if (this._diff && this.comments && !this.noRenderOnPrefsChange) {
+      if (this.diff && this.comments && !this.noRenderOnPrefsChange) {
+        this._renderDiffTable();
+      }
+    },
+
+    _diffChanged(newValue) {
+      if (newValue) {
         this._renderDiffTable();
       }
     },
 
     _renderDiffTable() {
+      if (!this.prefs) {
+        this.dispatchEvent(new CustomEvent('render', {bubbles: true}));
+        return;
+      }
       if (this.prefs.context === -1 &&
-          this._diffLength(this._diff) >= LARGE_DIFF_THRESHOLD_LINES &&
+          this._diffLength(this.diff) >= LARGE_DIFF_THRESHOLD_LINES &&
           this._safetyBypass === null) {
         this._showWarning = true;
-        return Promise.resolve();
+        this.dispatchEvent(new CustomEvent('render', {bubbles: true}));
+        return;
       }
 
       this._showWarning = false;
-      return this.$.diffBuilder.render(this.comments, this._getBypassPrefs());
+      this.$.diffBuilder.render(this.comments, this._getBypassPrefs());
     },
 
     /**
@@ -675,117 +659,6 @@
       this.$.diffTable.innerHTML = null;
     },
 
-    _handleGetDiffError(response) {
-      // Loading the diff may respond with 409 if the file is too large. In this
-      // case, use a toast error..
-      if (response.status === 409) {
-        this.fire('server-error', {response});
-        return;
-      }
-      this.fire('page-error', {response});
-    },
-
-    /** @return {!Promise<!Object>} */
-    _getDiff() {
-      return this.$.restAPI.getDiff(
-          this.changeNum,
-          this.patchRange.basePatchNum,
-          this.patchRange.patchNum,
-          this.path,
-          this._handleGetDiffError.bind(this)).then(diff => {
-            this._reportDiff(diff);
-            if (!this.commitRange) {
-              this.filesWeblinks = {};
-              return diff;
-            }
-            this.filesWeblinks = {
-              meta_a: Gerrit.Nav.getFileWebLinks(
-                  this.projectName, this.commitRange.baseCommit, this.path,
-                  {weblinks: diff && diff.meta_a && diff.meta_a.web_links}),
-              meta_b: Gerrit.Nav.getFileWebLinks(
-                  this.projectName, this.commitRange.commit, this.path,
-                  {weblinks: diff && diff.meta_b && diff.meta_b.web_links}),
-            };
-            return diff;
-          });
-    },
-
-    /**
-     * Report info about the diff response.
-     */
-    _reportDiff(diff) {
-      if (!diff || !diff.content) { return; }
-
-      // Count the delta lines stemming from normal deltas, and from
-      // due_to_rebase deltas.
-      let nonRebaseDelta = 0;
-      let rebaseDelta = 0;
-      diff.content.forEach(chunk => {
-        if (chunk.ab) { return; }
-        const deltaSize = Math.max(
-            chunk.a ? chunk.a.length : 0, chunk.b ? chunk.b.length : 0);
-        if (chunk.due_to_rebase) {
-          rebaseDelta += deltaSize;
-        } else {
-          nonRebaseDelta += deltaSize;
-        }
-      });
-
-      // Find the percent of the delta from due_to_rebase chunks rounded to two
-      // digits. Diffs with no delta are considered 0%.
-      const totalDelta = rebaseDelta + nonRebaseDelta;
-      const percentRebaseDelta = !totalDelta ? 0 :
-          Math.round(100 * rebaseDelta / totalDelta);
-
-      // Report the due_to_rebase percentage in the "diff" category when
-      // applicable.
-      if (this.patchRange.basePatchNum === 'PARENT') {
-        this.$.reporting.reportInteraction(EVENT_AGAINST_PARENT);
-      } else if (percentRebaseDelta === 0) {
-        this.$.reporting.reportInteraction(EVENT_ZERO_REBASE);
-      } else {
-        this.$.reporting.reportInteraction(EVENT_NONZERO_REBASE,
-            percentRebaseDelta);
-      }
-    },
-
-    /** @return {!Promise} */
-    _getLoggedIn() {
-      return this.$.restAPI.getLoggedIn();
-    },
-
-    /** @return {boolean} */
-    _computeIsImageDiff() {
-      if (!this._diff) { return false; }
-
-      const isA = this._diff.meta_a &&
-          this._diff.meta_a.content_type.startsWith('image/');
-      const isB = this._diff.meta_b &&
-          this._diff.meta_b.content_type.startsWith('image/');
-
-      return !!(this._diff.binary && (isA || isB));
-    },
-
-    /** @return {!Promise} */
-    _loadDiffAssets() {
-      if (this.isImageDiff) {
-        return this._getImages().then(images => {
-          this._baseImage = images.baseImage;
-          this._revisionImage = images.revisionImage;
-        });
-      } else {
-        this._baseImage = null;
-        this._revisionImage = null;
-        return Promise.resolve();
-      }
-    },
-
-    /** @return {!Promise} */
-    _getImages() {
-      return this.$.restAPI.getImagesForDiff(this.changeNum, this._diff,
-          this.patchRange);
-    },
-
     _projectConfigChanged(projectConfig) {
       const threadEls = this.getThreadEls();
       for (let i = 0; i < threadEls.length; i++) {
@@ -796,12 +669,13 @@
     /** @return {!Array} */
     _computeDiffHeaderItems(diffInfoRecord) {
       const diffInfo = diffInfoRecord.base;
-      if (!diffInfo || !diffInfo.diff_header || diffInfo.binary) { return []; }
+      if (!diffInfo || !diffInfo.diff_header) { return []; }
       return diffInfo.diff_header.filter(item => {
         return !(item.startsWith('diff --git ') ||
             item.startsWith('index ') ||
             item.startsWith('+++ ') ||
-            item.startsWith('--- '));
+            item.startsWith('--- ') ||
+            item === 'Binary files differ');
       });
     },
 
@@ -845,6 +719,14 @@
     },
 
     /**
+     * @param {string} errorMessage
+     * @return {string}
+     */
+    _computeErrorClass(errorMessage) {
+      return errorMessage ? 'showError' : '';
+    },
+
+    /**
      * @return {number|null}
      */
     _computeParentIndex(patchRangeRecord) {
@@ -856,6 +738,90 @@
 
     expandAllContext() {
       this._handleFullBypass();
+    },
+
+    /**
+     * Find the last chunk for the given side.
+     * @param {!Object} diff
+     * @param {boolean} leftSide true if checking the base of the diff,
+     *     false if testing the revision.
+     * @return {Object|null} returns the chunk object or null if there was
+     *     no chunk for that side.
+     */
+    _lastChunkForSide(diff, leftSide) {
+      if (!diff.content.length) { return null; }
+
+      let chunkIndex = diff.content.length;
+      let chunk;
+
+      // Walk backwards until we find a chunk for the given side.
+      do {
+        chunkIndex--;
+        chunk = diff.content[chunkIndex];
+      } while (
+          // We haven't reached the beginning.
+          chunkIndex >= 0 &&
+
+          // The chunk doesn't have both sides.
+          !chunk.ab &&
+
+          // The chunk doesn't have the given side.
+          ((leftSide && !chunk.a) || (!leftSide && !chunk.b)));
+
+      // If we reached the beginning of the diff and failed to find a chunk
+      // with the given side, return null.
+      if (chunkIndex === -1) { return null; }
+
+      return chunk;
+    },
+
+    /**
+     * Check whether the specified side of the diff has a trailing newline.
+     * @param {!Object} diff
+     * @param {boolean} leftSide true if checking the base of the diff,
+     *     false if testing the revision.
+     * @return {boolean|null} Return true if the side has a trailing newline.
+     *     Return false if it doesn't. Return null if not applicable (for
+     *     example, if the diff has no content on the specified side).
+     */
+    _hasTrailingNewlines(diff, leftSide) {
+      const chunk = this._lastChunkForSide(diff, leftSide);
+      if (!chunk) { return null; }
+      let lines;
+      if (chunk.ab) {
+        lines = chunk.ab;
+      } else {
+        lines = leftSide ? chunk.a : chunk.b;
+      }
+      return lines[lines.length - 1] === '';
+    },
+
+    /**
+     * @param {!Object} diff
+     * @return {string|null}
+     */
+    _computeNewlineWarning(diff) {
+      const hasLeft = this._hasTrailingNewlines(diff, true);
+      const hasRight = this._hasTrailingNewlines(diff, false);
+      const messages = [];
+      if (hasLeft === false) {
+        messages.push(NO_NEWLINE_BASE);
+      }
+      if (hasRight === false) {
+        messages.push(NO_NEWLINE_REVISION);
+      }
+      if (!messages.length) { return null; }
+      return messages.join(' — ');
+    },
+
+    /**
+     * @param {string} warning
+     * @param {boolean} loading
+     * @return {string}
+     */
+    _computeNewlineWarningClass(warning, loading) {
+      if (loading || !warning) { return 'newlineWarning hidden'; }
+      return 'newlineWarning';
     },
   });
 })();

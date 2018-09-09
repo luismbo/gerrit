@@ -52,6 +52,7 @@ import com.google.common.collect.Table;
 import com.google.common.collect.TreeBasedTable;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.SubmitRecord;
+import com.google.gerrit.mail.Address;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Comment;
@@ -62,10 +63,9 @@ import com.google.gerrit.reviewdb.client.RobotComment;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.GerritPersonIdent;
 import com.google.gerrit.server.config.GerritServerConfig;
-import com.google.gerrit.server.mail.Address;
+import com.google.gerrit.server.logging.RequestId;
 import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.util.LabelVote;
-import com.google.gerrit.server.util.RequestId;
 import com.google.gwtorm.client.IntKey;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.assistedinject.Assisted;
@@ -160,6 +160,7 @@ public class ChangeUpdate extends AbstractChangeUpdate {
   private ChangeDraftUpdate draftUpdate;
   private RobotCommentUpdate robotCommentUpdate;
   private DeleteCommentRewriter deleteCommentRewriter;
+  private DeleteChangeMessageRewriter deleteChangeMessageRewriter;
 
   @AssistedInject
   private ChangeUpdate(
@@ -395,6 +396,11 @@ public class ChangeUpdate extends AbstractChangeUpdate {
         deleteCommentRewriterFactory.create(getChange().getId(), uuid, newMessage);
   }
 
+  public void deleteChangeMessageByRewritingHistory(int targetMessageIdx, String newMessage) {
+    deleteChangeMessageRewriter =
+        new DeleteChangeMessageRewriter(getChange().getId(), targetMessageIdx, newMessage);
+  }
+
   @VisibleForTesting
   ChangeDraftUpdate createDraftUpdateIfNull() {
     if (draftUpdate == null) {
@@ -609,7 +615,9 @@ public class ChangeUpdate extends AbstractChangeUpdate {
   @Override
   protected CommitBuilder applyImpl(RevWalk rw, ObjectInserter ins, ObjectId curr)
       throws OrmException, IOException {
-    checkState(deleteCommentRewriter == null, "cannot update and rewrite ref in one BatchUpdate");
+    checkState(
+        deleteCommentRewriter == null && deleteChangeMessageRewriter == null,
+        "cannot update and rewrite ref in one BatchUpdate");
 
     CommitBuilder cb = new CommitBuilder();
 
@@ -821,6 +829,10 @@ public class ChangeUpdate extends AbstractChangeUpdate {
 
   public DeleteCommentRewriter getDeleteCommentRewriter() {
     return deleteCommentRewriter;
+  }
+
+  public DeleteChangeMessageRewriter getDeleteChangeMessageRewriter() {
+    return deleteChangeMessageRewriter;
   }
 
   public void setAllowWriteToNewRef(boolean allow) {

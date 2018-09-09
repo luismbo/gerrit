@@ -51,6 +51,7 @@ limitations under the License.
 <link rel="import" href="../gr-related-changes-list/gr-related-changes-list.html">
 <link rel="import" href="../gr-reply-dialog/gr-reply-dialog.html">
 <link rel="import" href="../gr-thread-list/gr-thread-list.html">
+<link rel="import" href="../gr-upload-help-dialog/gr-upload-help-dialog.html">
 
 <dom-module id="gr-change-view">
   <template>
@@ -109,19 +110,14 @@ limitations under the License.
          https://github.com/Polymer/polymer/issues/2531 */
       .container section.changeInfo {
         display: flex;
-        padding: 0 var(--default-horizontal-margin);
       }
       .changeId {
         color: var(--deemphasized-text-color);
         font-family: var(--font-family);
         margin-top: 1em;
       }
-      .changeInfo-column {
-        padding: 0 1em;
-      }
       .changeMetadata {
         border-right: 1px solid var(--border-color);
-        padding: 1em 0;
       }
       /* Prevent plugin text from overflowing. */
       #change_plugins {
@@ -200,6 +196,7 @@ limitations under the License.
         flex-direction: column;
         flex-shrink: 0;
         margin: 1em 0;
+        padding: 0 1em;
       }
       .collapseToggleContainer {
         display: flex;
@@ -247,13 +244,17 @@ limitations under the License.
       #includedInOverlay {
         width: 65em;
       }
+      #uploadHelpOverlay {
+        width: 50em;
+      }
       @media screen and (min-width: 80em) {
         .commitMessage {
           max-width: var(--commit-message-max-width, 100ch);
         }
       }
       #metadata {
-        padding-right: 1em;
+        --metadata-horizontal-padding: 1em;
+        padding-top: 1em;
         width: 100%;
       }
       /* NOTE: If you update this breakpoint, also update the
@@ -272,6 +273,12 @@ limitations under the License.
         }
         #commitMessageEditor {
           min-width: 0;
+        }
+        .commitMessage {
+          margin-right: 0;
+        }
+        .mainChangeInfo {
+          padding-right: 0;
         }
       }
       /* NOTE: If you update this breakpoint, also update the
@@ -312,19 +319,18 @@ limitations under the License.
           flex-wrap: nowrap;
         }
         .commitContainer {
-          border-top: 1px solid var(--border-color);
           margin: 0;
-          padding: 1em 0;
+          padding: 1em;
         }
         .relatedChanges,
         .changeMetadata {
           font-size: var(--font-size-normal);
         }
         .changeMetadata {
+          border-bottom: 1px solid var(--border-color);
           border-right: none;
           margin-top: .25em;
           max-width: none;
-          padding: 1em 0;
         }
         #metadata,
         .mainChangeInfo {
@@ -360,7 +366,9 @@ limitations under the License.
         <div class="headerTitle">
           <gr-change-star
               id="changeStar"
-              change="{{_change}}" hidden$="[[!_loggedIn]]"></gr-change-star>
+              change="{{_change}}"
+              on-toggle-star="_handleToggleStar"
+              hidden$="[[!_loggedIn]]"></gr-change-star>
           <div class="changeStatuses">
             <template is="dom-repeat" items="[[_changeStatuses]]" as="status">
               <gr-change-status
@@ -413,10 +421,10 @@ limitations under the License.
           <gr-change-metadata
               id="metadata"
               change="{{_change}}"
+              account="[[_account]]"
               revision="[[_selectedRevision]]"
               commit-info="[[_commitInfo]]"
               server-config="[[_serverConfig]]"
-              mutable="[[_loggedIn]]"
               parent-is-current="[[_parentIsCurrent]]"
               on-show-reply-dialog="_handleShowReplyDialog">
           </gr-change-metadata>
@@ -523,6 +531,7 @@ limitations under the License.
             files-expanded="[[_filesExpanded]]"
             on-open-diff-prefs="_handleOpenDiffPrefs"
             on-open-download-dialog="_handleOpenDownloadDialog"
+            on-open-upload-help-dialog="_handleOpenUploadHelpDialog"
             on-open-included-in-dialog="_handleOpenIncludedInDialog"
             on-expand-diffs="_expandAllDiffs"
             on-collapse-diffs="_collapseAllDiffs">
@@ -594,6 +603,10 @@ limitations under the License.
           patch-num="[[_patchRange.patchNum]]"
           config="[[_serverConfig.download]]"
           on-close="_handleDownloadDialogClose"></gr-download-dialog>
+    </gr-overlay>
+    <gr-overlay id="uploadHelpOverlay" with-backdrop>
+      <gr-upload-help-dialog
+          on-close="_handleCloseUploadHelpDialog"></gr-upload-help-dialog>
     </gr-overlay>
     <gr-overlay id="includedInOverlay" with-backdrop>
       <gr-included-in-dialog

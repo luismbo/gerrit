@@ -14,11 +14,13 @@
 
 package com.google.gerrit.server.restapi.change;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.gerrit.server.CommentsUtil.COMMENT_INFO_ORDER;
 import static java.util.stream.Collectors.toList;
 
 import com.google.common.base.Strings;
-import com.google.common.collect.FluentIterable;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Streams;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.client.Comment.Range;
 import com.google.gerrit.extensions.client.Side;
@@ -32,9 +34,9 @@ import com.google.gerrit.reviewdb.client.FixReplacement;
 import com.google.gerrit.reviewdb.client.FixSuggestion;
 import com.google.gerrit.reviewdb.client.RobotComment;
 import com.google.gerrit.server.account.AccountLoader;
+import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.inject.Inject;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -70,7 +72,7 @@ class CommentJson {
   }
 
   private abstract class BaseCommentFormatter<F extends Comment, T extends CommentInfo> {
-    public T format(F comment) {
+    public T format(F comment) throws PermissionBackendException {
       AccountLoader loader = fillAccounts ? accountLoaderFactory.create(true) : null;
       T info = toInfo(comment, loader);
       if (loader != null) {
@@ -79,7 +81,7 @@ class CommentJson {
       return info;
     }
 
-    public Map<String, List<T>> format(Iterable<F> comments) {
+    public Map<String, List<T>> format(Iterable<F> comments) throws PermissionBackendException {
       AccountLoader loader = fillAccounts ? accountLoaderFactory.create(true) : null;
 
       Map<String, List<T>> out = new TreeMap<>();
@@ -95,9 +97,7 @@ class CommentJson {
         list.add(o);
       }
 
-      for (List<T> list : out.values()) {
-        Collections.sort(list, COMMENT_INFO_ORDER);
-      }
+      out.values().forEach(l -> l.sort(COMMENT_INFO_ORDER));
 
       if (loader != null) {
         loader.fill();
@@ -105,13 +105,14 @@ class CommentJson {
       return out;
     }
 
-    public List<T> formatAsList(Iterable<F> comments) {
+    public ImmutableList<T> formatAsList(Iterable<F> comments) throws PermissionBackendException {
       AccountLoader loader = fillAccounts ? accountLoaderFactory.create(true) : null;
 
-      List<T> out =
-          FluentIterable.from(comments)
-              .transform(c -> toInfo(c, loader))
-              .toSortedList(COMMENT_INFO_ORDER);
+      ImmutableList<T> out =
+          Streams.stream(comments)
+              .map(c -> toInfo(c, loader))
+              .sorted(COMMENT_INFO_ORDER)
+              .collect(toImmutableList());
 
       if (loader != null) {
         loader.fill();

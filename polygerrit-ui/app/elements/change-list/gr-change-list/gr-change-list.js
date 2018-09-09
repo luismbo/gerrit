@@ -18,10 +18,9 @@
   'use strict';
 
   const NUMBER_FIXED_COLUMNS = 3;
-
   const CLOSED_STATUS = ['MERGED', 'ABANDONED'];
-
   const LABEL_PREFIX_INVALID_PROLOG = 'Invalid-Prolog-Rules-Label-Name--';
+  const MAX_SHORTCUT_CHARS = 5;
 
   Polymer({
     is: 'gr-change-list',
@@ -113,7 +112,8 @@
       'n ]': '_handleNKey',
       'o': '_handleOKey',
       'p [': '_handlePKey',
-      'shift+r': '_handleRKey',
+      'r': '_handleRKey',
+      'shift+r': '_handleShiftRKey',
       's': '_handleSKey',
     },
 
@@ -151,7 +151,7 @@
         this.showNumber = !!(preferences &&
             preferences.legacycid_in_change_table);
         this.visibleChangeTableColumns = preferences.change_table.length > 0 ?
-            preferences.change_table : this.columnNames;
+            this.getVisibleColumns(preferences.change_table) : this.columnNames;
       } else {
         // Not logged in.
         this.showNumber = false;
@@ -185,10 +185,12 @@
       if (labelName.startsWith(LABEL_PREFIX_INVALID_PROLOG)) {
         labelName = labelName.slice(LABEL_PREFIX_INVALID_PROLOG.length);
       }
-      return labelName.split('-').reduce((a, i) => {
-        if (!i) { return a; }
-        return a + i[0].toUpperCase();
-      }, '');
+      return labelName.split('-')
+          .reduce((a, i) => {
+            if (!i) { return a; }
+            return a + i[0].toUpperCase();
+          }, '')
+          .slice(0, MAX_SHORTCUT_CHARS);
     },
 
     _changesChanged(changes) {
@@ -281,6 +283,24 @@
     },
 
     _handleRKey(e) {
+      if (this.shouldSuppressKeyboardShortcut(e) ||
+          this.modifierPressed(e)) { return; }
+
+      e.preventDefault();
+      this._toggleReviewedForIndex(this.selectedIndex);
+    },
+
+    _toggleReviewedForIndex(index) {
+      const changeEls = this._getListItems();
+      if (index >= changeEls.length || !changeEls[index]) {
+        return;
+      }
+
+      const changeEl = changeEls[index];
+      changeEl.toggleReviewed();
+    },
+
+    _handleShiftRKey(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
 
       e.preventDefault();
@@ -306,10 +326,7 @@
       }
 
       const changeEl = changeEls[index];
-      const change = changeEl.change;
-      const newVal = !change.starred;
-      changeEl.set('change.starred', newVal);
-      this.$.restAPI.saveChangeStarred(change._number, newVal);
+      changeEl.$$('gr-change-star').toggleStar();
     },
 
     _changeForIndex(index) {

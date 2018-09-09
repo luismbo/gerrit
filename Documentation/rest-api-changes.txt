@@ -924,10 +924,6 @@ If the topic was deleted the response is "`204 No Content`".
 
 Deletes the topic of a change.
 
-Please note that some proxies prohibit request bodies for DELETE
-requests. In this case, if you want to specify a commit message, use
-link:#set-topic[PUT] to delete the topic.
-
 .Request
 ----
   DELETE /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/topic HTTP/1.0
@@ -2236,17 +2232,9 @@ If the change was already private the response is "`200 OK`".
 Marks the change to be non-private. Note users can only unmark own private
 changes.
 
-A message can be specified in the request body inside a
-link:#private-input[PrivateInput] entity.
-
 .Request
 ----
   DELETE /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/private HTTP/1.0
-  Content-Type: application/json; charset=UTF-8
-
-  {
-    "message": "This is a security fix that must not be public."
-  }
 ----
 
 .Response
@@ -2256,9 +2244,11 @@ link:#private-input[PrivateInput] entity.
 
 If the change was already not private, the response is "`409 Conflict`".
 
-Please note that some proxies prohibit request bodies for DELETE
-requests. In this case, if you want to set a message options, use a
-POST request:
+A message can be specified in the request body inside a
+link:#private-input[PrivateInput] entity. Historically, this method allowed
+a body in the DELETE, but that behavior is
+link:https://www.gerritcodereview.com/releases/2.16.md[deprecated].
+In this case, use a POST request instead:
 
 .Request
 ----
@@ -2277,7 +2267,9 @@ POST request:
 --
 
 Marks a change as ignored. The change will not be shown in the incoming
-reviews dashboard, and email notifications will be suppressed.
+reviews dashboard, and email notifications will be suppressed. Ignoring
+a change does not cause the change's "updated" timestamp to be modified,
+and the owner is not notified.
 
 .Request
 ----
@@ -2483,7 +2475,66 @@ As response a link:#change-message-info[ChangeMessageInfo] entity is returned.
       "username": "jdoe"
      },
      "date": "2013-03-23 21:34:02.419000000",
-     "message": "Change message removed by: Administrator; Reason: spam",
+     "message": "a change message",
+     "_revision_number": 1
+  }
+----
+
+[[delete-change-message]]
+=== Delete Change Message
+--
+'DELETE /changes/link:#change-id[\{change-id\}]/message/link:#change-message-id[\{change-message-id\}' +
+'POST /changes/link:#change-id[\{change-id\}]//message/link:#change-message-id[\{change-message-id\}/delete'
+--
+
+Deletes a change message by replacing the change message with a new message,
+which contains the name of the user who deleted the change message and the
+reason why it was deleted. The reason can be provided in the request body as a
+link:#delete-change-message-input[DeleteChangeMessageInput] entity.
+
+Note that only users with the
+link:access-control.html#capability_administrateServer[Administrate Server]
+global capability are permitted to delete a change message.
+
+To delete a change message, send a DELETE request:
+
+.Request
+----
+  DELETE /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/message/aaee04dcb46bafc8be24d8aa70b3b1beb7df5780 HTTP/1.0
+----
+
+To provide a reason for the deletion, use a POST request:
+
+.Request
+----
+  POST /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/message/aaee04dcb46bafc8be24d8aa70b3b1beb7df5780/delete HTTP/1.0
+  Content-Type: application/json; charset=UTF-8
+
+  {
+    "reason": "spam"
+  }
+----
+
+As response a link:#change-message-info[ChangeMessageInfo] entity is returned that
+describes the updated change message.
+
+.Response
+----
+  HTTP/1.1 200 OK
+  Content-Disposition: attachment
+  Content-Type: application/json; charset=UTF-8
+
+  )]}'
+  {
+    "id": "aaee04dcb46bafc8be24d8aa70b3b1beb7df5780",
+    "author": {
+      "_account_id": 1000096,
+      "name": "John Doe",
+      "email": "john.doe@example.com",
+      "username": "jdoe"
+     },
+     "date": "2013-03-23 21:34:02.419000000",
+     "message": "Change message removed by: Administrator\nReason: spam",
      "_revision_number": 1
   }
 ----
@@ -3130,18 +3181,17 @@ An email will be sent using the "newchange" template.
 
 Deletes a reviewer from a change.
 
-Options can be provided in the request body as a
-link:#delete-reviewer-input[DeleteReviewerInput] entity.
-
 .Request
 ----
   DELETE /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/reviewers/John%20Doe HTTP/1.0
   POST /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/reviewers/John%20Doe/delete HTTP/1.0
 ----
 
-Please note that some proxies prohibit request bodies for DELETE
-requests. In this case, if you want to specify options, use a POST
-request:
+Options can be provided in the request body as a
+link:#delete-reviewer-input[DeleteReviewerInput] entity.
+Historically, this method allowed a body in the DELETE, but that behavior is
+link:https://www.gerritcodereview.com/releases/2.16.md[deprecated].
+In this case, use a POST request instead:
 
 .Request
 ----
@@ -3211,18 +3261,17 @@ The entries in the map are sorted by label name.
 Deletes a single vote from a change. Note, that even when the last vote of
 a reviewer is removed the reviewer itself is still listed on the change.
 
-Options can be provided in the request body as a
-link:#delete-vote-input[DeleteVoteInput] entity.
-
 .Request
 ----
   DELETE /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/reviewers/John%20Doe/votes/Code-Review HTTP/1.0
   POST /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/reviewers/John%20Doe/votes/Code-Review/delete HTTP/1.0
 ----
 
-Please note that some proxies prohibit request bodies for DELETE
-requests. In this case, if you want to specify options, use a POST
-request:
+Options can be provided in the request body as a
+link:#delete-vote-input[DeleteVoteInput] entity.
+Historically, this method allowed a body in the DELETE, but that behavior is
+link:https://www.gerritcodereview.com/releases/2.16.md[deprecated].
+In this case, use a POST request instead:
 
 .Request
 ----
@@ -4585,17 +4634,17 @@ describes the published comment.
 Deletes a published comment of a revision. Instead of deleting the
 whole comment, this endpoint just replaces the comment's message
 with a new message, which contains the name of the user who deletes
-the comment and the reason why it's deleted. The reason can be
-provided in the request body as a
-link:#delete-comment-input[DeleteCommentInput] entity.
+the comment and the reason why it's deleted.
 
 Note that only users with the
 link:access-control.html#capability_administrateServer[Administrate Server]
 global capability are permitted to delete a comment.
 
-Please note that some proxies prohibit request bodies for DELETE
-requests. In this case, if you want to specify options, use a
-POST request:
+Deletion reason can be provided in the request body as a
+link:#delete-comment-input[DeleteCommentInput] entity.
+Historically, this method allowed a body in the DELETE, but that behavior is
+link:https://www.gerritcodereview.com/releases/2.16.md[deprecated].
+In this case, use a POST request instead:
 
 .Request
 ----
@@ -4806,8 +4855,8 @@ Lists the files that were modified, added or deleted in a revision.
   GET /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/revisions/674ac754f91e64a0efb8087e59a176484bd534d1/files/ HTTP/1.0
 ----
 
-As result a map is returned that maps the link:#file-id[file path] to a list of
-link:#file-info[FileInfo] entries. The entries in the map are
+As result a map is returned that maps the link:#file-id[file path] to a
+link:#file-info[FileInfo] entry. The entries in the map are
 sorted by file path.
 
 .Response
@@ -5395,18 +5444,17 @@ deleting the vote (with same label) from a newer patch set by mistake.
 Note, that even when the last vote of a reviewer is removed the reviewer itself
 is still listed on the change.
 
-Options can be provided in the request body as a
-link:#delete-vote-input[DeleteVoteInput] entity.
-
 .Request
 ----
   DELETE /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/revisions/674ac754f91e64a0efb8087e59a176484bd534d1/reviewers/John%20Doe/votes/Code-Review HTTP/1.0
   POST /changes/myProject~master~I8473b95934b5732ac55d26311a706c9c2bde9940/revisions/674ac754f91e64a0efb8087e59a176484bd534d1/reviewers/John%20Doe/votes/Code-Review/delete HTTP/1.0
 ----
 
-Please note that some proxies prohibit request bodies for DELETE
-requests. In this case, if you want to specify options, use a POST
-request:
+Options can be provided in the request body as a
+link:#delete-vote-input[DeleteVoteInput] entity.
+Historically, this method allowed a body in the DELETE, but that behavior is
+link:https://www.gerritcodereview.com/releases/2.16.md[deprecated].
+In this case, use a POST request instead:
 
 .Request
 ----
@@ -5600,8 +5648,9 @@ on that label.
 The time and date describing when the approval was made.
 |`tag`                    |optional|
 Value of the `tag` field from link:#review-input[ReviewInput] set
-while posting the review.
-NOTE: To apply different tags on on different votes/comments multiple
+while posting the review. Votes/comments that contain `tag` with
+'autogenerated:' prefix can be filtered out in the web UI.
+NOTE: To apply different tags on different votes/comments multiple
 invocations of the REST call are required.
 |`post_submit` |not set if `false`|
 If true, this vote was made after the change was submitted.
@@ -5864,8 +5913,9 @@ The link:rest-api.html#timestamp[timestamp] this message was posted.
 |`message`            ||The text left by the user.
 |`tag`                 |optional|
 Value of the `tag` field from link:#review-input[ReviewInput] set
-while posting the review.
-NOTE: To apply different tags on on different votes/comments multiple
+while posting the review. Votes/comments that contain `tag` with
+'autogenerated:' prefix can be filtered out in the web UI.
+NOTE: To apply different tags on different votes/comments multiple
 invocations of the REST call are required.
 |`_revision_number`    |optional|
 Which patchset (if any) generated this message.
@@ -5985,7 +6035,8 @@ comment is deleted.
 |`tag`         |optional, drafts only|
 Value of the `tag` field. Only allowed on link:#create-draft[draft comment] +
 inputs; for published comments, use the `tag` field in +
-link#review-input[ReviewInput]
+link#review-input[ReviewInput]. Votes/comments that contain `tag` with
+'autogenerated:' prefix can be filtered out in the web UI.
 |`unresolved`        |optional|
 Whether or not the comment must be addressed by the user. This value will
 default to false if the comment is an orphan, or the value of the `in_reply_to`
@@ -5996,13 +6047,22 @@ comment if it is supplied.
 === CommentRange
 The `CommentRange` entity describes the range of an inline comment.
 
+The comment range is a range from the start position, specified by `start_line`
+and `start_character`, to the end position, specified by `end_line` and
+`end_character`. The start position is *inclusive* and the end position is
+*exclusive*.
+
+So, a range over part of a line will have `start_line` equal to
+`end_line`; however a range with `end_line` set to 5 and `end_character` equal
+to 0 will not include any characters on line 5,
+
 [options="header",cols="1,^1,5"]
 |===========================
-|Field Name    ||Description
-|`start_line`        ||The start line number of the range. (1-based, inclusive)
-|`start_character`   ||The character position in the start line. (0-based, inclusive)
-|`end_line`          ||The end line number of the range. (1-based, exclusive)
-|`end_character`     ||The character position in the end line. (0-based, exclusive)
+|Field Name          ||Description
+|`start_line`        ||The start line number of the range. (1-based)
+|`start_character`   ||The character position in the start line. (0-based)
+|`end_line`          ||The end line number of the range. (1-based)
+|`end_character`     ||The character position in the end line. (0-based)
 |===========================
 
 [[commit-info]]
@@ -6049,6 +6109,20 @@ If not set, the default is `OWNER` for WIP changes and `ALL` otherwise.
 |`notify_details`|optional|
 Additional information about whom to notify about the update as a map
 of recipient type to link:#notify-info[NotifyInfo] entity.
+|=============================
+
+[[delete-change-message-input]]
+=== DeleteChangeMessageInput
+The `DeleteChangeMessageInput` entity contains the options for deleting a change message.
+
+[options="header",cols="1,^1,5"]
+|=============================
+|Field Name               ||Description
+|`reason`                 |optional|
+The reason why the change message should be deleted. +
+If set, the change message will be replaced with
+"Change message removed by: `name`\nReason: `reason`",
+or just "Change message removed by: `name`." if not set.
 |=============================
 
 [[delete-comment-input]]
@@ -6282,10 +6356,14 @@ The old file path. +
 Only set if the file was renamed or copied.
 |`lines_inserted`|optional|
 Number of inserted lines. +
-Not set for binary files or if no lines were inserted.
+Not set for binary files or if no lines were inserted. +
+An empty last line is not included in the count and hence this number can
+differ by one from details provided in <<#diff-info,DiffInfo>>.
 |`lines_deleted` |optional|
 Number of deleted lines. +
-Not set for binary files or if no lines were deleted.
+Not set for binary files or if no lines were deleted. +
+An empty last line is not included in the count and hence this number can
+differ by one from details provided in <<#diff-info,DiffInfo>>.
 |`size_delta`    ||
 Number of bytes by which the file size increased/decreased.
 |`size`          ||
@@ -6790,8 +6868,8 @@ The message to be added as review comment.
 |`tag`                    |optional|
 Apply this tag to the review comment message, votes, and inline
 comments. Tags may be used by CI or other automated systems to
-distinguish them from human reviews. Comments with specific tag
-values can be filtered out in the web UI.
+distinguish them from human reviews. Votes/comments that contain `tag` with
+'autogenerated:' prefix can be filtered out in the web UI.
 |`labels`                 |optional|
 The votes that should be added to the revision as a map that maps the
 label names to the voting values.

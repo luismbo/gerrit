@@ -24,7 +24,7 @@ import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.Response;
 import com.google.gerrit.extensions.restapi.RestApiException;
-import com.google.gerrit.extensions.restapi.RestCreateView;
+import com.google.gerrit.extensions.restapi.RestCollectionCreateView;
 import com.google.gerrit.extensions.restapi.RestModifyView;
 import com.google.gerrit.extensions.restapi.RestReadView;
 import com.google.gerrit.extensions.restapi.RestView;
@@ -89,7 +89,7 @@ public class StarredChanges
     return new RestReadView<AccountResource>() {
       @Override
       public Object apply(AccountResource self)
-          throws BadRequestException, AuthException, OrmException {
+          throws BadRequestException, AuthException, OrmException, PermissionBackendException {
         QueryChanges query = changes.list();
         query.addQuery("starredby:" + self.getUser().getAccountId().get());
         return query.apply(TopLevelResource.INSTANCE);
@@ -99,7 +99,8 @@ public class StarredChanges
 
   @Singleton
   public static class Create
-      implements RestCreateView<AccountResource, AccountResource.StarredChange, EmptyInput> {
+      implements RestCollectionCreateView<
+          AccountResource, AccountResource.StarredChange, EmptyInput> {
     private final Provider<CurrentUser> self;
     private final ChangesCollection changes;
     private final StarredChangesUtil starredChangesUtil;

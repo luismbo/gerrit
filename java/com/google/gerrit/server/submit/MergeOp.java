@@ -35,6 +35,7 @@ import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.common.data.SubmitRecord;
+import com.google.gerrit.common.data.SubmitRequirement;
 import com.google.gerrit.common.data.SubmitTypeRecord;
 import com.google.gerrit.extensions.api.changes.RecipientType;
 import com.google.gerrit.extensions.api.changes.SubmitInput;
@@ -62,6 +63,8 @@ import com.google.gerrit.server.git.LockFailureException;
 import com.google.gerrit.server.git.MergeTip;
 import com.google.gerrit.server.git.validators.MergeValidationException;
 import com.google.gerrit.server.git.validators.MergeValidators;
+import com.google.gerrit.server.logging.RequestId;
+import com.google.gerrit.server.logging.TraceContext;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.project.NoSuchProjectException;
@@ -76,7 +79,6 @@ import com.google.gerrit.server.update.ChangeContext;
 import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryHelper.ActionType;
 import com.google.gerrit.server.update.UpdateException;
-import com.google.gerrit.server.util.RequestId;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
@@ -315,7 +317,7 @@ public class MergeOp implements AutoCloseable {
           throw new ResourceConflictException("submit rule error: " + record.errorMessage);
 
         case NOT_READY:
-          throw new ResourceConflictException(describeLabels(cd, record.labels));
+          throw new ResourceConflictException(describeNotReady(cd, record));
 
         case FORCED:
         default:
@@ -334,6 +336,21 @@ public class MergeOp implements AutoCloseable {
 
   private static List<SubmitRecord> getSubmitRecords(ChangeData cd, boolean allowClosed) {
     return cd.submitRecords(submitRuleOptions(allowClosed));
+  }
+
+  private static String describeNotReady(ChangeData cd, SubmitRecord record) throws OrmException {
+    List<String> blockingConditions = new ArrayList<>();
+    if (record.labels != null) {
+      blockingConditions.add(describeLabels(cd, record.labels));
+    }
+    if (record.requirements != null) {
+      record
+          .requirements
+          .stream()
+          .map(SubmitRequirement::fallbackText)
+          .forEach(blockingConditions::add);
+    }
+    return Joiner.on("; ").join(blockingConditions);
   }
 
   private static String describeLabels(ChangeData cd, List<SubmitRecord.Label> labels)
@@ -439,78 +456,83 @@ public class MergeOp implements AutoCloseable {
     this.dryrun = dryrun;
     this.caller = caller;
     this.ts = TimeUtil.nowTs();
-    submissionId = RequestId.forChange(change);
     this.db = db;
-    openRepoManager();
+    this.submissionId = RequestId.forChange(change);
 
-    logDebug("Beginning integration of %s", change);
-    try {
-      ChangeSet indexBackedChangeSet =
-          mergeSuperSet.setMergeOpRepoManager(orm).completeChangeSet(db, change, caller);
-      checkState(
-          indexBackedChangeSet.ids().contains(change.getId()),
-          "change %s missing from %s",
-          change.getId(),
-          indexBackedChangeSet);
-      if (indexBackedChangeSet.furtherHiddenChanges()) {
-        throw new AuthException(
-            "A change to be submitted with " + change.getId() + " is not visible");
+    try (TraceContext traceContext =
+        TraceContext.open().addTag(RequestId.Type.SUBMISSION_ID, submissionId)) {
+      openRepoManager();
+
+      logger.atFine().log("Beginning integration of %s", change);
+      try {
+        ChangeSet indexBackedChangeSet =
+            mergeSuperSet.setMergeOpRepoManager(orm).completeChangeSet(db, change, caller);
+        checkState(
+            indexBackedChangeSet.ids().contains(change.getId()),
+            "change %s missing from %s",
+            change.getId(),
+            indexBackedChangeSet);
+        if (indexBackedChangeSet.furtherHiddenChanges()) {
+          throw new AuthException(
+              "A change to be submitted with " + change.getId() + " is not visible");
+        }
+        logger.atFine().log("Calculated to merge %s", indexBackedChangeSet);
+
+        // Reload ChangeSet so that we don't rely on (potentially) stale index data for merging
+        ChangeSet cs = reloadChanges(indexBackedChangeSet);
+
+        // Count cross-project submissions outside of the retry loop. The chance of a single project
+        // failing increases with the number of projects, so the failure count would be inflated if
+        // this metric were incremented inside of integrateIntoHistory.
+        int projects = cs.projects().size();
+        if (projects > 1) {
+          topicMetrics.topicSubmissions.increment();
+        }
+
+        RetryTracker retryTracker = new RetryTracker();
+        retryHelper.execute(
+            updateFactory -> {
+              long attempt = retryTracker.lastAttemptNumber + 1;
+              boolean isRetry = attempt > 1;
+              if (isRetry) {
+                logger.atFine().log("Retrying, attempt #%d; skipping merged changes", attempt);
+                this.ts = TimeUtil.nowTs();
+                openRepoManager();
+              }
+              this.commitStatus = new CommitStatus(cs, isRetry);
+              if (checkSubmitRules) {
+                logger.atFine().log("Checking submit rules and state");
+                checkSubmitRulesAndState(cs, isRetry);
+              } else {
+                logger.atFine().log("Bypassing submit rules");
+                bypassSubmitRules(cs, isRetry);
+              }
+              try {
+                integrateIntoHistory(cs);
+              } catch (IntegrationException e) {
+                logger.atSevere().withCause(e).log("Error from integrateIntoHistory");
+                throw new ResourceConflictException(e.getMessage(), e);
+              }
+              return null;
+            },
+            RetryHelper.options()
+                .listener(retryTracker)
+                // Up to the entire submit operation is retried, including possibly many projects.
+                // Multiply the timeout by the number of projects we're actually attempting to
+                // submit.
+                .timeout(
+                    retryHelper
+                        .getDefaultTimeout(ActionType.CHANGE_UPDATE)
+                        .multipliedBy(cs.projects().size()))
+                .build());
+
+        if (projects > 1) {
+          topicMetrics.topicSubmissionsCompleted.increment();
+        }
+      } catch (IOException e) {
+        // Anything before the merge attempt is an error
+        throw new OrmException(e);
       }
-      logDebug("Calculated to merge %s", indexBackedChangeSet);
-
-      // Reload ChangeSet so that we don't rely on (potentially) stale index data for merging
-      ChangeSet cs = reloadChanges(indexBackedChangeSet);
-
-      // Count cross-project submissions outside of the retry loop. The chance of a single project
-      // failing increases with the number of projects, so the failure count would be inflated if
-      // this metric were incremented inside of integrateIntoHistory.
-      int projects = cs.projects().size();
-      if (projects > 1) {
-        topicMetrics.topicSubmissions.increment();
-      }
-
-      RetryTracker retryTracker = new RetryTracker();
-      retryHelper.execute(
-          updateFactory -> {
-            long attempt = retryTracker.lastAttemptNumber + 1;
-            boolean isRetry = attempt > 1;
-            if (isRetry) {
-              logDebug("Retrying, attempt #%d; skipping merged changes", attempt);
-              this.ts = TimeUtil.nowTs();
-              openRepoManager();
-            }
-            this.commitStatus = new CommitStatus(cs, isRetry);
-            if (checkSubmitRules) {
-              logDebug("Checking submit rules and state");
-              checkSubmitRulesAndState(cs, isRetry);
-            } else {
-              logDebug("Bypassing submit rules");
-              bypassSubmitRules(cs, isRetry);
-            }
-            try {
-              integrateIntoHistory(cs);
-            } catch (IntegrationException e) {
-              logError("Error from integrateIntoHistory", e);
-              throw new ResourceConflictException(e.getMessage(), e);
-            }
-            return null;
-          },
-          RetryHelper.options()
-              .listener(retryTracker)
-              // Up to the entire submit operation is retried, including possibly many projects.
-              // Multiply the timeout by the number of projects we're actually attempting to submit.
-              .timeout(
-                  retryHelper
-                      .getDefaultTimeout(ActionType.CHANGE_UPDATE)
-                      .multipliedBy(cs.projects().size()))
-              .build());
-
-      if (projects > 1) {
-        topicMetrics.topicSubmissionsCompleted.increment();
-      }
-    } catch (IOException e) {
-      // Anything before the merge attempt is an error
-      throw new OrmException(e);
     }
   }
 
@@ -519,7 +541,7 @@ public class MergeOp implements AutoCloseable {
       orm.close();
     }
     orm = ormProvider.get();
-    orm.setContext(db, ts, caller, submissionId);
+    orm.setContext(db, ts, caller);
   }
 
   private ChangeSet reloadChanges(ChangeSet changeSet) {
@@ -565,7 +587,7 @@ public class MergeOp implements AutoCloseable {
   private void integrateIntoHistory(ChangeSet cs)
       throws IntegrationException, RestApiException, UpdateException {
     checkArgument(!cs.furtherHiddenChanges(), "cannot integrate hidden changes into history");
-    logDebug("Beginning merge attempt on %s", cs);
+    logger.atFine().log("Beginning merge attempt on %s", cs);
     Map<Branch.NameKey, BranchBatch> toSubmit = new HashMap<>();
 
     ListMultimap<Branch.NameKey, ChangeData> cbb;
@@ -593,7 +615,6 @@ public class MergeOp implements AutoCloseable {
       batchUpdateFactory.execute(
           orm.batchUpdates(allProjects),
           new SubmitStrategyListener(submitInput, strategies, commitStatus),
-          submissionId,
           dryrun);
     } catch (NoSuchProjectException e) {
       throw new ResourceNotFoundException(e.getMessage());
@@ -707,7 +728,7 @@ public class MergeOp implements AutoCloseable {
       throw new IntegrationException("Failed to determine already accepted commits.", e);
     }
 
-    logDebug("Found %d existing heads", alreadyAccepted.size());
+    logger.atFine().log("Found %d existing heads", alreadyAccepted.size());
     return alreadyAccepted;
   }
 
@@ -721,7 +742,7 @@ public class MergeOp implements AutoCloseable {
 
   private BranchBatch validateChangeList(OpenRepo or, Collection<ChangeData> submitted)
       throws IntegrationException {
-    logDebug("Validating %d changes", submitted.size());
+    logger.atFine().log("Validating %d changes", submitted.size());
     Set<CodeReviewCommit> toSubmit = new LinkedHashSet<>(submitted.size());
     SetMultimap<ObjectId, PatchSet.Id> revisions = getRevisions(or, submitted);
 
@@ -759,7 +780,7 @@ public class MergeOp implements AutoCloseable {
       }
       if (chg.currentPatchSetId() == null) {
         String msg = "Missing current patch set on change";
-        logError(msg + " " + changeId);
+        logger.atSevere().log("%s %s", msg, changeId);
         commitStatus.problem(changeId, msg);
         continue;
       }
@@ -787,19 +808,33 @@ public class MergeOp implements AutoCloseable {
       }
 
       if (!revisions.containsEntry(id, ps.getId())) {
-        // TODO this is actually an error, the branch is gone but we
-        // want to merge the issue. We can't safely do that if the
-        // tip is not reachable.
-        //
+        if (revisions.containsValue(ps.getId())) {
+          // TODO This is actually an error, the patch set ref exists but points to a revision that
+          // is different from the revision that we have stored for the patch set in the change
+          // meta data.
+          commitStatus.logProblem(
+              changeId,
+              "Revision "
+                  + idstr
+                  + " of patch set "
+                  + ps.getPatchSetId()
+                  + " does not match the revision of the patch set ref "
+                  + ps.getId().toRefName());
+          continue;
+        }
+
+        // The patch set ref is not found but we want to merge the change. We can't safely do that
+        // if the patch set ref is missing. In a multi-master setup this can indicate a replication
+        // lag (e.g. the change meta data was already replicated, but the replication of the patch
+        // set ref is still pending).
         commitStatus.logProblem(
             changeId,
-            "Revision "
-                + idstr
-                + " of patch set "
-                + ps.getPatchSetId()
-                + " does not match "
+            "Patch set ref "
                 + ps.getId().toRefName()
-                + " for change");
+                + " not found. Expected patch set ref of "
+                + ps.getPatchSetId()
+                + " to point to revision "
+                + idstr);
         continue;
       }
 
@@ -826,7 +861,7 @@ public class MergeOp implements AutoCloseable {
       commit.add(or.canMergeFlag);
       toSubmit.add(commit);
     }
-    logDebug("Submitting on this run: %s", toSubmit);
+    logger.atFine().log("Submitting on this run: %s", toSubmit);
     return new AutoValue_MergeOp_BranchBatch(submitType, toSubmit);
   }
 
@@ -864,7 +899,7 @@ public class MergeOp implements AutoCloseable {
     try {
       return orm.getRepo(project);
     } catch (NoSuchProjectException e) {
-      logWarn("Project " + project + " no longer exists, abandoning open changes.");
+      logger.atWarning().log("Project %s no longer exists, abandoning open changes.", project);
       abandonAllOpenChangeForDeletedProject(project);
     } catch (IOException e) {
       throw new IntegrationException("Error opening project " + project, e);
@@ -877,7 +912,6 @@ public class MergeOp implements AutoCloseable {
       for (ChangeData cd : queryProvider.get().byProjectOpen(destProject)) {
         try (BatchUpdate bu =
             batchUpdateFactory.create(db, destProject, internalUserFactory.create(), ts)) {
-          bu.setRequestId(submissionId);
           bu.addOp(
               cd.getId(),
               new BatchUpdateOp() {
@@ -906,12 +940,14 @@ public class MergeOp implements AutoCloseable {
           try {
             bu.execute();
           } catch (UpdateException | RestApiException e) {
-            logWarn("Cannot abandon changes for deleted project " + destProject, e);
+            logger.atWarning().withCause(e).log(
+                "Cannot abandon changes for deleted project %s", destProject);
           }
         }
       }
     } catch (OrmException e) {
-      logWarn("Cannot abandon changes for deleted project " + destProject, e);
+      logger.atWarning().withCause(e).log(
+          "Cannot abandon changes for deleted project %s", destProject);
     }
   }
 
@@ -934,29 +970,5 @@ public class MergeOp implements AutoCloseable {
         + p
         + " projects involved; some projects may have submitted successfully, but others may have"
         + " failed";
-  }
-
-  private void logDebug(String msg) {
-    logger.atFine().log(submissionId + msg);
-  }
-
-  private void logDebug(String msg, @Nullable Object arg) {
-    logger.atFine().log(submissionId + msg, arg);
-  }
-
-  private void logWarn(String msg, Throwable t) {
-    logger.atWarning().withCause(t).log("%s%s", submissionId, msg);
-  }
-
-  private void logWarn(String msg) {
-    logger.atWarning().log("%s%s", submissionId, msg);
-  }
-
-  private void logError(String msg, Throwable t) {
-    logger.atSevere().withCause(t).log("%s%s", submissionId, msg);
-  }
-
-  private void logError(String msg) {
-    logError(msg, null);
   }
 }

@@ -155,7 +155,7 @@ public class PatchSetUtil {
     db.patchSets().update(Collections.singleton(ps));
   }
 
-  private void ensurePatchSetMatches(PatchSet.Id psId, ChangeUpdate update) {
+  private static void ensurePatchSetMatches(PatchSet.Id psId, ChangeUpdate update) {
     Change.Id changeId = update.getChange().getId();
     checkArgument(
         psId.getParentKey().equals(changeId),
@@ -181,17 +181,16 @@ public class PatchSetUtil {
   }
 
   /** Check if the current patch set of the change is locked. */
-  public void checkPatchSetNotLocked(ChangeNotes notes, CurrentUser user)
+  public void checkPatchSetNotLocked(ChangeNotes notes)
       throws OrmException, IOException, ResourceConflictException {
-    if (isPatchSetLocked(notes, user)) {
+    if (isPatchSetLocked(notes)) {
       throw new ResourceConflictException(
           String.format("The current patch set of change %s is locked", notes.getChangeId()));
     }
   }
 
   /** Is the current patch set locked against state changes? */
-  public boolean isPatchSetLocked(ChangeNotes notes, CurrentUser user)
-      throws OrmException, IOException {
+  public boolean isPatchSetLocked(ChangeNotes notes) throws OrmException, IOException {
     Change change = notes.getChange();
     if (change.getStatus() == Change.Status.MERGED) {
       return false;
@@ -202,9 +201,8 @@ public class PatchSetUtil {
 
     ApprovalsUtil approvalsUtil = approvalsUtilProvider.get();
     for (PatchSetApproval ap :
-        approvalsUtil.byPatchSet(
-            dbProvider.get(), notes, user, change.currentPatchSetId(), null, null)) {
-      LabelType type = projectState.getLabelTypes(notes, user).byLabel(ap.getLabel());
+        approvalsUtil.byPatchSet(dbProvider.get(), notes, change.currentPatchSetId(), null, null)) {
+      LabelType type = projectState.getLabelTypes(notes).byLabel(ap.getLabel());
       if (type != null
           && ap.getValue() == 1
           && type.getFunction() == LabelFunction.PATCH_SET_LOCK) {

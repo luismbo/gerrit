@@ -63,6 +63,7 @@ public class EventRecorder {
 
     eventListenerRegistration =
         eventListeners.add(
+            "gerrit",
             new UserScopedEventListener() {
               @Override
               public void onEvent(Event e) {
@@ -135,6 +136,10 @@ public class EventRecorder {
             .toList();
     assertThat(events).hasSize(expectedSize);
     return events;
+  }
+
+  public void assertNoRefUpdatedEvents(String project, String branch) throws Exception {
+    getRefUpdatedEvents(project, branch, 0);
   }
 
   public void assertRefUpdatedEvents(String project, String branch, String... expected)

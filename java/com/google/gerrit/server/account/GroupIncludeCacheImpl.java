@@ -112,6 +112,7 @@ public class GroupIncludeCacheImpl implements GroupIncludeCache {
   @Override
   public void evictGroupsWithMember(Account.Id memberId) {
     if (memberId != null) {
+      logger.atFine().log("Evict groups with member %d", memberId.get());
       groupsWithMember.invalidate(memberId);
     }
   }
@@ -119,9 +120,11 @@ public class GroupIncludeCacheImpl implements GroupIncludeCache {
   @Override
   public void evictParentGroupsOf(AccountGroup.UUID groupId) {
     if (groupId != null) {
+      logger.atFine().log("Evict parent groups of %s", groupId.get());
       parentGroups.invalidate(groupId);
 
       if (!AccountGroup.isInternalGroup(groupId)) {
+        logger.atFine().log("Evict external group %s", groupId.get());
         external.invalidate(EXTERNAL_NAME);
       }
     }
@@ -148,6 +151,7 @@ public class GroupIncludeCacheImpl implements GroupIncludeCache {
 
     @Override
     public ImmutableSet<AccountGroup.UUID> load(Account.Id memberId) throws OrmException {
+      logger.atFine().log("Loading groups with member %s", memberId);
       return groupQueryProvider
           .get()
           .byMember(memberId)
@@ -168,6 +172,7 @@ public class GroupIncludeCacheImpl implements GroupIncludeCache {
 
     @Override
     public ImmutableList<AccountGroup.UUID> load(AccountGroup.UUID key) throws OrmException {
+      logger.atFine().log("Loading parent groups of %s", key);
       return groupQueryProvider
           .get()
           .bySubgroup(key)
@@ -187,6 +192,7 @@ public class GroupIncludeCacheImpl implements GroupIncludeCache {
 
     @Override
     public ImmutableList<AccountGroup.UUID> load(String key) throws Exception {
+      logger.atFine().log("Loading all external groups");
       return groups.getExternalGroups().collect(toImmutableList());
     }
   }

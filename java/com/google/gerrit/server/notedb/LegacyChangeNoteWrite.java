@@ -15,59 +15,49 @@
 package com.google.gerrit.server.notedb;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.gerrit.server.CommentsUtil.COMMENT_ORDER;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ListMultimap;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Comment;
 import com.google.gerrit.server.GerritPersonIdent;
-import com.google.gerrit.server.account.AccountCache;
-import com.google.gerrit.server.account.AccountState;
+import com.google.gerrit.server.UsedAt;
 import com.google.gerrit.server.config.GerritServerId;
 import com.google.inject.Inject;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.sql.Timestamp;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Date;
 import java.util.List;
-import java.util.Optional;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.util.QuotedString;
 
 public class LegacyChangeNoteWrite {
 
-  private final AccountCache accountCache;
   private final PersonIdent serverIdent;
   private final String serverId;
 
   @Inject
   public LegacyChangeNoteWrite(
-      AccountCache accountCache,
-      @GerritPersonIdent PersonIdent serverIdent,
-      @GerritServerId String serverId) {
-    this.accountCache = accountCache;
+      @GerritPersonIdent PersonIdent serverIdent, @GerritServerId String serverId) {
     this.serverIdent = serverIdent;
     this.serverId = serverId;
   }
 
   public PersonIdent newIdent(Account.Id authorId, Date when, PersonIdent serverIdent) {
-    Optional<Account> author = accountCache.get(authorId).map(AccountState::getAccount);
     return new PersonIdent(
-        author.map(Account::getName).orElseGet(() -> Account.getName(authorId)),
-        authorId.get() + "@" + serverId,
-        when,
-        serverIdent.getTimeZone());
+        authorId.toString(), authorId.get() + "@" + serverId, when, serverIdent.getTimeZone());
   }
 
   @VisibleForTesting
   public PersonIdent newIdent(Account author, Date when, PersonIdent serverIdent) {
     return new PersonIdent(
-        author.getName(), author.getId().get() + "@" + serverId, when, serverIdent.getTimeZone());
+        author.toString(), author.getId().get() + "@" + serverId, when, serverIdent.getTimeZone());
   }
 
   public String getServerId() {
@@ -91,13 +81,13 @@ public class LegacyChangeNoteWrite {
    *     the same side.
    * @param out output stream to write to.
    */
-  void buildNote(ListMultimap<Integer, Comment> comments, OutputStream out) {
+  @UsedAt(UsedAt.Project.GOOGLE)
+  public void buildNote(ListMultimap<Integer, Comment> comments, OutputStream out) {
     if (comments.isEmpty()) {
       return;
     }
 
-    List<Integer> psIds = new ArrayList<>(comments.keySet());
-    Collections.sort(psIds);
+    ImmutableList<Integer> psIds = comments.keySet().stream().sorted().collect(toImmutableList());
 
     OutputStreamWriter streamWriter = new OutputStreamWriter(out, UTF_8);
     try (PrintWriter writer = new PrintWriter(streamWriter)) {

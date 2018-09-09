@@ -33,13 +33,16 @@
 
     _configChanged(config) {
       const plugins = config.plugin;
-      const htmlPlugins = plugins.html_resource_paths || [];
+      const htmlPlugins = (plugins.html_resource_paths || [])
+          .map(p => this._urlFor(p))
+          .filter(p => !Gerrit._isPluginPreloaded(p));
       const jsPlugins =
-          this._handleMigrations(plugins.js_resource_paths || [], htmlPlugins);
-      const defaultTheme = config.default_theme;
+          this._handleMigrations(plugins.js_resource_paths || [], htmlPlugins)
+          .map(p => this._urlFor(p))
+          .filter(p => !Gerrit._isPluginPreloaded(p));
+      const defaultTheme = this._urlFor(config.default_theme);
       const pluginsPending =
-          [].concat(jsPlugins, htmlPlugins, defaultTheme || []).map(
-              p => this._urlFor(p));
+          [].concat(jsPlugins, htmlPlugins, defaultTheme || []);
       Gerrit._setPluginsPending(pluginsPending);
       if (defaultTheme) {
         // Make theme first to be first to load.
@@ -95,8 +98,12 @@
     },
 
     _urlFor(pathOrUrl) {
-      if (pathOrUrl.startsWith('http')) {
-        // Plugins are loaded from another domain.
+      if (!pathOrUrl) {
+        return pathOrUrl;
+      }
+      if (pathOrUrl.startsWith('preloaded:') ||
+          pathOrUrl.startsWith('http')) {
+        // Plugins are loaded from another domain or preloaded.
         return pathOrUrl;
       }
       if (!pathOrUrl.startsWith('/')) {

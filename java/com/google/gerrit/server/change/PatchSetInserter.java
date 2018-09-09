@@ -273,12 +273,7 @@ public class PatchSetInserter implements BatchUpdateOp {
     change.setCurrentPatchSet(patchSetInfo);
     if (copyApprovals) {
       approvalCopier.copyInReviewDb(
-          db,
-          ctx.getNotes(),
-          ctx.getUser(),
-          patchSet,
-          ctx.getRevWalk(),
-          ctx.getRepoView().getConfig());
+          db, ctx.getNotes(), patchSet, ctx.getRevWalk(), ctx.getRepoView().getConfig());
     }
     if (changeMessage != null) {
       cmUtil.addChangeMessage(db, update, changeMessage);
@@ -314,7 +309,7 @@ public class PatchSetInserter implements BatchUpdateOp {
       throws AuthException, ResourceConflictException, IOException, PermissionBackendException,
           OrmException {
     // Not allowed to create a new patch set if the current patch set is locked.
-    psUtil.checkPatchSetNotLocked(origNotes, ctx.getUser());
+    psUtil.checkPatchSetNotLocked(origNotes);
 
     if (checkAddPatchSetPermission) {
       permissionBackend
@@ -327,9 +322,6 @@ public class PatchSetInserter implements BatchUpdateOp {
     if (!validate) {
       return;
     }
-
-    PermissionBackend.ForRef perm =
-        permissionBackend.user(ctx.getUser()).ref(origNotes.getChange().getDest());
 
     String refName = getPatchSetId().toRefName();
     try (CommitReceivedEvent event =
@@ -345,7 +337,7 @@ public class PatchSetInserter implements BatchUpdateOp {
             ctx.getIdentifiedUser())) {
       commitValidatorsFactory
           .forGerritCommits(
-              perm,
+              permissionBackend.user(ctx.getUser()).project(ctx.getProject()),
               origNotes.getChange().getDest(),
               ctx.getIdentifiedUser(),
               new NoSshInfo(),

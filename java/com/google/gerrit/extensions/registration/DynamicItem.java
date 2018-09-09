@@ -14,6 +14,7 @@
 
 package com.google.gerrit.extensions.registration;
 
+import com.google.gerrit.common.Nullable;
 import com.google.inject.Binder;
 import com.google.inject.Key;
 import com.google.inject.Provider;
@@ -34,17 +35,6 @@ import java.util.concurrent.atomic.AtomicReference;
  * exception is thrown.
  */
 public class DynamicItem<T> {
-  /** Pair of provider implementation and plugin providing it. */
-  static class NamedProvider<T> {
-    final Provider<T> impl;
-    final String pluginName;
-
-    NamedProvider(Provider<T> provider, String pluginName) {
-      this.impl = provider;
-      this.pluginName = pluginName;
-    }
-  }
-
   /**
    * Declare a singleton {@code DynamicItem<T>} with a binder.
    *
@@ -88,7 +78,8 @@ public class DynamicItem<T> {
    * @param item item to store.
    */
   public static <T> DynamicItem<T> itemOf(Class<T> member, T item) {
-    return new DynamicItem<>(keyFor(TypeLiteral.get(member)), Providers.of(item), "gerrit");
+    return new DynamicItem<>(
+        keyFor(TypeLiteral.get(member)), Providers.of(item), PluginName.GERRIT);
   }
 
   @SuppressWarnings("unchecked")
@@ -137,9 +128,23 @@ public class DynamicItem<T> {
    * @return the configured item instance; null if no implementation has been bound to the item.
    *     This is common if no plugin registered an implementation for the type.
    */
+  @Nullable
   public T get() {
     NamedProvider<T> item = ref.get();
     return item != null ? item.impl.get() : null;
+  }
+
+  /**
+   * Get the name of the plugin that has bound the configured item, or null.
+   *
+   * @return the name of the plugin that has bound the configured item; null if no implementation
+   *     has been bound to the item. This is common if no plugin registered an implementation for
+   *     the type.
+   */
+  @Nullable
+  public String getPluginName() {
+    NamedProvider<T> item = ref.get();
+    return item != null ? item.pluginName : null;
   }
 
   /**
@@ -165,7 +170,7 @@ public class DynamicItem<T> {
     NamedProvider<T> old = null;
     while (!ref.compareAndSet(old, item)) {
       old = ref.get();
-      if (old != null && !"gerrit".equals(old.pluginName)) {
+      if (old != null && !PluginName.GERRIT.equals(old.pluginName)) {
         throw new ProvisionException(
             String.format(
                 "%s already provided by %s, ignoring plugin %s",
@@ -197,7 +202,9 @@ public class DynamicItem<T> {
     NamedProvider<T> old = null;
     while (!ref.compareAndSet(old, item)) {
       old = ref.get();
-      if (old != null && !"gerrit".equals(old.pluginName) && !pluginName.equals(old.pluginName)) {
+      if (old != null
+          && !PluginName.GERRIT.equals(old.pluginName)
+          && !pluginName.equals(old.pluginName)) {
         // We allow to replace:
         // 1. Gerrit core items, e.g. websession cache
         //    can be replaced by plugin implementation
@@ -233,6 +240,7 @@ public class DynamicItem<T> {
     }
 
     @Override
+    @Nullable
     public ReloadableHandle replace(Key<T> newKey, Provider<T> newItem) {
       NamedProvider<T> n = new NamedProvider<>(newItem, item.pluginName);
       if (ref.compareAndSet(item, n)) {

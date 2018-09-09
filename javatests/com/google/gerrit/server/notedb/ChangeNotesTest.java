@@ -35,6 +35,7 @@ import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.common.data.SubmitRecord;
+import com.google.gerrit.mail.Address;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
@@ -50,9 +51,8 @@ import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.ReviewerSet;
 import com.google.gerrit.server.config.GerritServerId;
-import com.google.gerrit.server.mail.Address;
+import com.google.gerrit.server.logging.RequestId;
 import com.google.gerrit.server.notedb.ChangeNotesCommit.ChangeNotesRevWalk;
-import com.google.gerrit.server.util.RequestId;
 import com.google.gerrit.testing.TestChanges;
 import com.google.gerrit.testing.TestTimeUtil;
 import com.google.gwtorm.server.OrmException;
@@ -691,7 +691,7 @@ public class ChangeNotesTest extends AbstractChangeNotesTest {
     try (RevWalk rw = new RevWalk(repo)) {
       RevCommit commit = rw.parseCommit(update.getResult());
       rw.parseBody(commit);
-      String strIdent = otherUser.getName() + " <" + otherUserId + "@" + serverId + ">";
+      String strIdent = "Gerrit User " + otherUserId + " <" + otherUserId + "@" + serverId + ">";
       assertThat(commit.getFullMessage()).contains("Assignee: " + strIdent);
     }
   }

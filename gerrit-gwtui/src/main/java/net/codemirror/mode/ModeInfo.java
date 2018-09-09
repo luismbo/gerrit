@@ -14,6 +14,8 @@
 
 package net.codemirror.mode;
 
+import static java.util.Comparator.comparing;
+
 import com.google.gerrit.client.rpc.NativeMap;
 import com.google.gerrit.client.rpc.Natives;
 import com.google.gwt.core.client.JavaScriptObject;
@@ -21,8 +23,6 @@ import com.google.gwt.core.client.JsArray;
 import com.google.gwt.core.client.JsArrayString;
 import com.google.gwt.resources.client.DataResource;
 import com.google.gwt.safehtml.shared.SafeUri;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -242,14 +242,7 @@ public class ModeInfo extends JavaScriptObject {
         byMime.put(m.mode(), m);
       }
     }
-    Collections.sort(
-        Natives.asList(filtered),
-        new Comparator<ModeInfo>() {
-          @Override
-          public int compare(ModeInfo a, ModeInfo b) {
-            return a.name().toLowerCase().compareTo(b.name().toLowerCase());
-          }
-        });
+    Natives.asList(filtered).sort(comparing(m -> m.name().toLowerCase()));
     setAll(filtered);
   }
 

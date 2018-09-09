@@ -132,6 +132,8 @@ limitations under the License.
           'Some-Special-Label-7'), 'SSL7');
       assert.equal(element._computeLabelShortcut('--Too----many----dashes---'),
           'TMD');
+      assert.equal(element._computeLabelShortcut(
+          'Really-rather-entirely-too-long-of-a-label-name'), 'RRETL');
     });
 
     test('colspans', () => {
@@ -308,7 +310,7 @@ limitations under the License.
             'Status',
             'Owner',
             'Assignee',
-            'Project',
+            'Repo',
             'Branch',
             'Updated',
             'Size',
@@ -347,10 +349,10 @@ limitations under the License.
         flushAsynchronousOperations();
       });
 
-      test('all columns except project visible', () => {
+      test('all columns except repo visible', () => {
         for (const column of element.changeTableColumns) {
           const elementClass = '.' + column.toLowerCase();
-          if (column === 'Project') {
+          if (column === 'Repo') {
             assert.isTrue(element.$$(elementClass).hidden);
           } else {
             assert.isFalse(element.$$(elementClass).hidden);
@@ -449,6 +451,14 @@ limitations under the License.
       MockInteractions.pressAndReleaseKeyOn(element, 13); // 'enter'
       assert.deepEqual(navStub.lastCall.args[0], {_number: 4},
           'Should navigate to /c/4/');
+
+      MockInteractions.pressAndReleaseKeyOn(element, 82); // 'r'
+      const change = element._changeForIndex(element.selectedIndex);
+      assert.equal(change.reviewed, true,
+          'Should mark change as reviewed');
+      MockInteractions.pressAndReleaseKeyOn(element, 82); // 'r'
+      assert.equal(change.reviewed, false,
+          'Should mark change as unreviewed');
     });
 
     test('highlight attribute is updated correctly', () => {

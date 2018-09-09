@@ -40,13 +40,13 @@ import com.google.gerrit.reviewdb.client.BooleanProjectConfig;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
-import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.account.CapabilityCollection;
 import com.google.gerrit.server.config.AllProjectsName;
 import com.google.gerrit.server.config.AllUsersName;
 import com.google.gerrit.server.config.SitePaths;
 import com.google.gerrit.server.git.BranchOrderSection;
 import com.google.gerrit.server.git.GitRepositoryManager;
+import com.google.gerrit.server.git.TransferConfig;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.inject.Inject;
 import com.google.inject.assistedinject.Assisted;
@@ -63,6 +63,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.Ref;
@@ -87,6 +88,7 @@ public class ProjectState {
   private final ProjectConfig config;
   private final Map<String, ProjectLevelConfig> configs;
   private final Set<AccountGroup.UUID> localOwners;
+  private final long globalMaxObjectSizeLimit;
 
   /** Last system time the configuration's revision was examined. */
   private volatile long lastCheckGeneration;
@@ -94,6 +96,8 @@ public class ProjectState {
   /** Local access sections, wrapped in SectionMatchers for faster evaluation. */
   private volatile List<SectionMatcher> localAccessSections;
 
+  // TODO(dborowitz): Delete when the GWT UI gets deleted; in the meantime, don't bother with any
+  // refactoring.
   /** Theme information loaded from site_path/themes. */
   private volatile ThemeInfo theme;
 
@@ -105,14 +109,15 @@ public class ProjectState {
 
   @Inject
   public ProjectState(
-      final SitePaths sitePaths,
-      final ProjectCache projectCache,
-      final AllProjectsName allProjectsName,
-      final AllUsersName allUsersName,
-      final GitRepositoryManager gitMgr,
-      final List<CommentLinkInfo> commentLinks,
-      final CapabilityCollection.Factory limitsFactory,
-      @Assisted final ProjectConfig config) {
+      SitePaths sitePaths,
+      ProjectCache projectCache,
+      AllProjectsName allProjectsName,
+      AllUsersName allUsersName,
+      GitRepositoryManager gitMgr,
+      List<CommentLinkInfo> commentLinks,
+      CapabilityCollection.Factory limitsFactory,
+      TransferConfig transferConfig,
+      @Assisted ProjectConfig config) {
     this.sitePaths = sitePaths;
     this.projectCache = projectCache;
     this.isAllProjects = config.getProject().getNameKey().equals(allProjectsName);
@@ -126,6 +131,7 @@ public class ProjectState {
         isAllProjects
             ? limitsFactory.create(config.getAccessSection(AccessSection.GLOBAL_CAPABILITIES))
             : null;
+    this.globalMaxObjectSizeLimit = transferConfig.getMaxObjectSizeLimit();
 
     if (isAllProjects && !Permission.canBeOnAllProjects(AccessSection.ALL, Permission.OWNER)) {
       localOwners = Collections.emptySet();
@@ -223,7 +229,7 @@ public class ProjectState {
 
     ProjectLevelConfig cfg = new ProjectLevelConfig(fileName, this);
     try (Repository git = gitMgr.openRepository(getNameKey())) {
-      cfg.load(git, config.getRevision());
+      cfg.load(getNameKey(), git, config.getRevision());
     } catch (IOException | ConfigInvalidException e) {
       logger.atWarning().withCause(e).log("Failed to load %s for %s", fileName, getName());
     }
@@ -256,6 +262,15 @@ public class ProjectState {
       throw new ResourceConflictException(
           "project state " + getProject().getState().name() + " does not permit write");
     }
+  }
+
+  public long getEffectiveMaxObjectSizeLimit() {
+    long local = config.getMaxObjectSizeLimit();
+    if (globalMaxObjectSizeLimit > 0 && local > 0) {
+      return Math.min(globalMaxObjectSizeLimit, local);
+    }
+    // zero means "no limit", in this case the max is more limiting
+    return Math.max(globalMaxObjectSizeLimit, local);
   }
 
   /** Get the sections that pertain only to this project. */
@@ -394,13 +409,13 @@ public class ProjectState {
     return labelTypes;
   }
 
-  /** All available label types for this change and user. */
-  public LabelTypes getLabelTypes(ChangeNotes notes, CurrentUser user) {
-    return getLabelTypes(notes.getChange().getDest(), user);
+  /** All available label types for this change. */
+  public LabelTypes getLabelTypes(ChangeNotes notes) {
+    return getLabelTypes(notes.getChange().getDest());
   }
 
-  /** All available label types for this branch and user. */
-  public LabelTypes getLabelTypes(Branch.NameKey destination, CurrentUser user) {
+  /** All available label types for this branch. */
+  public LabelTypes getLabelTypes(Branch.NameKey destination) {
     List<LabelType> all = getLabelTypes().getLabelTypes();
 
     List<LabelType> r = Lists.newArrayListWithCapacity(all.size());
@@ -410,7 +425,15 @@ public class ProjectState {
         r.add(l);
       } else {
         for (String refPattern : refs) {
-          if (RefConfigSection.isValid(refPattern) && match(destination, refPattern, user)) {
+          if (refPattern.contains("${")) {
+            logger.atWarning().log(
+                "Ref pattern for label %s in project %s contains illegal expanded parameters: %s."
+                    + " Ref pattern will be ignored.",
+                l, getName(), refPattern);
+            continue;
+          }
+
+          if (RefConfigSection.isValid(refPattern) && match(destination, refPattern)) {
             r.add(l);
             break;
           }
@@ -531,7 +554,11 @@ public class ProjectState {
   }
 
   public ProjectData toProjectData() {
-    return new ProjectData(getProject(), parents().transform(s -> s.getProject().getNameKey()));
+    ProjectData project = null;
+    for (ProjectState state : treeInOrder()) {
+      project = new ProjectData(state.getProject(), Optional.ofNullable(project));
+    }
+    return project;
   }
 
   private String readFile(Path p) throws IOException {
@@ -558,7 +585,7 @@ public class ProjectState {
     return new LabelTypes(Collections.unmodifiableList(all));
   }
 
-  private boolean match(Branch.NameKey destination, String refPattern, CurrentUser user) {
-    return RefPatternMatcher.getMatcher(refPattern).match(destination.get(), user);
+  private boolean match(Branch.NameKey destination, String refPattern) {
+    return RefPatternMatcher.getMatcher(refPattern).match(destination.get(), null);
   }
 }

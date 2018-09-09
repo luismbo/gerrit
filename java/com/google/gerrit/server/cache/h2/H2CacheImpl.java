@@ -25,8 +25,8 @@ import com.google.common.flogger.FluentLogger;
 import com.google.common.hash.BloomFilter;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.TimeUtil;
-import com.google.gerrit.server.cache.CacheSerializer;
 import com.google.gerrit.server.cache.PersistentCache;
+import com.google.gerrit.server.cache.serialize.CacheSerializer;
 import com.google.inject.TypeLiteral;
 import java.io.IOException;
 import java.io.InvalidClassException;
@@ -48,7 +48,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import org.h2.jdbc.JdbcSQLException;
 
 /**
  * Hybrid in-memory and database backed cache built on H2.
@@ -236,6 +235,8 @@ public class H2CacheImpl<K, V> extends AbstractLoadingCache<K, V> implements Per
 
     @Override
     public ValueHolder<V> load(K key) throws Exception {
+      logger.atFine().log("Loading value for %s from cache", key);
+
       if (store.mightContain(key)) {
         ValueHolder<V> h = store.getIfPresent(key);
         if (h != null) {
@@ -341,8 +342,10 @@ public class H2CacheImpl<K, V> extends AbstractLoadingCache<K, V> implements Per
               b.put(keyType.get(r, 1));
             }
           }
-        } catch (JdbcSQLException e) {
-          if (e.getCause() instanceof InvalidClassException) {
+        } catch (Exception e) {
+          if (Throwables.getCausalChain(e)
+              .stream()
+              .anyMatch(InvalidClassException.class::isInstance)) {
             // If deserialization failed using default Java serialization, this means we are using
             // the old serialVersionUID-based invalidation strategy. In that case, authors are
             // most likely bumping serialVersionUID rather than using the new versioning in the
@@ -531,8 +534,11 @@ public class H2CacheImpl<K, V> extends AbstractLoadingCache<K, V> implements Per
         try (PreparedStatement ps = c.conn.prepareStatement("DELETE FROM data WHERE version!=?")) {
           ps.setInt(1, version);
           int oldEntries = ps.executeUpdate();
-          logger.atInfo().log(
-              "Pruned %d entries not matching version %d from cache %s", oldEntries, version, url);
+          if (oldEntries > 0) {
+            logger.atInfo().log(
+                "Pruned %d entries not matching version %d from cache %s",
+                oldEntries, version, url);
+          }
         }
         try (Statement s = c.conn.createStatement()) {
           // Compute size without restricting to version (although obsolete data was just pruned

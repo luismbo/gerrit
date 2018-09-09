@@ -32,8 +32,7 @@ DEPS = [
     "//lib/gwt:w3c-css-sac",
     "//lib/jetty:servlets",
     "//lib/prolog:compiler-lib",
-    # TODO(davido): I do not understand why it must be on the Eclipse classpath
-    #'//Documentation:index',
+    "//proto:reviewdb_java_proto",
 ]
 
 java_library(

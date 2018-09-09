@@ -22,11 +22,6 @@ public class GroupReference implements Comparable<GroupReference> {
 
   private static final String PREFIX = "group ";
 
-  /** @return a new reference to the given group description. */
-  public static GroupReference forGroup(AccountGroup group) {
-    return new GroupReference(group.getGroupUUID(), group.getName());
-  }
-
   public static GroupReference forGroup(GroupDescription.Basic group) {
     return new GroupReference(group.getGroupUUID(), group.getName());
   }
@@ -48,16 +43,23 @@ public class GroupReference implements Comparable<GroupReference> {
 
   protected GroupReference() {}
 
-  public GroupReference(AccountGroup.UUID uuid, String name) {
+  /**
+   * Create a group reference.
+   *
+   * @param uuid UUID of the group, may be {@code null} if the group name couldn't be resolved
+   * @param name the group name, must not be {@code null}
+   */
+  public GroupReference(@Nullable AccountGroup.UUID uuid, String name) {
     setUUID(uuid);
     setName(name);
   }
 
+  @Nullable
   public AccountGroup.UUID getUUID() {
     return uuid != null ? new AccountGroup.UUID(uuid) : null;
   }
 
-  public void setUUID(AccountGroup.UUID newUUID) {
+  public void setUUID(@Nullable AccountGroup.UUID newUUID) {
     uuid = newUUID != null ? newUUID.get() : null;
   }
 
@@ -66,6 +68,9 @@ public class GroupReference implements Comparable<GroupReference> {
   }
 
   public void setName(String newName) {
+    if (newName == null) {
+      throw new NullPointerException();
+    }
     this.name = newName;
   }
 
@@ -75,7 +80,11 @@ public class GroupReference implements Comparable<GroupReference> {
   }
 
   private static String uuid(GroupReference a) {
-    return a.getUUID() != null ? a.getUUID().get() : "?";
+    if (a.getUUID() != null && a.getUUID().get() != null) {
+      return a.getUUID().get();
+    }
+
+    return "?";
   }
 
   @Override

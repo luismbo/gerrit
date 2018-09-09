@@ -15,8 +15,6 @@
 package com.google.gerrit.server.restapi.change;
 
 import static com.google.gerrit.server.change.ChangeEditResource.CHANGE_EDIT_KIND;
-import static com.google.gerrit.server.change.ChangeEditResource.CHANGE_EDIT_PUBLISH_KIND;
-import static com.google.gerrit.server.change.ChangeEditResource.CHANGE_EDIT_REBASE_KIND;
 import static com.google.gerrit.server.change.ChangeMessageResource.CHANGE_MESSAGE_KIND;
 import static com.google.gerrit.server.change.ChangeResource.CHANGE_KIND;
 import static com.google.gerrit.server.change.CommentResource.COMMENT_KIND;
@@ -67,11 +65,10 @@ public class Module extends RestApiModule {
     DynamicMap.mapOf(binder(), REVIEWER_KIND);
     DynamicMap.mapOf(binder(), REVISION_KIND);
     DynamicMap.mapOf(binder(), CHANGE_EDIT_KIND);
-    DynamicMap.mapOf(binder(), CHANGE_EDIT_PUBLISH_KIND);
-    DynamicMap.mapOf(binder(), CHANGE_EDIT_REBASE_KIND);
     DynamicMap.mapOf(binder(), VOTE_KIND);
     DynamicMap.mapOf(binder(), CHANGE_MESSAGE_KIND);
 
+    postOnCollection(CHANGE_KIND).to(CreateChange.class);
     get(CHANGE_KIND).to(GetChange.class);
     post(CHANGE_KIND, "merge").to(CreateMergePatchSet.class);
     get(CHANGE_KIND, "detail").to(GetDetail.class);
@@ -112,9 +109,9 @@ public class Module extends RestApiModule {
     post(CHANGE_KIND, "ready").to(SetReadyForReview.class);
     put(CHANGE_KIND, "message").to(PutMessage.class);
 
-    post(CHANGE_KIND, "reviewers").to(PostReviewers.class);
     get(CHANGE_KIND, "suggest_reviewers").to(SuggestChangeReviewers.class);
     child(CHANGE_KIND, "reviewers").to(Reviewers.class);
+    postOnCollection(REVIEWER_KIND).to(PostReviewers.class);
     get(REVIEWER_KIND).to(GetReviewer.class);
     delete(REVIEWER_KIND).to(DeleteReviewer.class);
     post(REVIEWER_KIND, "delete").to(DeleteReviewer.class);
@@ -170,9 +167,11 @@ public class Module extends RestApiModule {
 
     child(CHANGE_KIND, "edit").to(ChangeEdits.class);
     create(CHANGE_EDIT_KIND).to(ChangeEdits.Create.class);
-    delete(CHANGE_KIND, "edit").to(DeleteChangeEdit.class);
-    child(CHANGE_KIND, "edit:publish").to(PublishChangeEdit.class);
-    child(CHANGE_KIND, "edit:rebase").to(RebaseChangeEdit.class);
+    deleteMissing(CHANGE_EDIT_KIND).to(ChangeEdits.DeleteFile.class);
+    postOnCollection(CHANGE_EDIT_KIND).to(ChangeEdits.Post.class);
+    deleteOnCollection(CHANGE_EDIT_KIND).to(DeleteChangeEdit.class);
+    post(CHANGE_KIND, "edit:publish").to(PublishChangeEdit.class);
+    post(CHANGE_KIND, "edit:rebase").to(RebaseChangeEdit.class);
     put(CHANGE_KIND, "edit:message").to(ChangeEdits.EditMessage.class);
     get(CHANGE_KIND, "edit:message").to(ChangeEdits.GetMessage.class);
     put(CHANGE_EDIT_KIND, "/").to(ChangeEdits.Put.class);
@@ -183,9 +182,10 @@ public class Module extends RestApiModule {
 
     child(CHANGE_KIND, "messages").to(ChangeMessages.class);
     get(CHANGE_MESSAGE_KIND).to(GetChangeMessage.class);
+    delete(CHANGE_MESSAGE_KIND).to(DeleteChangeMessage.DefaultDeleteChangeMessage.class);
+    post(CHANGE_MESSAGE_KIND, "delete").to(DeleteChangeMessage.class);
 
     factory(AccountLoader.Factory.class);
-    factory(ChangeEdits.DeleteFile.Factory.class);
     factory(ChangeInserter.Factory.class);
     factory(ChangeResource.Factory.class);
     factory(DeleteReviewerByEmailOp.Factory.class);

@@ -116,6 +116,7 @@ public class GroupCacheImpl implements GroupCache {
   @Override
   public void evict(AccountGroup.Id groupId) {
     if (groupId != null) {
+      logger.atFine().log("Evict group %s by ID", groupId.get());
       byId.invalidate(groupId);
     }
   }
@@ -123,6 +124,7 @@ public class GroupCacheImpl implements GroupCache {
   @Override
   public void evict(AccountGroup.NameKey groupName) {
     if (groupName != null) {
+      logger.atFine().log("Evict group '%s' by name", groupName.get());
       byName.invalidate(groupName.get());
     }
   }
@@ -130,6 +132,7 @@ public class GroupCacheImpl implements GroupCache {
   @Override
   public void evict(AccountGroup.UUID groupUuid) {
     if (groupUuid != null) {
+      logger.atFine().log("Evict group %s by UUID", groupUuid.get());
       byUUID.invalidate(groupUuid.get());
     }
   }
@@ -144,6 +147,7 @@ public class GroupCacheImpl implements GroupCache {
 
     @Override
     public Optional<InternalGroup> load(AccountGroup.Id key) throws Exception {
+      logger.atFine().log("Loading group %s by ID", key);
       return groupQueryProvider.get().byId(key);
     }
   }
@@ -158,6 +162,7 @@ public class GroupCacheImpl implements GroupCache {
 
     @Override
     public Optional<InternalGroup> load(String name) throws Exception {
+      logger.atFine().log("Loading group '%s' by name", name);
       return groupQueryProvider.get().byName(new AccountGroup.NameKey(name));
     }
   }
@@ -172,6 +177,7 @@ public class GroupCacheImpl implements GroupCache {
 
     @Override
     public Optional<InternalGroup> load(String uuid) throws Exception {
+      logger.atFine().log("Loading group %s by UUID", uuid);
       return groups.getGroup(new AccountGroup.UUID(uuid));
     }
   }

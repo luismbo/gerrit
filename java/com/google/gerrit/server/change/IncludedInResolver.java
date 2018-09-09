@@ -14,6 +14,13 @@
 
 package com.google.gerrit.server.change;
 
+import static com.google.common.collect.ImmutableSortedSet.toImmutableSortedSet;
+import static java.util.Comparator.comparing;
+import static java.util.Comparator.naturalOrder;
+import static java.util.stream.Collectors.toList;
+
+import com.google.auto.value.AutoValue;
+import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.LinkedListMultimap;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
@@ -22,7 +29,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -93,11 +99,9 @@ public class IncludedInResolver {
     parseCommits(allTagsAndBranches);
     Set<String> allMatchingTagsAndBranches = includedIn(tipsByCommitTime, 0);
 
-    Result detail = new Result();
-    detail.setBranches(getMatchingRefNames(allMatchingTagsAndBranches, branches));
-    detail.setTags(getMatchingRefNames(allMatchingTagsAndBranches, tags));
-
-    return detail;
+    return new AutoValue_IncludedInResolver_Result(
+        getMatchingRefNames(allMatchingTagsAndBranches, branches),
+        getMatchingRefNames(allMatchingTagsAndBranches, tags));
   }
 
   private boolean includedInOne(Collection<Ref> refs) throws IOException {
@@ -151,15 +155,7 @@ public class IncludedInResolver {
    */
   private void partition(List<RevCommit> before, List<RevCommit> after) {
     int insertionPoint =
-        Collections.binarySearch(
-            tipsByCommitTime,
-            target,
-            new Comparator<RevCommit>() {
-              @Override
-              public int compare(RevCommit c1, RevCommit c2) {
-                return c1.getCommitTime() - c2.getCommitTime();
-              }
-            });
+        Collections.binarySearch(tipsByCommitTime, target, comparing(RevCommit::getCommitTime));
     if (insertionPoint < 0) {
       insertionPoint = -(insertionPoint + 1);
     }
@@ -175,15 +171,14 @@ public class IncludedInResolver {
    * Returns the short names of refs which are as well in the matchingRefs list as well as in the
    * allRef list.
    */
-  private static List<String> getMatchingRefNames(
+  private static ImmutableSortedSet<String> getMatchingRefNames(
       Set<String> matchingRefs, Collection<Ref> allRefs) {
-    List<String> refNames = Lists.newArrayListWithCapacity(matchingRefs.size());
-    for (Ref r : allRefs) {
-      if (matchingRefs.contains(r.getName())) {
-        refNames.add(Repository.shortenRefName(r.getName()));
-      }
-    }
-    return refNames;
+    return allRefs
+        .stream()
+        .map(Ref::getName)
+        .filter(matchingRefs::contains)
+        .map(Repository::shortenRefName)
+        .collect(toImmutableSortedSet(naturalOrder()));
   }
 
   /** Parse commit of ref and store the relation between ref and commit. */
@@ -211,43 +206,14 @@ public class IncludedInResolver {
       }
       commitToRef.put(commit, ref.getName());
     }
-    tipsByCommitTime = Lists.newArrayList(commitToRef.keySet());
-    sortOlderFirst(tipsByCommitTime);
+    tipsByCommitTime =
+        commitToRef.keySet().stream().sorted(comparing(RevCommit::getCommitTime)).collect(toList());
   }
 
-  private void sortOlderFirst(List<RevCommit> tips) {
-    Collections.sort(
-        tips,
-        new Comparator<RevCommit>() {
-          @Override
-          public int compare(RevCommit c1, RevCommit c2) {
-            return c1.getCommitTime() - c2.getCommitTime();
-          }
-        });
-  }
+  @AutoValue
+  public abstract static class Result {
+    public abstract ImmutableSortedSet<String> branches();
 
-  public static class Result {
-    private List<String> branches;
-    private List<String> tags;
-
-    public Result() {}
-
-    public void setBranches(List<String> b) {
-      Collections.sort(b);
-      branches = b;
-    }
-
-    public List<String> getBranches() {
-      return branches;
-    }
-
-    public void setTags(List<String> t) {
-      Collections.sort(t);
-      tags = t;
-    }
-
-    public List<String> getTags() {
-      return tags;
-    }
+    public abstract ImmutableSortedSet<String> tags();
   }
 }

@@ -145,6 +145,7 @@ public abstract class AbstractChangeNotes<T> {
     if (loaded) {
       return self();
     }
+
     boolean read = args.migration.readChanges();
     if (!read && primaryStorage == PrimaryStorage.NOTE_DB) {
       throw new OrmException("NoteDb is required to read change " + changeId);

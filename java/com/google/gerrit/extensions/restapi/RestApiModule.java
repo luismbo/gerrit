@@ -29,6 +29,9 @@ public abstract class RestApiModule extends FactoryModule {
   protected static final String DELETE = "DELETE";
   protected static final String POST = "POST";
   protected static final String CREATE = "CREATE";
+  protected static final String DELETE_MISSING = "DELETE_MISSING";
+  protected static final String DELETE_ON_COLLECTION = "DELETE_ON_COLLECTION";
+  protected static final String POST_ON_COLLECTION = "POST_ON_COLLECTION";
 
   protected <R extends RestResource> ReadViewBinder<R> get(TypeLiteral<RestView<R>> viewType) {
     return get(viewType, "/");
@@ -46,8 +49,36 @@ public abstract class RestApiModule extends FactoryModule {
     return delete(viewType, "/");
   }
 
+  protected <R extends RestResource> RestCollectionViewBinder<R> postOnCollection(
+      TypeLiteral<RestView<R>> viewType) {
+    return new RestCollectionViewBinder<>(
+        bind(viewType).annotatedWith(export(POST_ON_COLLECTION, "/")));
+  }
+
+  /**
+   * Creates a binder that allows to bind a REST view to handle {@code DELETE} on the REST
+   * collection of the provided view type.
+   *
+   * <p>This binding is ignored if the provided view type belongs to a root collection.
+   *
+   * @param viewType the type of the resources in the REST collection on which {@code DELETE} should
+   *     be handled
+   * @return binder that allows to bind an implementation for the REST view that should handle
+   *     {@code DELETE} on the REST collection of the provided view type
+   */
+  protected <R extends RestResource> RestCollectionViewBinder<R> deleteOnCollection(
+      TypeLiteral<RestView<R>> viewType) {
+    return new RestCollectionViewBinder<>(
+        bind(viewType).annotatedWith(export(DELETE_ON_COLLECTION, "/")));
+  }
+
   protected <R extends RestResource> CreateViewBinder<R> create(TypeLiteral<RestView<R>> viewType) {
     return new CreateViewBinder<>(bind(viewType).annotatedWith(export(CREATE, "/")));
+  }
+
+  protected <R extends RestResource> DeleteViewBinder<R> deleteMissing(
+      TypeLiteral<RestView<R>> viewType) {
+    return new DeleteViewBinder<>(bind(viewType).annotatedWith(export(DELETE_MISSING, "/")));
   }
 
   protected <R extends RestResource> ReadViewBinder<R> get(
@@ -142,6 +173,34 @@ public abstract class RestApiModule extends FactoryModule {
     }
   }
 
+  public static class RestCollectionViewBinder<C extends RestResource> {
+    private final LinkedBindingBuilder<RestView<C>> binder;
+
+    private RestCollectionViewBinder(LinkedBindingBuilder<RestView<C>> binder) {
+      this.binder = binder;
+    }
+
+    public <P extends RestResource, T extends RestCollectionModifyView<P, C, ?>>
+        ScopedBindingBuilder to(Class<T> impl) {
+      return binder.to(impl);
+    }
+
+    public <P extends RestResource, T extends RestCollectionModifyView<P, C, ?>> void toInstance(
+        T impl) {
+      binder.toInstance(impl);
+    }
+
+    public <P extends RestResource, T extends RestCollectionModifyView<P, C, ?>>
+        ScopedBindingBuilder toProvider(Class<? extends Provider<? extends T>> providerType) {
+      return binder.toProvider(providerType);
+    }
+
+    public <P extends RestResource, T extends RestCollectionModifyView<P, C, ?>>
+        ScopedBindingBuilder toProvider(Provider<? extends T> provider) {
+      return binder.toProvider(provider);
+    }
+  }
+
   public static class CreateViewBinder<C extends RestResource> {
     private final LinkedBindingBuilder<RestView<C>> binder;
 
@@ -149,21 +208,50 @@ public abstract class RestApiModule extends FactoryModule {
       this.binder = binder;
     }
 
-    public <P extends RestResource, T extends RestCreateView<P, C, ?>> ScopedBindingBuilder to(
-        Class<T> impl) {
+    public <P extends RestResource, T extends RestCollectionCreateView<P, C, ?>>
+        ScopedBindingBuilder to(Class<T> impl) {
       return binder.to(impl);
     }
 
-    public <P extends RestResource, T extends RestCreateView<P, C, ?>> void toInstance(T impl) {
+    public <P extends RestResource, T extends RestCollectionCreateView<P, C, ?>> void toInstance(
+        T impl) {
       binder.toInstance(impl);
     }
 
-    public <P extends RestResource, T extends RestCreateView<P, C, ?>>
+    public <P extends RestResource, T extends RestCollectionCreateView<P, C, ?>>
         ScopedBindingBuilder toProvider(Class<? extends Provider<? extends T>> providerType) {
       return binder.toProvider(providerType);
     }
 
-    public <P extends RestResource, T extends RestCreateView<P, C, ?>>
+    public <P extends RestResource, T extends RestCollectionCreateView<P, C, ?>>
+        ScopedBindingBuilder toProvider(Provider<? extends T> provider) {
+      return binder.toProvider(provider);
+    }
+  }
+
+  public static class DeleteViewBinder<C extends RestResource> {
+    private final LinkedBindingBuilder<RestView<C>> binder;
+
+    private DeleteViewBinder(LinkedBindingBuilder<RestView<C>> binder) {
+      this.binder = binder;
+    }
+
+    public <P extends RestResource, T extends RestCollectionDeleteMissingView<P, C, ?>>
+        ScopedBindingBuilder to(Class<T> impl) {
+      return binder.to(impl);
+    }
+
+    public <P extends RestResource, T extends RestCollectionDeleteMissingView<P, C, ?>>
+        void toInstance(T impl) {
+      binder.toInstance(impl);
+    }
+
+    public <P extends RestResource, T extends RestCollectionDeleteMissingView<P, C, ?>>
+        ScopedBindingBuilder toProvider(Class<? extends Provider<? extends T>> providerType) {
+      return binder.toProvider(providerType);
+    }
+
+    public <P extends RestResource, T extends RestCollectionDeleteMissingView<P, C, ?>>
         ScopedBindingBuilder toProvider(Provider<? extends T> provider) {
       return binder.toProvider(provider);
     }
