@@ -158,14 +158,13 @@ public class MergeUtil {
 
     public ObjectId process(ObjectInserter inserter, RevWalk rw, RevCommit mergeTip,
                             ObjectId newTree, String newCommitMessage) throws IOException {
-      checkNotNull(mergeTip.getRawBuffer());
       if (mergeTip != null) {
-        checkNotNull(mergeTip.getRawBuffer());
+        requireNonNull(mergeTip.getRawBuffer());
       }
 
       for (CommitModifier commitModifier : commitModifiers) {
         newTree = commitModifier.onSubmit(inserter, rw, mergeTip, newTree, newCommitMessage);
-        checkNotNull(
+        requireNonNull(
             newTree,
             commitModifier.getClass().getName()
                 +  ".onSubmit returned null instead of a tree identity");
