@@ -15,10 +15,10 @@
 package com.google.gerrit.server.change;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_CHANGES;
 import static com.google.gerrit.reviewdb.server.ReviewDbUtil.intKeyOrdering;
 import static com.google.gerrit.server.ChangeUtil.PS_ID_ORDER;
+import static java.util.Objects.requireNonNull;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.Collections2;
@@ -29,12 +29,10 @@ import com.google.common.collect.SetMultimap;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.FooterConstants;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.extensions.api.changes.FixInput;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.common.ProblemInfo;
 import com.google.gerrit.extensions.common.ProblemInfo.Status;
-import com.google.gerrit.extensions.registration.DynamicItem;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
@@ -51,6 +49,7 @@ import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.notedb.PatchSetState;
 import com.google.gerrit.server.patch.PatchSetInfoFactory;
 import com.google.gerrit.server.patch.PatchSetInfoNotAvailableException;
+import com.google.gerrit.server.plugincontext.PluginItemContext;
 import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.server.update.BatchUpdateOp;
 import com.google.gerrit.server.update.BatchUpdateReviewDb;
@@ -58,6 +57,7 @@ import com.google.gerrit.server.update.ChangeContext;
 import com.google.gerrit.server.update.RepoContext;
 import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.UpdateException;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
@@ -107,7 +107,7 @@ public class ConsistencyChecker {
 
   private final ChangeNotes.Factory notesFactory;
   private final Accounts accounts;
-  private final DynamicItem<AccountPatchReviewStore> accountPatchReviewStore;
+  private final PluginItemContext<AccountPatchReviewStore> accountPatchReviewStore;
   private final GitRepositoryManager repoManager;
   private final PatchSetInfoFactory patchSetInfoFactory;
   private final PatchSetInserter.Factory patchSetInserterFactory;
@@ -136,7 +136,7 @@ public class ConsistencyChecker {
       @GerritPersonIdent Provider<PersonIdent> serverIdent,
       ChangeNotes.Factory notesFactory,
       Accounts accounts,
-      DynamicItem<AccountPatchReviewStore> accountPatchReviewStore,
+      PluginItemContext<AccountPatchReviewStore> accountPatchReviewStore,
       GitRepositoryManager repoManager,
       PatchSetInfoFactory patchSetInfoFactory,
       PatchSetInserter.Factory patchSetInserterFactory,
@@ -171,7 +171,7 @@ public class ConsistencyChecker {
   }
 
   public Result check(ChangeNotes notes, @Nullable FixInput f) {
-    checkNotNull(notes);
+    requireNonNull(notes);
     try {
       return retryHelper.execute(
           buf -> {
@@ -503,7 +503,7 @@ public class ConsistencyChecker {
     List<ProblemInfo> currProblems = new ArrayList<>(3);
     currProblems.add(notFound);
     if (deleteOldPatchSetProblem != null) {
-      currProblems.add(insertPatchSetProblem);
+      currProblems.add(deleteOldPatchSetProblem);
     }
     currProblems.add(insertPatchSetProblem);
 
@@ -530,7 +530,7 @@ public class ConsistencyChecker {
           if (!reuseOldPsId) {
             bu.addOp(
                 notes.getChangeId(),
-                new DeletePatchSetFromDbOp(checkNotNull(deleteOldPatchSetProblem), psIdToDelete));
+                new DeletePatchSetFromDbOp(requireNonNull(deleteOldPatchSetProblem), psIdToDelete));
           }
         }
 
@@ -668,7 +668,7 @@ public class ConsistencyChecker {
         throws OrmException, PatchSetInfoNotAvailableException {
       // Delete dangling key references.
       ReviewDb db = BatchUpdateReviewDb.unwrap(ctx.getDb());
-      accountPatchReviewStore.get().clearReviewed(psId);
+      accountPatchReviewStore.run(s -> s.clearReviewed(psId), OrmException.class);
       db.changeMessages().delete(db.changeMessages().byChange(psId.getParentKey()));
       db.patchSetApprovals().delete(db.patchSetApprovals().byPatchSet(psId));
       db.patchComments().delete(db.patchComments().byPatchSet(psId));
@@ -759,7 +759,7 @@ public class ConsistencyChecker {
 
   private ProblemInfo problem(String msg) {
     ProblemInfo p = new ProblemInfo();
-    p.message = checkNotNull(msg);
+    p.message = requireNonNull(msg);
     problems.add(p);
     return p;
   }

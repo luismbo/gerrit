@@ -13,6 +13,8 @@ acceptance_tests(
     vm_args = ["-Xmx512m"],
     deps = [
         ":util",
+        "//java/com/google/gerrit/index",
+        "//java/com/google/gerrit/index/project",
         "//java/com/google/gerrit/server/schema",
     ],
 )
@@ -39,7 +41,7 @@ acceptance_tests(
 
 java_library(
     name = "util",
-    testonly = 1,
+    testonly = True,
     srcs = [
         "AbstractReindexTests.java",
         "IndexUpgradeController.java",

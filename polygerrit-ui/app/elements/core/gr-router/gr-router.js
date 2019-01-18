@@ -148,6 +148,10 @@
     IMPROPERLY_ENCODED_PLUS: /^\/c\/(.+)\/\ \/(.+)$/,
 
     PLUGIN_SCREEN: /^\/x\/([\w-]+)\/([\w-]+)\/?/,
+
+    DOCUMENTATION_SEARCH_FILTER: '/Documentation/q/filter::filter',
+    DOCUMENTATION_SEARCH: /^\/Documentation\/q\/(.*)$/,
+    DOCUMENTATION: /^\/Documentation(\/)?(.+)?/,
   };
 
   /**
@@ -320,14 +324,10 @@
       if (!weblinks || !weblinks.length) return [];
       return weblinks.filter(weblink => !this._isDirectCommit(weblink)).map(
           ({name, url}) => {
-            if (url.startsWith('https:') || url.startsWith('http:')) {
-              return {name, url};
-            } else {
-              return {
-                name,
-                url: `../../${url}`,
-              };
+            if (!url.startsWith('https:') && !url.startsWith('http:')) {
+              url = this.getBaseUrl() + (url.startsWith('/') ? '' : '/') + url;
             }
+            return {name, url};
           });
     },
 
@@ -396,7 +396,8 @@
         suffix += ',edit';
       }
       if (params.project) {
-        return `/c/${params.project}/+/${params.changeNum}${suffix}`;
+        const encodedProject = this.encodeURL(params.project, true);
+        return `/c/${encodedProject}/+/${params.changeNum}${suffix}`;
       } else {
         return `/c/${params.changeNum}${suffix}`;
       }
@@ -419,7 +420,8 @@
         return `/dashboard/${user}?${queryParams.join('&')}`;
       } else if (repoName) {
         // Project dashboard.
-        return `/p/${repoName}/+/dashboard/${params.dashboard}`;
+        const encodedRepo = this.encodeURL(repoName, true);
+        return `/p/${encodedRepo}/+/dashboard/${params.dashboard}`;
       } else {
         // User dashboard.
         return `/dashboard/${params.user || 'self'}`;
@@ -462,7 +464,8 @@
       }
 
       if (params.project) {
-        return `/c/${params.project}/+/${params.changeNum}${suffix}`;
+        const encodedProject = this.encodeURL(params.project, true);
+        return `/c/${encodedProject}/+/${params.changeNum}${suffix}`;
       } else {
         return `/c/${params.changeNum}${suffix}`;
       }
@@ -842,6 +845,17 @@
           '_handleImproperlyEncodedPlusRoute');
 
       this._mapRoute(RoutePattern.PLUGIN_SCREEN, '_handlePluginScreen');
+
+      this._mapRoute(RoutePattern.DOCUMENTATION_SEARCH_FILTER,
+          '_handleDocumentationSearchRoute');
+
+      // redirects /Documentation/q/* to /Documentation/q/filter:*
+      this._mapRoute(RoutePattern.DOCUMENTATION_SEARCH,
+          '_handleDocumentationSearchRedirectRoute');
+
+      // Makes sure /Documentation/* links work (doin't return 404)
+      this._mapRoute(RoutePattern.DOCUMENTATION,
+          '_handleDocumentationRedirectRoute');
 
       // Note: this route should appear last so it only catches URLs unmatched
       // by other patterns.
@@ -1418,6 +1432,27 @@
       const plugin = ctx.params[0];
       const screen = ctx.params[1];
       this._setParams({view, plugin, screen});
+    },
+
+    _handleDocumentationSearchRoute(data) {
+      this._setParams({
+        view: Gerrit.Nav.View.DOCUMENTATION_SEARCH,
+        filter: data.params.filter || null,
+      });
+    },
+
+    _handleDocumentationSearchRedirectRoute(data) {
+      this._redirect('/Documentation/q/filter:' +
+          encodeURIComponent(data.params[0]));
+    },
+
+    _handleDocumentationRedirectRoute(data) {
+      if (data.params[1]) {
+        location.reload();
+      } else {
+        // Redirect /Documentation to /Documentation/index.html
+        this._redirect('/Documentation/index.html');
+      }
     },
 
     /**

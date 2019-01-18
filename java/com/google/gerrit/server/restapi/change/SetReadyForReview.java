@@ -17,8 +17,6 @@ package com.google.gerrit.server.restapi.change;
 import static com.google.gerrit.extensions.conditions.BooleanCondition.and;
 import static com.google.gerrit.extensions.conditions.BooleanCondition.or;
 
-import com.google.gerrit.common.TimeUtil;
-import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.Response;
 import com.google.gerrit.extensions.restapi.RestApiException;
@@ -27,6 +25,7 @@ import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Change.Status;
 import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ChangeUtil;
+import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.change.WorkInProgressOp;
 import com.google.gerrit.server.change.WorkInProgressOp.Input;
@@ -38,6 +37,7 @@ import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -48,43 +48,27 @@ public class SetReadyForReview extends RetryingRestModifyView<ChangeResource, In
   private final WorkInProgressOp.Factory opFactory;
   private final Provider<ReviewDb> db;
   private final PermissionBackend permissionBackend;
+  private final Provider<CurrentUser> user;
 
   @Inject
   SetReadyForReview(
       RetryHelper retryHelper,
       WorkInProgressOp.Factory opFactory,
       Provider<ReviewDb> db,
-      PermissionBackend permissionBackend) {
+      PermissionBackend permissionBackend,
+      Provider<CurrentUser> user) {
     super(retryHelper);
     this.opFactory = opFactory;
     this.db = db;
     this.permissionBackend = permissionBackend;
+    this.user = user;
   }
 
   @Override
   protected Response<?> applyImpl(
       BatchUpdate.Factory updateFactory, ChangeResource rsrc, Input input)
       throws RestApiException, UpdateException, PermissionBackendException {
-    if (!rsrc.isUserOwner()) {
-      boolean hasAdministrateServerPermission = false;
-      try {
-        permissionBackend.currentUser().check(GlobalPermission.ADMINISTRATE_SERVER);
-        hasAdministrateServerPermission = true;
-      } catch (AuthException e) {
-        // Skip.
-      }
-
-      if (!hasAdministrateServerPermission) {
-        try {
-          permissionBackend
-              .currentUser()
-              .project(rsrc.getProject())
-              .check(ProjectPermission.WRITE_CONFIG);
-        } catch (AuthException exp) {
-          throw new AuthException("not allowed to set ready for review");
-        }
-      }
-    }
+    WorkInProgressOp.checkPermissions(permissionBackend, user.get(), rsrc.getChange());
 
     Change change = rsrc.getChange();
     if (change.getStatus() != Status.NEW) {

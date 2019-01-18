@@ -2,7 +2,7 @@ load("//javatests/com/google/gerrit/acceptance:tests.bzl", "acceptance_tests")
 
 java_library(
     name = "util",
-    testonly = 1,
+    testonly = True,
     srcs = ["AbstractIndexTests.java"],
     deps = ["//java/com/google/gerrit/acceptance:lib"],
 )
@@ -17,6 +17,7 @@ acceptance_tests(
     vm_args = ["-Xmx512m"],
     deps = [
         ":util",
+        "//java/com/google/gerrit/server/logging",
         "//lib/commons:compress",
     ],
 )

@@ -18,60 +18,6 @@
   'use strict';
 
   const PROJECT_PLACEHOLDER_PATTERN = /\$\{project\}/g;
-  const USER_PLACEHOLDER_PATTERN = /\$\{user\}/g;
-
-  // NOTE: These queries are tested in Java. Any changes made to definitions
-  // here require corresponding changes to:
-  // gerrit-server/src/test/java/com/google/gerrit/server/query/change/AbstractQueryChangesTest.java
-  const DEFAULT_SECTIONS = [
-    {
-      // Changes with unpublished draft comments. This section is omitted when
-      // viewing other users, so we don't need to filter anything out.
-      name: 'Has unpublished drafts',
-      query: 'has:draft',
-      selfOnly: true,
-      hideIfEmpty: true,
-    },
-    {
-      // WIP open changes owned by viewing user. This section is omitted when
-      // viewing other users, so we don't need to filter anything out.
-      name: 'Work in progress',
-      query: 'is:open owner:${user} is:wip',
-      selfOnly: true,
-      hideIfEmpty: true,
-    },
-    {
-      // Non-WIP open changes owned by viewed user. Filter out changes ignored
-      // by the viewing user.
-      name: 'Outgoing reviews',
-      query: 'is:open owner:${user} -is:wip -is:ignored',
-    },
-    {
-      // Non-WIP open changes not owned by the viewed user, that the viewed user
-      // is associated with (as either a reviewer or the assignee). Changes
-      // ignored by the viewing user are filtered out.
-      name: 'Incoming reviews',
-      query: 'is:open -owner:${user} -is:wip -is:ignored ' +
-          '(reviewer:${user} OR assignee:${user})',
-    },
-    {
-      // Open changes the viewed user is CCed on. Changes ignored by the viewing
-      // user are filtered out.
-      name: 'CCed on',
-      query: 'is:open -is:ignored cc:${user}',
-    },
-    {
-      name: 'Recently closed',
-      // Closed changes where viewed user is owner, reviewer, or assignee.
-      // Changes ignored by the viewing user are filtered out, and so are WIP
-      // changes not owned by the viewing user (the one instance of
-      // 'owner:self' is intentional and implements this logic).
-      query: 'is:closed -is:ignored (-is:wip OR owner:self) ' +
-          '(owner:${user} OR reviewer:${user} OR assignee:${user} ' +
-          'OR cc:${user})',
-      suffixForDashboard: '-age:4w limit:10',
-    },
-  ];
 
   Polymer({
     is: 'gr-dashboard-view',
@@ -91,16 +37,19 @@
       /** @type {{ selectedChangeIndex: number }} */
       viewState: Object,
 
-      /** @type {{ user: string }} */
+      /** @type {{ project: string, user: string }} */
       params: {
         type: Object,
       },
 
-      _results: Array,
-      _sectionMetadata: {
-        type: Array,
-        value() { return DEFAULT_SECTIONS; },
+      createChangeTap: {
+        type: Function,
+        value() {
+          return this._createChangeTap.bind(this);
+        },
       },
+
+      _results: Array,
 
       /**
        * For showing a "loading..." string during ajax requests.
@@ -108,6 +57,16 @@
       _loading: {
         type: Boolean,
         value: true,
+      },
+
+      _showDraftsBanner: {
+        type: Boolean,
+        value: false,
+      },
+
+      _showNewUserHelp: {
+        type: Boolean,
+        value: false,
       },
     },
 
@@ -167,16 +126,6 @@
           });
     },
 
-    _getUserDashboard(user, sections, title) {
-      sections = sections
-        .filter(section => (user === 'self' || !section.selfOnly))
-        .map(section => Object.assign({}, section, {
-          name: section.name,
-          query: section.query.replace(USER_PLACEHOLDER_PATTERN, user),
-        }));
-      return Promise.resolve({title, sections});
-    },
-
     _computeTitle(user) {
       if (!user || user === 'self') {
         return 'My Reviews';
@@ -214,13 +163,16 @@
       const {project, dashboard, title, user, sections} = this.params;
       const dashboardPromise = project ?
           this._getProjectDashboard(project, dashboard) :
-          this._getUserDashboard(
-              user || 'self',
-              sections || DEFAULT_SECTIONS,
-              title || this._computeTitle(user));
+          Promise.resolve(Gerrit.Nav.getUserDashboard(
+              user,
+              sections,
+              title || this._computeTitle(user)));
 
-      return dashboardPromise.then(this._fetchDashboardChanges.bind(this))
+      const checkForNewUser = !project && user === 'self';
+      return dashboardPromise
+          .then(res => this._fetchDashboardChanges(res, checkForNewUser))
           .then(() => {
+            this._maybeShowDraftsBanner();
             this.$.reporting.dashboardDisplayed();
           }).catch(err => {
             console.warn(err);
@@ -232,30 +184,45 @@
      * with the response.
      *
      * @param {!Object} res
+     * @param {boolean} checkForNewUser
      * @return {Promise}
      */
-    _fetchDashboardChanges(res) {
+    _fetchDashboardChanges(res, checkForNewUser) {
       if (!res) { return Promise.resolve(); }
-      const queries = res.sections.map(section => {
-        if (section.suffixForDashboard) {
-          return section.query + ' ' + section.suffixForDashboard;
-        }
-        return section.query;
-      });
+
+      const queries = res.sections
+          .map(section => section.suffixForDashboard ?
+              section.query + ' ' + section.suffixForDashboard :
+              section.query);
+
+      if (checkForNewUser) {
+        queries.push('owner:self');
+      }
 
       return this.$.restAPI.getChanges(null, queries, null, this.options)
           .then(changes => {
+            if (checkForNewUser) {
+              // Last set of results is not meant for dashboard display.
+              const lastResultSet = changes.pop();
+              this._showNewUserHelp = lastResultSet.length == 0;
+            }
             this._results = changes.map((results, i) => ({
               sectionName: res.sections[i].name,
               query: res.sections[i].query,
               results,
-            })).filter((section, i) => !res.sections[i].hideIfEmpty ||
-                section.results.length);
+              isOutgoing: res.sections[i].isOutgoing,
+            })).filter((section, i) => i < res.sections.length && (
+                !res.sections[i].hideIfEmpty ||
+                section.results.length));
           });
     },
 
-    _computeUserHeaderClass(userParam) {
-      return userParam === 'self' ? 'hide' : '';
+    _computeUserHeaderClass(params) {
+      if (!params || !!params.project || !params.user
+          || params.user === 'self') {
+        return 'hide';
+      }
+      return '';
     },
 
     _handleToggleStar(e) {
@@ -266,6 +233,58 @@
     _handleToggleReviewed(e) {
       this.$.restAPI.saveChangeReviewed(e.detail.change._number,
           e.detail.reviewed);
+    },
+
+    /**
+     * Banner is shown if a user is on their own dashboard and they have draft
+     * comments on closed changes.
+     */
+    _maybeShowDraftsBanner() {
+      this._showDraftsBanner = false;
+      if (!(this.params.user === 'self')) { return; }
+
+      const draftSection = this._results
+          .find(section => section.query === 'has:draft');
+      if (!draftSection || !draftSection.results.length) { return; }
+
+      const closedChanges = draftSection.results
+          .filter(change => !this.changeIsOpen(change.status));
+      if (!closedChanges.length) { return; }
+
+      this._showDraftsBanner = true;
+    },
+
+    _computeBannerClass(show) {
+      return show ? '' : 'hide';
+    },
+
+    _handleOpenDeleteDialog() {
+      this.$.confirmDeleteOverlay.open();
+    },
+
+    _handleConfirmDelete() {
+      this.$.confirmDeleteDialog.disabled = true;
+      return this.$.restAPI.deleteDraftComments('-is:open').then(() => {
+        this._closeConfirmDeleteOverlay();
+        this._reload();
+      });
+    },
+
+    _closeConfirmDeleteOverlay() {
+      this.$.confirmDeleteOverlay.close();
+    },
+
+    _computeDraftsLink() {
+      return Gerrit.Nav.getUrlForSearchQuery('has:draft -is:open');
+    },
+
+    _createChangeTap(e) {
+      this.$.destinationDialog.open();
+    },
+
+    _handleDestinationConfirm(e) {
+      this.$.commandsDialog.branch = e.detail.branch;
+      this.$.commandsDialog.open();
     },
   });
 })();

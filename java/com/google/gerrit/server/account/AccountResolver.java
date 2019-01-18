@@ -19,7 +19,13 @@ import static java.util.stream.Collectors.toSet;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
+import com.google.gerrit.common.Nullable;
+import com.google.gerrit.extensions.restapi.AuthException;
+import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.reviewdb.client.Account;
+import com.google.gerrit.server.AnonymousUser;
+import com.google.gerrit.server.CurrentUser;
+import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.account.externalids.ExternalId;
 import com.google.gerrit.server.query.account.InternalAccountQuery;
 import com.google.gwtorm.server.OrmException;
@@ -38,37 +44,47 @@ import org.eclipse.jgit.errors.ConfigInvalidException;
 
 @Singleton
 public class AccountResolver {
+  private final Provider<CurrentUser> self;
   private final Realm realm;
   private final Accounts accounts;
   private final AccountCache byId;
+  private final IdentifiedUser.GenericFactory userFactory;
+  private final AccountControl.Factory accountControlFactory;
   private final Provider<InternalAccountQuery> accountQueryProvider;
   private final Emails emails;
 
   @Inject
   AccountResolver(
+      Provider<CurrentUser> self,
       Realm realm,
       Accounts accounts,
       AccountCache byId,
+      IdentifiedUser.GenericFactory userFactory,
+      AccountControl.Factory accountControlFactory,
       Provider<InternalAccountQuery> accountQueryProvider,
       Emails emails) {
+    this.self = self;
     this.realm = realm;
     this.accounts = accounts;
     this.byId = byId;
+    this.userFactory = userFactory;
+    this.accountControlFactory = accountControlFactory;
     this.accountQueryProvider = accountQueryProvider;
     this.emails = emails;
   }
 
   /**
-   * Locate exactly one account matching the name or name/email string.
+   * Locate exactly one account matching the input string.
    *
-   * @param nameOrEmail a string of the format "Full Name &lt;email@example&gt;", just the email
-   *     address ("email@example"), a full name ("Full Name"), an account id ("18419") or an user
-   *     name ("username").
+   * @param input a string of the format "Full Name &lt;email@example&gt;", just the email address
+   *     ("email@example"), a full name ("Full Name"), an account ID ("18419") or a user name
+   *     ("username").
    * @return the single account that matches; null if no account matches or there are multiple
-   *     candidates.
+   *     candidates. If {@code input} is a numeric string, returns an account if and only if that
+   *     number corresponds to an actual account ID.
    */
-  public Account find(String nameOrEmail) throws OrmException, IOException, ConfigInvalidException {
-    Set<Account.Id> r = findAll(nameOrEmail);
+  public Account find(String input) throws OrmException, IOException, ConfigInvalidException {
+    Set<Account.Id> r = findAll(input);
     if (r.size() == 1) {
       return byId.get(r.iterator().next()).map(AccountState::getAccount).orElse(null);
     }
@@ -88,16 +104,18 @@ public class AccountResolver {
   }
 
   /**
-   * Find all accounts matching the name or name/email string.
+   * Find all accounts matching the input string.
    *
-   * @param nameOrEmail a string of the format "Full Name &lt;email@example&gt;", just the email
-   *     address ("email@example"), a full name ("Full Name"), an account id ("18419") or an user
-   *     name ("username").
-   * @return the accounts that match, empty collection if none. Never null.
+   * @param input a string of the format "Full Name &lt;email@example&gt;", just the email address
+   *     ("email@example"), a full name ("Full Name"), an account ID ("18419") or a user name
+   *     ("username").
+   * @return the accounts that match, empty set if none. Never null. If {@code input} is a numeric
+   *     string, returns a singleton set if that number corresponds to a real account ID, and an
+   *     empty set otherwise if it does not.
    */
-  public Set<Account.Id> findAll(String nameOrEmail)
+  public Set<Account.Id> findAll(String input)
       throws OrmException, IOException, ConfigInvalidException {
-    Matcher m = Pattern.compile("^.* \\(([1-9][0-9]*)\\)$").matcher(nameOrEmail);
+    Matcher m = Pattern.compile("^.* \\(([1-9][0-9]*)\\)$").matcher(input);
     if (m.matches()) {
       Optional<Account.Id> id = Account.Id.tryParse(m.group(1));
       if (id.isPresent()) {
@@ -107,8 +125,8 @@ public class AccountResolver {
       }
     }
 
-    if (nameOrEmail.matches("^[1-9][0-9]*$")) {
-      Optional<Account.Id> id = Account.Id.tryParse(nameOrEmail);
+    if (input.matches("^[1-9][0-9]*$")) {
+      Optional<Account.Id> id = Account.Id.tryParse(input);
       if (id.isPresent()) {
         return Streams.stream(accounts.get(id.get()))
             .map(a -> a.getAccount().getId())
@@ -116,14 +134,14 @@ public class AccountResolver {
       }
     }
 
-    if (ExternalId.isValidUsername(nameOrEmail)) {
-      Optional<AccountState> who = byId.getByUsername(nameOrEmail);
+    if (ExternalId.isValidUsername(input)) {
+      Optional<AccountState> who = byId.getByUsername(input);
       if (who.isPresent()) {
         return ImmutableSet.of(who.map(a -> a.getAccount().getId()).get());
       }
     }
 
-    return findAllByNameOrEmail(nameOrEmail);
+    return findAllByNameOrEmail(input);
   }
 
   /**
@@ -185,11 +203,83 @@ public class AccountResolver {
 
     // At this point we have no clue. Just perform a whole bunch of suggestions
     // and pray we come up with a reasonable result list.
+    // TODO(dborowitz): This doesn't match the documentation; consider whether it's possible to be
+    // more strict here.
     return accountQueryProvider
         .get()
         .byDefault(nameOrEmail)
         .stream()
         .map(a -> a.getAccount().getId())
         .collect(toSet());
+  }
+
+  /**
+   * Parses a account ID from a request body and returns the user.
+   *
+   * @param id ID of the account, can be a string of the format "{@code Full Name
+   *     <email@example.com>}", just the email address, a full name if it is unique, an account ID,
+   *     a user name or "{@code self}" for the calling user
+   * @return the user, never null.
+   * @throws UnprocessableEntityException thrown if the account ID cannot be resolved or if the
+   *     account is not visible to the calling user
+   */
+  public IdentifiedUser parse(String id)
+      throws AuthException, UnprocessableEntityException, OrmException, IOException,
+          ConfigInvalidException {
+    return parseOnBehalfOf(null, id);
+  }
+
+  /**
+   * Parses an account ID and returns the user without making any permission check whether the
+   * current user can see the account.
+   *
+   * @param id ID of the account, can be a string of the format "{@code Full Name
+   *     <email@example.com>}", just the email address, a full name if it is unique, an account ID,
+   *     a user name or "{@code self}" for the calling user
+   * @return the user, null if no user is found for the given account ID
+   * @throws AuthException thrown if 'self' is used as account ID and the current user is not
+   *     authenticated
+   * @throws OrmException
+   * @throws ConfigInvalidException
+   * @throws IOException
+   */
+  public IdentifiedUser parseId(String id)
+      throws AuthException, OrmException, IOException, ConfigInvalidException {
+    return parseIdOnBehalfOf(null, id);
+  }
+
+  /**
+   * Like {@link #parse(String)}, but also sets the {@link CurrentUser#getRealUser()} on the result.
+   */
+  public IdentifiedUser parseOnBehalfOf(@Nullable CurrentUser caller, String id)
+      throws AuthException, UnprocessableEntityException, OrmException, IOException,
+          ConfigInvalidException {
+    IdentifiedUser user = parseIdOnBehalfOf(caller, id);
+    if (user == null || !accountControlFactory.get().canSee(user.getAccount())) {
+      throw new UnprocessableEntityException(
+          String.format("Account '%s' is not found or ambiguous", id));
+    }
+    return user;
+  }
+
+  private IdentifiedUser parseIdOnBehalfOf(@Nullable CurrentUser caller, String id)
+      throws AuthException, OrmException, IOException, ConfigInvalidException {
+    if (id.equals("self")) {
+      CurrentUser user = self.get();
+      if (user.isIdentifiedUser()) {
+        return user.asIdentifiedUser();
+      } else if (user instanceof AnonymousUser) {
+        throw new AuthException("Authentication required");
+      } else {
+        return null;
+      }
+    }
+
+    Account match = find(id);
+    if (match == null) {
+      return null;
+    }
+    CurrentUser realUser = caller != null ? caller.getRealUser() : null;
+    return userFactory.runAs(null, match.getId(), realUser);
   }
 }

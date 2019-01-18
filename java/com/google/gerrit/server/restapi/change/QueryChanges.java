@@ -14,9 +14,7 @@
 
 package com.google.gerrit.server.restapi.change;
 
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Sets;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.extensions.client.ListChangesOption;
 import com.google.gerrit.extensions.common.ChangeInfo;
@@ -27,6 +25,7 @@ import com.google.gerrit.extensions.restapi.TopLevelResource;
 import com.google.gerrit.index.query.QueryParseException;
 import com.google.gerrit.index.query.QueryRequiresAuthException;
 import com.google.gerrit.index.query.QueryResult;
+import com.google.gerrit.server.DynamicOptions;
 import com.google.gerrit.server.change.ChangeJson;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.query.change.ChangeData;
@@ -40,7 +39,7 @@ import java.util.EnumSet;
 import java.util.List;
 import org.kohsuke.args4j.Option;
 
-public class QueryChanges implements RestReadView<TopLevelResource> {
+public class QueryChanges implements RestReadView<TopLevelResource>, DynamicOptions.BeanReceiver {
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
   private final ChangeJson.Factory json;
@@ -81,6 +80,11 @@ public class QueryChanges implements RestReadView<TopLevelResource> {
       usage = "Number of changes to skip")
   public void setStart(int start) {
     imp.setStart(start);
+  }
+
+  @Override
+  public void setDynamicBean(String plugin, DynamicOptions.DynamicBean dynamicBean) {
+    imp.setDynamicBean(plugin, dynamicBean);
   }
 
   @Inject
@@ -133,14 +137,7 @@ public class QueryChanges implements RestReadView<TopLevelResource> {
 
     int cnt = queries.size();
     List<QueryResult<ChangeData>> results = imp.query(qb.parse(queries));
-
-    ChangeJson cjson = json.create(options);
-    cjson.setPluginDefinedAttributesFactory(this.imp);
-    List<List<ChangeInfo>> res =
-        cjson
-            .lazyLoad(containsAnyOf(options, ChangeJson.REQUIRE_LAZY_LOAD))
-            .formatQueryResults(results);
-
+    List<List<ChangeInfo>> res = json.create(options, this.imp).format(results);
     for (int n = 0; n < cnt; n++) {
       List<ChangeInfo> info = res.get(n);
       if (results.get(n).more() && !info.isEmpty()) {
@@ -148,10 +145,5 @@ public class QueryChanges implements RestReadView<TopLevelResource> {
       }
     }
     return res;
-  }
-
-  private static boolean containsAnyOf(
-      EnumSet<ListChangesOption> set, ImmutableSet<ListChangesOption> toFind) {
-    return !Sets.intersection(toFind, set).isEmpty();
   }
 }

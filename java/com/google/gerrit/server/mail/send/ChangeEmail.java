@@ -17,13 +17,13 @@ package com.google.gerrit.server.mail.send;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ListMultimap;
 import com.google.common.flogger.FluentLogger;
+import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.errors.EmailException;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.api.changes.RecipientType;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.mail.MailHeader;
 import com.google.gerrit.reviewdb.client.Account;
-import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Patch;
 import com.google.gerrit.reviewdb.client.PatchSet;
@@ -50,7 +50,6 @@ import java.io.IOException;
 import java.sql.Timestamp;
 import java.text.MessageFormat;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -219,11 +218,9 @@ public abstract class ChangeEmail extends NotificationEmail {
   }
 
   /** Get a link to the change; null if the server doesn't know its own address. */
+  @Nullable
   public String getChangeUrl() {
-    if (getGerritUrl() != null) {
-      return getGerritUrl() + "c/" + change.getProject().get() + "/+/" + change.getChangeId();
-    }
-    return null;
+    return args.urlFormatter.getChangeViewUrl(change.getProject(), change.getId()).orElse(null);
   }
 
   public String getChangeMessageThreadId() {
@@ -236,26 +233,12 @@ public abstract class ChangeEmail extends NotificationEmail {
         + ">";
   }
 
-  /** Format the sender's "cover letter", {@link #getCoverLetter()}. */
-  protected void formatCoverLetter() {
-    final String cover = getCoverLetter();
-    if (!"".equals(cover)) {
-      appendText(cover);
-      appendText("\n\n");
-    }
-  }
-
   /** Get the text of the "cover letter". */
   public String getCoverLetter() {
     if (changeMessage != null) {
       return changeMessage.trim();
     }
     return "";
-  }
-
-  /** Format the change message and the affected file list. */
-  protected void formatChangeDetail() {
-    appendText(getChangeDetail());
   }
 
   /** Create the change message and the affected file list. */
@@ -301,6 +284,23 @@ public abstract class ChangeEmail extends NotificationEmail {
     }
   }
 
+  /** Get the patch list corresponding to patch set patchSetId of this change. */
+  protected PatchList getPatchList(int patchSetId) throws PatchListNotAvailableException {
+    PatchSet ps;
+    if (patchSetId == patchSet.getPatchSetId()) {
+      ps = patchSet;
+    } else {
+      try {
+        ps =
+            args.patchSetUtil.get(
+                changeData.db(), changeData.notes(), new PatchSet.Id(change.getId(), patchSetId));
+      } catch (OrmException e) {
+        throw new PatchListNotAvailableException("Failed to get patchSet");
+      }
+    }
+    return args.patchListCache.get(change, ps);
+  }
+
   /** Get the patch list corresponding to this patch set. */
   protected PatchList getPatchList() throws PatchListNotAvailableException {
     if (patchSet != null) {
@@ -312,14 +312,6 @@ public abstract class ChangeEmail extends NotificationEmail {
   /** Get the project entity the change is in; null if its been deleted. */
   protected ProjectState getProjectState() {
     return projectState;
-  }
-
-  /** Get the groups which own the project. */
-  protected Set<AccountGroup.UUID> getProjectOwners() {
-    final ProjectState r;
-
-    r = args.projectCache.get(change.getProject());
-    return r != null ? r.getOwners() : Collections.<AccountGroup.UUID>emptySet();
   }
 
   /** TO or CC all vested parties (change owner, patch set uploader, author). */

@@ -14,18 +14,22 @@
 
 package com.google.gerrit.server.permissions;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_CACHE_AUTOMERGE;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_CHANGES;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_CONFIG;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_USERS_SELF;
+import static java.util.Objects.requireNonNull;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.restapi.AuthException;
+import com.google.gerrit.metrics.Counter0;
+import com.google.gerrit.metrics.Description;
+import com.google.gerrit.metrics.MetricMaker;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.Branch;
@@ -36,6 +40,7 @@ import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.account.GroupCache;
+import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.git.SearchingChangeCacheImpl;
 import com.google.gerrit.server.git.TagCache;
 import com.google.gerrit.server.git.TagMatcher;
@@ -55,7 +60,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
+import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
@@ -78,6 +83,9 @@ class DefaultRefFilter {
   private final CurrentUser user;
   private final ProjectState projectState;
   private final PermissionBackend.ForProject permissionBackendForProject;
+  private final Counter0 fullFilterCount;
+  private final Counter0 skipFilterCount;
+  private final boolean skipFullRefEvaluationIfAllRefsAreVisible;
 
   private Map<Change.Id, Branch.NameKey> visibleChanges;
 
@@ -89,6 +97,8 @@ class DefaultRefFilter {
       Provider<ReviewDb> db,
       GroupCache groupCache,
       PermissionBackend permissionBackend,
+      @GerritServerConfig Config config,
+      MetricMaker metricMaker,
       @Assisted ProjectControl projectControl) {
     this.tagCache = tagCache;
     this.changeNotesFactory = changeNotesFactory;
@@ -96,12 +106,25 @@ class DefaultRefFilter {
     this.db = db;
     this.groupCache = groupCache;
     this.permissionBackend = permissionBackend;
+    this.skipFullRefEvaluationIfAllRefsAreVisible =
+        config.getBoolean("auth", "skipFullRefEvaluationIfAllRefsAreVisible", true);
     this.projectControl = projectControl;
 
     this.user = projectControl.getUser();
     this.projectState = projectControl.getProjectState();
     this.permissionBackendForProject =
         permissionBackend.user(user).database(db).project(projectState.getNameKey());
+    this.fullFilterCount =
+        metricMaker.newCounter(
+            "permissions/ref_filter/full_filter_count",
+            new Description("Rate of full ref filter operations").setRate());
+    this.skipFilterCount =
+        metricMaker.newCounter(
+            "permissions/ref_filter/skip_filter_count",
+            new Description(
+                    "Rate of ref filter operations where we skip full evaluation"
+                        + " because the user can read all refs")
+                .setRate());
   }
 
   Map<String, Ref> filter(Map<String, Ref> refs, Repository repo, RefFilterOptions opts)
@@ -110,14 +133,17 @@ class DefaultRefFilter {
       refs = addUsersSelfSymref(refs);
     }
 
-    if (!projectState.isAllUsers()) {
+    if (skipFullRefEvaluationIfAllRefsAreVisible && !projectState.isAllUsers()) {
       if (projectState.statePermitsRead()
           && checkProjectPermission(permissionBackendForProject, ProjectPermission.READ)) {
+        skipFilterCount.increment();
         return refs;
       } else if (projectControl.allRefsAreVisible(ImmutableSet.of(RefNames.REFS_CONFIG))) {
+        skipFilterCount.increment();
         return fastHideRefsMetaConfig(refs);
       }
     }
+    fullFilterCount.increment();
 
     boolean viewMetadata;
     boolean isAdmin;
@@ -317,17 +343,17 @@ class DefaultRefFilter {
   private Map<Change.Id, Branch.NameKey> visibleChangesByScan(Repository repo)
       throws PermissionBackendException {
     Project.NameKey p = projectState.getNameKey();
-    Stream<ChangeNotesResult> s;
+    ImmutableList<ChangeNotesResult> changes;
     try {
-      s = changeNotesFactory.scan(repo, db.get(), p);
+      changes = changeNotesFactory.scan(repo, db.get(), p).collect(toImmutableList());
     } catch (IOException e) {
       logger.atSevere().withCause(e).log(
           "Cannot load changes for project %s, assuming no changes are visible", p);
       return Collections.emptyMap();
     }
 
-    Map<Change.Id, Branch.NameKey> result = Maps.newHashMapWithExpectedSize((int) s.count());
-    for (ChangeNotesResult notesResult : s.collect(toImmutableList())) {
+    Map<Change.Id, Branch.NameKey> result = Maps.newHashMapWithExpectedSize(changes.size());
+    for (ChangeNotesResult notesResult : changes) {
       ChangeNotes notes = toNotes(notesResult);
       if (notes != null) {
         result.put(notes.getChangeId(), notes.getChange().getDest());
@@ -391,7 +417,7 @@ class DefaultRefFilter {
 
   private boolean isGroupOwner(
       InternalGroup group, @Nullable IdentifiedUser user, boolean isAdmin) {
-    checkNotNull(group);
+    requireNonNull(group);
 
     // Keep this logic in sync with GroupControl#isOwner().
     return isAdmin

@@ -17,7 +17,6 @@ package com.google.gerrit.httpd.rpc;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.MultimapBuilder;
 import com.google.common.flogger.FluentLogger;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.common.audit.Audit;
 import com.google.gerrit.common.auth.SignInRequired;
 import com.google.gerrit.common.errors.NotSignedInException;
@@ -27,6 +26,7 @@ import com.google.gerrit.server.AccessPath;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.audit.AuditService;
 import com.google.gerrit.server.audit.RpcAuditEvent;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gson.GsonBuilder;
 import com.google.gwtjsonrpc.common.RemoteJsonService;
 import com.google.gwtjsonrpc.server.ActiveCall;
@@ -41,8 +41,9 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 /** Base JSON servlet to ensure the current user is not forged. */
-@SuppressWarnings("serial")
 final class GerritJsonServlet extends JsonServlet<GerritJsonServlet.GerritCall> {
+  private static final long serialVersionUID = 1L;
+
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
   private static final ThreadLocal<GerritCall> currentCall = new ThreadLocal<>();

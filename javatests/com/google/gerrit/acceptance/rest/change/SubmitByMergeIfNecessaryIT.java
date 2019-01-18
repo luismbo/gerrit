@@ -15,17 +15,24 @@
 package com.google.gerrit.acceptance.rest.change;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.gerrit.server.group.SystemGroupBackend.ANONYMOUS_USERS;
+import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS;
 
 import com.google.gerrit.acceptance.GitUtil;
 import com.google.gerrit.acceptance.PushOneCommit;
+import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.changes.ChangeApi;
 import com.google.gerrit.extensions.api.changes.CherryPickInput;
 import com.google.gerrit.extensions.api.changes.ReviewInput;
+import com.google.gerrit.extensions.api.changes.SubmitInput;
 import com.google.gerrit.extensions.api.projects.BranchInput;
+import com.google.gerrit.extensions.client.ChangeStatus;
 import com.google.gerrit.extensions.client.SubmitType;
 import com.google.gerrit.extensions.restapi.BinaryResult;
+import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.reviewdb.client.Branch;
+import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
 import java.io.File;
 import java.io.InputStream;
@@ -402,8 +409,15 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
             + " due to the following problems:\n"
             + "Change "
             + change3a.getChange().getId()
-            + ": depends on change that"
-            + " was not submitted");
+            + ": Depends on change that"
+            + " was not submitted."
+            + " Commit "
+            + change3a.getCommit().name()
+            + " depends on commit "
+            + change2.getCommit().name()
+            + " of change "
+            + change2.getChange().getId()
+            + " which cannot be merged.");
 
     RevCommit tipbranch = getRemoteLog(project, "branch").get(0);
     assertThat(tipbranch.getShortMessage()).isEqualTo(change1.getCommit().getShortMessage());
@@ -501,10 +515,189 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
         "Failed to submit 1 change due to the following problems:\n"
             + "Change "
             + change3.getPatchSetId().getParentKey().get()
-            + ": depends on change that was not submitted");
+            + ": Depends on change that was not submitted."
+            + " Commit "
+            + change3.getCommit().name()
+            + " depends on commit "
+            + change2result.getCommit().name()
+            + " of change "
+            + change2result.getChange().getId()
+            + " which cannot be merged.");
 
     assertRefUpdatedEvents();
     assertChangeMergedEvents();
+  }
+
+  @Test
+  public void dependencyOnOutdatedPatchSetPreventsMerge() throws Exception {
+    // Create a change
+    PushOneCommit change = pushFactory.create(db, user.getIdent(), testRepo, "fix", "a.txt", "foo");
+    PushOneCommit.Result changeResult = change.to("refs/for/master");
+    PatchSet.Id patchSetId = changeResult.getPatchSetId();
+
+    // Create a successor change.
+    PushOneCommit change2 =
+        pushFactory.create(db, user.getIdent(), testRepo, "feature", "b.txt", "bar");
+    PushOneCommit.Result change2Result = change2.to("refs/for/master");
+
+    // Create new patch set for first change.
+    testRepo.reset(changeResult.getCommit().name());
+    amendChange(changeResult.getChangeId());
+
+    // Approve both changes
+    approve(changeResult.getChangeId());
+    approve(change2Result.getChangeId());
+
+    submitWithConflict(
+        change2Result.getChangeId(),
+        "Failed to submit 2 changes due to the following problems:\n"
+            + "Change "
+            + change2Result.getChange().getId()
+            + ": Depends on change that was not submitted."
+            + " Commit "
+            + change2Result.getCommit().name()
+            + " depends on commit "
+            + changeResult.getCommit().name()
+            + ", which is outdated patch set "
+            + patchSetId.get()
+            + " of change "
+            + changeResult.getChange().getId()
+            + ". The latest patch set is "
+            + changeResult.getPatchSetId().get()
+            + ".");
+
+    assertRefUpdatedEvents();
+    assertChangeMergedEvents();
+  }
+
+  @Test
+  public void dependencyOnDeletedChangePreventsMerge() throws Exception {
+    // Create a change
+    PushOneCommit change = pushFactory.create(db, user.getIdent(), testRepo, "fix", "a.txt", "foo");
+    PushOneCommit.Result changeResult = change.to("refs/for/master");
+
+    // Create a successor change.
+    PushOneCommit change2 =
+        pushFactory.create(db, user.getIdent(), testRepo, "feature", "b.txt", "bar");
+    PushOneCommit.Result change2Result = change2.to("refs/for/master");
+
+    // Delete first change.
+    gApi.changes().id(changeResult.getChangeId()).delete();
+
+    // Submit is expected to fail.
+    submitWithConflict(
+        change2Result.getChangeId(),
+        "Failed to submit 1 change due to the following problems:\n"
+            + "Change "
+            + change2Result.getChange().getId()
+            + ": Depends on change that was not submitted."
+            + " Commit "
+            + change2Result.getCommit().name()
+            + " depends on commit "
+            + changeResult.getCommit().name()
+            + " which cannot be merged."
+            + " Is the change of this commit not visible or was it deleted?");
+
+    assertRefUpdatedEvents();
+    assertChangeMergedEvents();
+  }
+
+  @Test
+  public void dependencyOnChangeForNonVisibleBranchPreventsMerge() throws Exception {
+    grantLabel("Code-Review", -2, 2, project, "refs/heads/*", false, REGISTERED_USERS, false);
+    grant(project, "refs/*", Permission.SUBMIT, false, REGISTERED_USERS);
+
+    // Create a change
+    PushOneCommit change =
+        pushFactory.create(db, admin.getIdent(), testRepo, "fix", "a.txt", "foo");
+    PushOneCommit.Result changeResult = change.to("refs/for/master");
+    approve(changeResult.getChangeId());
+
+    // Create a successor change.
+    PushOneCommit change2 =
+        pushFactory.create(db, admin.getIdent(), testRepo, "feature", "b.txt", "bar");
+    PushOneCommit.Result change2Result = change2.to("refs/for/master");
+
+    // Move the first change to a destination branch that is non-visible to user so that user cannot
+    // this change anymore.
+    Branch.NameKey secretBranch = new Branch.NameKey(project, "secretBranch");
+    gApi.projects()
+        .name(secretBranch.getParentKey().get())
+        .branch(secretBranch.get())
+        .create(new BranchInput());
+    gApi.changes().id(changeResult.getChangeId()).move(secretBranch.get());
+    block(secretBranch.get(), "read", ANONYMOUS_USERS);
+
+    setApiUser(user);
+
+    // Verify that user cannot see the first change.
+    try {
+      gApi.changes().id(changeResult.getChangeId()).get();
+      fail("expected failure");
+    } catch (ResourceNotFoundException e) {
+      assertThat(e.getMessage()).isEqualTo("Not found: " + changeResult.getChangeId());
+    }
+
+    // Submit is expected to fail.
+    submitWithConflict(
+        change2Result.getChangeId(),
+        "Failed to submit 1 change due to the following problems:\n"
+            + "Change "
+            + change2Result.getChange().getId()
+            + ": Depends on change that was not submitted."
+            + " Commit "
+            + change2Result.getCommit().name()
+            + " depends on commit "
+            + changeResult.getCommit().name()
+            + " which cannot be merged."
+            + " Is the change of this commit not visible or was it deleted?");
+
+    assertRefUpdatedEvents();
+    assertChangeMergedEvents();
+  }
+
+  @Test
+  public void dependencyOnHiddenChangeShouldPreventMergeButDoesnt() throws Exception {
+    grantLabel("Code-Review", -2, 2, project, "refs/heads/*", false, REGISTERED_USERS, false);
+    grant(project, "refs/*", Permission.SUBMIT, false, REGISTERED_USERS);
+
+    // Create a change
+    PushOneCommit change =
+        pushFactory.create(db, admin.getIdent(), testRepo, "fix", "a.txt", "foo");
+    PushOneCommit.Result changeResult = change.to("refs/for/master");
+    approve(changeResult.getChangeId());
+
+    // Create a successor change.
+    PushOneCommit change2 =
+        pushFactory.create(db, admin.getIdent(), testRepo, "feature", "b.txt", "bar");
+    PushOneCommit.Result change2Result = change2.to("refs/for/master");
+    approve(change2Result.getChangeId());
+
+    // Mark the first change private so that it's not visible to user.
+    gApi.changes().id(changeResult.getChangeId()).setPrivate(true, "nobody should see this");
+
+    setApiUser(user);
+
+    // Verify that user cannot see the first change.
+    try {
+      gApi.changes().id(changeResult.getChangeId()).get();
+      fail("expected failure");
+    } catch (ResourceNotFoundException e) {
+      assertThat(e.getMessage()).isEqualTo("Not found: " + changeResult.getChangeId());
+    }
+
+    // Submit the second change which has a dependency on the first change which is not visible to
+    // the user. We would expect the submit to fail, but instead the submit succeeds and the hidden
+    // change gets submitted too.
+    // TODO(ekempin): Make this submit fail.
+    gApi.changes().id(change2Result.getChangeId()).current().submit(new SubmitInput());
+
+    // Verify that both changes have been submitted.
+    setApiUser(admin);
+    assertThat(gApi.changes().id(changeResult.getChangeId()).get().status)
+        .isEqualTo(ChangeStatus.MERGED);
+    assertThat(gApi.changes().id(change2Result.getChangeId()).get().status)
+        .isEqualTo(ChangeStatus.MERGED);
   }
 
   @Test
@@ -529,7 +722,7 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
     List<String> untarredFiles = new ArrayList<>();
     try (TarArchiveInputStream tarInputStream =
         (TarArchiveInputStream) new ArchiveStreamFactory().createArchiveInputStream("tar", is)) {
-      TarArchiveEntry entry = null;
+      TarArchiveEntry entry;
       while ((entry = (TarArchiveEntry) tarInputStream.getNextEntry()) != null) {
         untarredFiles.add(entry.getName());
       }

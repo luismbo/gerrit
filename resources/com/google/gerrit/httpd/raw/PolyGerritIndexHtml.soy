@@ -30,6 +30,7 @@
   <html lang="en">{\n}
   <meta charset="utf-8">{\n}
   <meta name="description" content="Gerrit Code Review">{\n}
+  <meta name="referrer" content="never">{\n}
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">{\n}
 
   <script>
@@ -65,7 +66,7 @@
   //
   // github.com/Polymer/polymer-resin/blob/master/getting-started.md#integrating
   {if $assetsPath and $assetsBundle}
-    <link rel="import" href="{$assetsPath + $assetsBundle}">{\n}
+    <link rel="import" href="{$assetsPath}/{$assetsBundle}">{\n}
   {/if}
 
   <link rel="preload" href="{$staticResourcePath}/elements/gr-app.js" as="script" crossorigin="anonymous">{\n}

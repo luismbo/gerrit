@@ -14,7 +14,7 @@
 
 package com.google.gerrit.server.permissions;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 import com.google.gerrit.extensions.api.access.GerritPermission;
 import com.google.gerrit.reviewdb.client.RefNames;
@@ -49,6 +49,21 @@ public enum ProjectPermission implements GerritPermission {
    * </pre>
    */
   CREATE_REF,
+
+  /**
+   * Can create at least one tag reference in the project.
+   *
+   * <p>This project level permission only validates the user may create some tag reference within
+   * the project. The exact reference name must be checked at creation:
+   *
+   * <pre>permissionBackend
+   *    .user(user)
+   *    .project(proj)
+   *    .ref(ref)
+   *    .check(RefPermission.CREATE);
+   * </pre>
+   */
+  CREATE_TAG_REF,
 
   /**
    * Can create at least one change in the project.
@@ -93,7 +108,7 @@ public enum ProjectPermission implements GerritPermission {
   }
 
   ProjectPermission(String description) {
-    this.description = checkNotNull(description);
+    this.description = requireNonNull(description);
   }
 
   @Override

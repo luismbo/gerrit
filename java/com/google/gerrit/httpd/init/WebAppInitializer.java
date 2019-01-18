@@ -48,6 +48,7 @@ import com.google.gerrit.server.StartupChecks;
 import com.google.gerrit.server.account.AccountDeactivator;
 import com.google.gerrit.server.account.InternalAccountDirectory;
 import com.google.gerrit.server.api.GerritApiModule;
+import com.google.gerrit.server.api.PluginApiModule;
 import com.google.gerrit.server.audit.AuditModule;
 import com.google.gerrit.server.cache.h2.H2CacheModule;
 import com.google.gerrit.server.cache.mem.DefaultMemoryCacheModule;
@@ -55,10 +56,12 @@ import com.google.gerrit.server.change.ChangeCleanupRunner;
 import com.google.gerrit.server.config.AuthConfig;
 import com.google.gerrit.server.config.AuthConfigModule;
 import com.google.gerrit.server.config.CanonicalWebUrlModule;
+import com.google.gerrit.server.config.DefaultUrlFormatter;
 import com.google.gerrit.server.config.DownloadConfig;
 import com.google.gerrit.server.config.GerritGlobalModule;
 import com.google.gerrit.server.config.GerritInstanceNameModule;
 import com.google.gerrit.server.config.GerritOptions;
+import com.google.gerrit.server.config.GerritRuntime;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.config.GerritServerConfigModule;
 import com.google.gerrit.server.config.SitePath;
@@ -71,6 +74,8 @@ import com.google.gerrit.server.git.SearchingChangeCacheImpl;
 import com.google.gerrit.server.git.WorkQueue;
 import com.google.gerrit.server.index.IndexModule;
 import com.google.gerrit.server.index.IndexModule.IndexType;
+import com.google.gerrit.server.index.OnlineUpgrader;
+import com.google.gerrit.server.index.VersionManager;
 import com.google.gerrit.server.mail.SignedTokenEmailTokenVerifier;
 import com.google.gerrit.server.mail.receive.MailReceiver;
 import com.google.gerrit.server.mail.send.SmtpEmailSender;
@@ -106,6 +111,7 @@ import com.google.inject.Injector;
 import com.google.inject.Key;
 import com.google.inject.Module;
 import com.google.inject.Provider;
+import com.google.inject.ProvisionException;
 import com.google.inject.name.Names;
 import com.google.inject.servlet.GuiceFilter;
 import com.google.inject.servlet.GuiceServletContextListener;
@@ -133,6 +139,8 @@ import org.eclipse.jgit.lib.Config;
 public class WebAppInitializer extends GuiceServletContextListener implements Filter {
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
+  private static final String GERRIT_SITE_PATH = "gerrit.site_path";
+
   private Path sitePath;
   private Injector dbInjector;
   private Injector cfgInjector;
@@ -154,9 +162,11 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
 
   private synchronized void init() {
     if (manager == null) {
-      final String path = System.getProperty("gerrit.site_path");
+      String path = System.getProperty(GERRIT_SITE_PATH);
       if (path != null) {
         sitePath = Paths.get(path);
+      } else {
+        throw new ProvisionException(GERRIT_SITE_PATH + " must be defined");
       }
 
       if (System.getProperty("gerrit.init") != null) {
@@ -170,7 +180,7 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
         }
         new SiteInitializer(
                 path,
-                System.getProperty("gerrit.init_path"),
+                System.getProperty(GERRIT_SITE_PATH),
                 new UnzippedDistribution(servletContext),
                 pluginsToInstall)
             .init();
@@ -291,21 +301,6 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
               listener().to(ReviewDbDataSourceProvider.class);
             }
           });
-
-      // If we didn't get the site path from the system property
-      // we need to get it from the database, as that's our old
-      // method of locating the site path on disk.
-      //
-      modules.add(
-          new AbstractModule() {
-            @Override
-            protected void configure() {
-              bind(Path.class)
-                  .annotatedWith(SitePath.class)
-                  .toProvider(SitePathFromSystemConfigProvider.class)
-                  .in(SINGLETON);
-            }
-          });
       modules.add(new GerritServerConfigModule());
     }
     modules.add(new DatabaseModule());
@@ -335,6 +330,7 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
     modules.add(new MimeUtil2Module());
     modules.add(cfgInjector.getInstance(GerritGlobalModule.class));
     modules.add(new GerritApiModule());
+    modules.add(new PluginApiModule());
     modules.add(new SearchingChangeCacheImpl.Module());
     modules.add(new InternalAccountDirectory.Module());
     modules.add(new DefaultPermissionBackendModule());
@@ -345,21 +341,6 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
     modules.add(new SignedTokenEmailTokenVerifier.Module());
     modules.add(new LocalMergeSuperSetComputation.Module());
     modules.add(new AuditModule());
-
-    // Plugin module needs to be inserted *before* the index module.
-    // There is the concept of LifecycleModule, in Gerrit's own extension
-    // to Guice, which has these:
-    //  listener().to(SomeClassImplementingLifecycleListener.class);
-    // and the start() methods of each such listener are executed in the
-    // order they are declared.
-    // Makes sure that PluginLoader.start() is executed before the
-    // LuceneIndexModule.start() so that plugins get loaded and the respective
-    // Guice modules installed so that the on-line reindexing will happen
-    // with the proper classes (e.g. group backends, custom Prolog
-    // predicates) and the associated rules ready to be evaluated.
-    modules.add(new PluginModule());
-
-    modules.add(new RestApiModule());
     modules.add(new GpgModule(config));
     modules.add(new StartupChecks.Module());
 
@@ -367,6 +348,12 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
     // work queue can get stuck waiting on index futures that will never return.
     modules.add(createIndexModule());
 
+    modules.add(new PluginModule());
+    if (VersionManager.getOnlineUpgrade(config)) {
+      modules.add(new OnlineUpgrader.Module());
+    }
+
+    modules.add(new RestApiModule());
     modules.add(new WorkQueue.Module());
     modules.add(new GerritInstanceNameModule());
     modules.add(
@@ -376,12 +363,15 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
             return HttpCanonicalWebUrlProvider.class;
           }
         });
+    modules.add(new DefaultUrlFormatter.Module());
+
     modules.add(SshKeyCacheImpl.module());
     modules.add(
         new AbstractModule() {
           @Override
           protected void configure() {
             bind(GerritOptions.class).toInstance(new GerritOptions(config, false, false, false));
+            bind(GerritRuntime.class).toInstance(GerritRuntime.DAEMON);
           }
         });
     modules.add(new GarbageCollectionModule());
@@ -395,9 +385,9 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
   private Module createIndexModule() {
     switch (indexType) {
       case LUCENE:
-        return LuceneIndexModule.latestVersionWithOnlineUpgrade(false);
+        return LuceneIndexModule.latestVersion(false);
       case ELASTICSEARCH:
-        return ElasticIndexModule.latestVersionWithOnlineUpgrade(false);
+        return ElasticIndexModule.latestVersion(false);
       default:
         throw new IllegalStateException("unsupported index.type = " + indexType);
     }
@@ -446,7 +436,10 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
     modules.add(sysInjector.getInstance(GetUserFilter.Module.class));
 
     // StaticModule contains a "/*" wildcard, place it last.
-    modules.add(sysInjector.getInstance(StaticModule.class));
+    GerritOptions opts = sysInjector.getInstance(GerritOptions.class);
+    if (opts.enableMasterFeatures()) {
+      modules.add(sysInjector.getInstance(StaticModule.class));
+    }
 
     return sysInjector.createChildInjector(modules);
   }

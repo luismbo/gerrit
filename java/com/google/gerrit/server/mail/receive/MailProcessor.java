@@ -20,10 +20,10 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.flogger.FluentLogger;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.client.Side;
 import com.google.gerrit.extensions.registration.DynamicMap;
+import com.google.gerrit.extensions.registration.Extension;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.mail.HtmlParser;
@@ -47,7 +47,7 @@ import com.google.gerrit.server.account.AccountCache;
 import com.google.gerrit.server.account.AccountState;
 import com.google.gerrit.server.account.Emails;
 import com.google.gerrit.server.change.EmailReviewComments;
-import com.google.gerrit.server.config.CanonicalWebUrl;
+import com.google.gerrit.server.config.UrlFormatter;
 import com.google.gerrit.server.extensions.events.CommentAdded;
 import com.google.gerrit.server.mail.MailFilter;
 import com.google.gerrit.server.mail.send.InboundEmailRejectionSender;
@@ -64,6 +64,7 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.ManualRequestContext;
 import com.google.gerrit.server.util.OneOffRequestContext;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
@@ -97,7 +98,7 @@ public class MailProcessor {
   private final CommentAdded commentAdded;
   private final ApprovalsUtil approvalsUtil;
   private final AccountCache accountCache;
-  private final Provider<String> canonicalUrl;
+  private final UrlFormatter urlFormatter;
 
   @Inject
   public MailProcessor(
@@ -115,7 +116,7 @@ public class MailProcessor {
       ApprovalsUtil approvalsUtil,
       CommentAdded commentAdded,
       AccountCache accountCache,
-      @CanonicalWebUrl Provider<String> canonicalUrl) {
+      UrlFormatter urlFormatter) {
     this.emails = emails;
     this.emailRejectionSender = emailRejectionSender;
     this.retryHelper = retryHelper;
@@ -130,7 +131,7 @@ public class MailProcessor {
     this.commentAdded = commentAdded;
     this.approvalsUtil = approvalsUtil;
     this.accountCache = accountCache;
-    this.canonicalUrl = canonicalUrl;
+    this.urlFormatter = urlFormatter;
   }
 
   /**
@@ -148,7 +149,7 @@ public class MailProcessor {
 
   private void processImpl(BatchUpdate.Factory buf, MailMessage message)
       throws OrmException, UpdateException, RestApiException, IOException {
-    for (DynamicMap.Entry<MailFilter> filter : mailFilters) {
+    for (Extension<MailFilter> filter : mailFilters) {
       if (!filter.getProvider().get().shouldProcessMessage(message)) {
         logger.atWarning().log(
             "Message %s filtered by plugin %s %s. Will delete message.",
@@ -237,7 +238,11 @@ public class MailProcessor {
               .sorted(CommentsUtil.COMMENT_ORDER)
               .collect(toList());
       Project.NameKey project = cd.project();
-      String changeUrl = canonicalUrl.get() + "c/" + cd.project().get() + "/+/" + cd.getId().get();
+
+      // If URL is not defined, we won't be able to parse line comments. We still attempt to get the
+      // other ones.
+      String changeUrl =
+          urlFormatter.getChangeViewUrl(cd.project(), cd.getId()).orElse("http://gerrit.invalid/");
 
       List<MailComment> parsedComments;
       if (useHtmlParser(message)) {

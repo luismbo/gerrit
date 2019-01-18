@@ -1141,6 +1141,7 @@ entity is returned.
     ],
     "can_upload": true,
     "can_add": true,
+    "can_add_tags": true,
     "config_visible": true,
     "groups": {
       "c2ce4749a32ceb82cd6adcce65b8216e12afb41c": {
@@ -1191,21 +1192,19 @@ entity is returned.
   Content-Type: application/json; charset=UTF-8
 
   {
-    "remove": [
-      {
-        "refs/*": {
-          "permissions": {
-            "read": {
-              "rules": {
-                "c2ce4749a32ceb82cd6adcce65b8216e12afb41c": {
-                  "action": "ALLOW"
-                }
+    "remove": {
+      "refs/*": {
+        "permissions": {
+          "read": {
+            "rules": {
+              "c2ce4749a32ceb82cd6adcce65b8216e12afb41c": {
+                "action": "ALLOW"
               }
             }
           }
         }
       }
-    ]
+    }
   }
 ----
 
@@ -1242,6 +1241,7 @@ entity is returned.
     ],
     "can_upload": true,
     "can_add": true,
+    "can_add_tags": true,
     "config_visible": true,
     "groups": {
       "global:Anonymous-Users": {
@@ -1320,27 +1320,12 @@ a link:#change-info[ChangeInfo] entity describing the resulting change.
 [[check-access]]
 === Check Access
 --
-'POST /projects/MyProject/check.access'
+'GET /projects/MyProject/check.access?account=1000098&ref=refs%2Fheads%2Fsecret%2Fbla'
 --
 
-Runs access checks for other users. This requires the
-link:access-control.html#capability_viewAccess[View Access]
-global capability.
-
-Input for the access checks that should be run must be provided in
-the request body inside a
-link:#access-check-input[AccessCheckInput] entity.
-
-.Request
-----
-  POST /projects/MyProject/check.access HTTP/1.0
-  Content-Type: application/json; charset=UTF-8
-
-  {
-    "account": "Kristen.Burns@gerritcodereview.com",
-    "ref": "refs/heads/secret/bla"
-  }
-----
+This command runs access checks for other users. This requires the
+link:access-control.html#capability_viewAccess[View Access] global
+capability.
 
 The result is a link:#access-check-info[AccessCheckInfo] entity
 detailing the access of the given user for the given project,
@@ -1358,13 +1343,37 @@ project-ref, or project-permission-ref combination.
   }
 ----
 
-This endpoint can also be accessed as a GET request, using the query
-parameters `perm`, `account` and `ref`, for example:
+[[check-access-options]]
+==== Check Access Options
 
-----
-  GET /projects/MyProject/check.access?account=10024&ref=refs/heads/secret/bla
-----
+Account(account)::
+The account for which to check access. Mandatory.
 
+Permission(perm)::
+The ref permission for which to check access. If not specified, read
+access to at least branch is checked.
+
+Ref(ref)::
+The branch for which to check access. This must be given if `perm` is specified.
+
+[[check-access-post]]
+=== Check Access (POST)
+
+This endpoint can also be accessed as a POST request (deprecated). In
+this case, the input for the access checks must be provided in the
+request body inside a link:#access-check-input[AccessCheckInput]
+entity.
+
+.Request
+----
+  POST /projects/MyProject/check.access HTTP/1.0
+  Content-Type: application/json; charset=UTF-8
+
+  {
+    "account": "Kristen.Burns@gerritcodereview.com",
+    "ref": "refs/heads/secret/bla"
+  }
+----
 
 [[index]]
 === Index project
@@ -2585,8 +2594,9 @@ commit will be used.
   }
 ----
 
-As response a link:rest-api-changes.html#change-info[ChangeInfo] entity is returned that
-describes the resulting cherry-picked change.
+As response a link:rest-api-changes.html#cherry-pick-change-info[
+CherryPickChangeInfo] entity is returned that describes the resulting
+cherry-picked change.
 
 .Response
 ----
@@ -2920,7 +2930,7 @@ The `AccessCheckInfo` entity is the result of an access check.
 |=========================================
 |Field Name                  ||Description
 |`status`                    ||The HTTP status code for the access.
-200 means success, 403 means denied and 404 means the project does not exist.
+200 means success and 403 means denied.
 |`message`                   |optional|A clarifying message if `status` is not 200.
 |=========================================
 
@@ -3072,6 +3082,25 @@ link:rest-api-changes.html#auto_closeable_changes_check_result[
 AutoCloseableChangesCheckResult] entity.
 |==================================================
 
+[[commentlink-info]]
+=== CommentLinkInfo
+The `CommentLinkInfo` entity describes a
+link:config-gerrit.html#commentlink[commentlink].
+
+[options="header",cols="1,^2,4"]
+|==================================================
+|Field Name |        |Description
+|`match`    |        |A JavaScript regular expression to match
+positions to be replaced with a hyperlink, as documented in
+link#config-gerrit.html#commentlink.name.match[commentlink.name.match].
+|`link`     |        |The URL to direct the user to whenever the
+regular expression is matched, as documented in
+link#config-gerrit.html#commentlink.name.link[commentlink.name.link].
+|`enabled`  |optional|Whether the commentlink is enabled, as documented
+in link#config-gerrit.html#commentlink.name.enabled[
+commentlink.name.enabled]. If not set the commentlink is enabled.
+|==================================================
+
 [[config-info]]
 === ConfigInfo
 The `ConfigInfo` entity contains information about the effective project
@@ -3138,10 +3167,8 @@ The state of the project, can be `ACTIVE`, `READ_ONLY` or `HIDDEN`. +
 Not set if the project state is `ACTIVE`.
 |`commentlinks`              ||
 Map with the comment link configurations of the project. The name of
-the comment link configuration is mapped to the comment link
-configuration, which has the same format as the
-link:config-gerrit.html#_a_id_commentlink_a_section_commentlink[
-commentlink section] of `gerrit.config`.
+the comment link configuration is mapped to a link:#commentlink-info[
+CommentlinkInfo] entity.
 |`theme`                                   |optional|
 The theme that is configured for the project as a link:#theme-info[
 ThemeInfo] entity.
@@ -3442,10 +3469,10 @@ The max object size limit that is configured on the project as a
 formatted string. +
 Not set if there is no limit for the object size configured on project
 level.
-|`inherited_value` |optional|
-The max object size limit that is inherited from the global config as a
-formatted string. +
-Not set if there is no global limit for the object size.
+|`summary`         |optional|
+A string describing whether the value was inherited or overridden from
+the parent project or global config. +
+Not set if not inherited or overridden.
 |===============================
 
 [[project-access-input]]
@@ -3568,6 +3595,12 @@ Whether the usage of Change-Ids is required for the project (`TRUE`,
 `FALSE`, `INHERIT`).
 This property is deprecated and will be removed in
 a future release.
+|`enable_signed_push`                           |`INHERIT` if not set|
+Whether signed push validation is enabled on the project  (`TRUE`,
+`FALSE`, `INHERIT`).
+|`require_signed_push`                          |`INHERIT` if not set|
+Whether signed push validation is required on the project  (`TRUE`,
+`FALSE`, `INHERIT`).
 |`max_object_size_limit`     |optional|
 Max allowed Git object size for this project.
 Common unit suffixes of 'k', 'm', or 'g' are supported.
@@ -3704,8 +3737,6 @@ The path to the `GerritSiteHeader.html` file.
 |`footer`        |optional|
 The path to the `GerritSiteFooter.html` file.
 |=============================
-
-----
 
 GERRIT
 ------

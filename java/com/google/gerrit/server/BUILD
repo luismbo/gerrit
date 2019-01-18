@@ -1,3 +1,5 @@
+load("//tools/bzl:javadoc.bzl", "java_doc")
+
 CONSTANTS_SRC = [
     "documentation/Constants.java",
 ]
@@ -42,7 +44,9 @@ java_library(
         "//java/com/google/gerrit/reviewdb:server",
         "//java/com/google/gerrit/server/cache/serialize",
         "//java/com/google/gerrit/server/ioutil",
+        "//java/com/google/gerrit/server/logging",
         "//java/com/google/gerrit/server/util/git",
+        "//java/com/google/gerrit/server/util/time",
         "//java/com/google/gerrit/util/cli",
         "//java/com/google/gerrit/util/ssl",
         "//java/org/apache/commons/net",
@@ -138,8 +142,6 @@ java_library(
         "//lib/jgit/org.eclipse.jgit:jgit",
     ],
 )
-
-load("//tools/bzl:javadoc.bzl", "java_doc")
 
 java_doc(
     name = "doc",

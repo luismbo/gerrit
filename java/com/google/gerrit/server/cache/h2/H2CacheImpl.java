@@ -24,9 +24,11 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.FluentLogger;
 import com.google.common.hash.BloomFilter;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.server.cache.PersistentCache;
 import com.google.gerrit.server.cache.serialize.CacheSerializer;
+import com.google.gerrit.server.logging.TraceContext;
+import com.google.gerrit.server.logging.TraceContext.TraceTimer;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.inject.TypeLiteral;
 import java.io.IOException;
 import java.io.InvalidClassException;
@@ -235,19 +237,19 @@ public class H2CacheImpl<K, V> extends AbstractLoadingCache<K, V> implements Per
 
     @Override
     public ValueHolder<V> load(K key) throws Exception {
-      logger.atFine().log("Loading value for %s from cache", key);
-
-      if (store.mightContain(key)) {
-        ValueHolder<V> h = store.getIfPresent(key);
-        if (h != null) {
-          return h;
+      try (TraceTimer timer = TraceContext.newTimer("Loading value for %s from cache", key)) {
+        if (store.mightContain(key)) {
+          ValueHolder<V> h = store.getIfPresent(key);
+          if (h != null) {
+            return h;
+          }
         }
-      }
 
-      final ValueHolder<V> h = new ValueHolder<>(loader.load(key));
-      h.created = TimeUtil.nowMs();
-      executor.execute(() -> store.put(key, h));
-      return h;
+        final ValueHolder<V> h = new ValueHolder<>(loader.load(key));
+        h.created = TimeUtil.nowMs();
+        executor.execute(() -> store.put(key, h));
+        return h;
+      }
     }
   }
 
@@ -543,7 +545,7 @@ public class H2CacheImpl<K, V> extends AbstractLoadingCache<K, V> implements Per
         try (Statement s = c.conn.createStatement()) {
           // Compute size without restricting to version (although obsolete data was just pruned
           // anyway).
-          long used = 0;
+          long used;
           try (ResultSet r = s.executeQuery("SELECT SUM(space) FROM data")) {
             used = r.next() ? r.getLong(1) : 0;
           }

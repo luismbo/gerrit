@@ -185,7 +185,138 @@ limitations under the License.
       assert.equal(element._computeWebLinks(element.commitInfo).length, 1);
     });
 
-    test('_computeShowUploader test for uploader', () => {
+    suite('_getNonOwnerRole', () => {
+      let change;
+
+      setup(() => {
+        change = {
+          owner: {
+            email: 'abc@def',
+            _account_id: 1019328,
+          },
+          revisions: {
+            rev1: {
+              _number: 1,
+              uploader: {
+                email: 'ghi@def',
+                _account_id: 1011123,
+              },
+              commit: {
+                author: {email: 'jkl@def'},
+                committer: {email: 'ghi@def'},
+              },
+            },
+          },
+          current_revision: 'rev1',
+        };
+      });
+
+      suite('role=uploader', () => {
+        test('_getNonOwnerRole for uploader', () => {
+          assert.deepEqual(
+              element._getNonOwnerRole(change, element._CHANGE_ROLE.UPLOADER),
+              {email: 'ghi@def', _account_id: 1011123});
+        });
+
+        test('_getNonOwnerRole that it does not return uploader', () => {
+          // Set the uploader email to be the same as the owner.
+          change.revisions.rev1.uploader._account_id = 1019328;
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.UPLOADER));
+        });
+
+        test('_getNonOwnerRole null for uploader with no current rev', () => {
+          delete change.current_revision;
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.UPLOADER));
+        });
+
+        test('_computeShowRoleClass show uploader', () => {
+          assert.equal(element._computeShowRoleClass(
+              change, element._CHANGE_ROLE.UPLOADER), '');
+        });
+
+        test('_computeShowRoleClass hide uploader', () => {
+          // Set the uploader email to be the same as the owner.
+          change.revisions.rev1.uploader._account_id = 1019328;
+          assert.equal(element._computeShowRoleClass(change,
+              element._CHANGE_ROLE.UPLOADER), 'hideDisplay');
+        });
+      });
+
+      suite('role=committer', () => {
+        test('_getNonOwnerRole for committer', () => {
+          assert.deepEqual(
+              element._getNonOwnerRole(change, element._CHANGE_ROLE.COMMITTER),
+              {email: 'ghi@def'});
+        });
+
+        test('_getNonOwnerRole that it does not return committer', () => {
+          // Set the committer email to be the same as the owner.
+          change.revisions.rev1.commit.committer.email = 'abc@def';
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.COMMITTER));
+        });
+
+        test('_getNonOwnerRole null for committer with no current rev', () => {
+          delete change.current_revision;
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.COMMITTER));
+        });
+
+        test('_getNonOwnerRole null for committer with no commit', () => {
+          delete change.revisions.rev1.commit;
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.COMMITTER));
+        });
+
+        test('_getNonOwnerRole null for committer with no committer', () => {
+          delete change.revisions.rev1.commit.committer;
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.COMMITTER));
+        });
+      });
+
+      suite('role=author', () => {
+        test('_getNonOwnerRole for author', () => {
+          assert.deepEqual(
+              element._getNonOwnerRole(change, element._CHANGE_ROLE.AUTHOR),
+              {email: 'jkl@def'});
+        });
+
+        test('_getNonOwnerRole that it does not return author', () => {
+          // Set the author email to be the same as the owner.
+          change.revisions.rev1.commit.author.email = 'abc@def';
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.AUTHOR));
+        });
+
+        test('_getNonOwnerRole null for author with no current rev', () => {
+          delete change.current_revision;
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.AUTHOR));
+        });
+
+        test('_getNonOwnerRole null for author with no commit', () => {
+          delete change.revisions.rev1.commit;
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.AUTHOR));
+        });
+
+        test('_getNonOwnerRole null for author with no author', () => {
+          delete change.revisions.rev1.commit.author;
+          assert.isNull(element._getNonOwnerRole(change,
+              element._CHANGE_ROLE.AUTHOR));
+        });
+      });
+    });
+
+    test('Push Certificate Validation test BAD', () => {
+      const serverConfig = {
+        receive: {
+          enable_signed_push: true,
+        },
+      };
       const change = {
         change_id: 'Iad9dc96274af6946f3632be53b106ef80f7ba6ca',
         owner: {
@@ -194,8 +325,13 @@ limitations under the License.
         revisions: {
           rev1: {
             _number: 1,
-            uploader: {
-              _account_id: 1011123,
+            push_certificate: {
+              key: {
+                status: 'BAD',
+                problems: [
+                  'No public keys found for key ID E5E20E52',
+                ],
+              },
             },
           },
         },
@@ -204,54 +340,21 @@ limitations under the License.
         labels: {},
         mergeable: true,
       };
-      assert.deepEqual(element._computeShowUploader(change),
-          {_account_id: 1011123});
+      const result =
+          element._computePushCertificateValidation(serverConfig, change);
+      assert.equal(result.message,
+          'Push certificate is invalid:\n' +
+          'No public keys found for key ID E5E20E52');
+      assert.equal(result.icon, 'gr-icons:close');
+      assert.equal(result.class, 'invalid');
     });
 
-    test('_computeShowUploader test that it does not return uploader', () => {
-      const change = {
-        change_id: 'Iad9dc96274af6946f3632be53b106ef80f7ba6ca',
-        owner: {
-          _account_id: 1011123,
+    test('Push Certificate Validation test TRUSTED', () => {
+      const serverConfig = {
+        receive: {
+          enable_signed_push: true,
         },
-        revisions: {
-          rev1: {
-            _number: 1,
-            uploader: {
-              _account_id: 1011123,
-            },
-          },
-        },
-        current_revision: 'rev1',
-        status: 'NEW',
-        labels: {},
-        mergeable: true,
       };
-      assert.isNotOk(element._computeShowUploader(change));
-    });
-
-    test('no current_revision makes _computeShowUploader return null', () => {
-      const change = {
-        change_id: 'Iad9dc96274af6946f3632be53b106ef80f7ba6ca',
-        owner: {
-          _account_id: 1011123,
-        },
-        revisions: {
-          rev1: {
-            _number: 1,
-            uploader: {
-              _account_id: 1011123,
-            },
-          },
-        },
-        status: 'NEW',
-        labels: {},
-        mergeable: true,
-      };
-      assert.isNotOk(element._computeShowUploader(change));
-    });
-
-    test('_computeShowUploaderHide test for string which equals true', () => {
       const change = {
         change_id: 'Iad9dc96274af6946f3632be53b106ef80f7ba6ca',
         owner: {
@@ -260,8 +363,10 @@ limitations under the License.
         revisions: {
           rev1: {
             _number: 1,
-            uploader: {
-              _account_id: 1011123,
+            push_certificate: {
+              key: {
+                status: 'TRUSTED',
+              },
             },
           },
         },
@@ -270,21 +375,28 @@ limitations under the License.
         labels: {},
         mergeable: true,
       };
-      assert.equal(element._computeShowUploaderHide(change), '');
+      const result =
+          element._computePushCertificateValidation(serverConfig, change);
+      assert.equal(result.message,
+          'Push certificate is valid and key is trusted');
+      assert.equal(result.icon, 'gr-icons:check');
+      assert.equal(result.class, 'trusted');
     });
 
-    test('_computeShowUploaderHide test for hideDisplay', () => {
+    test('Push Certificate Validation is missing test', () => {
+      const serverConfig = {
+        receive: {
+          enable_signed_push: true,
+        },
+      };
       const change = {
         change_id: 'Iad9dc96274af6946f3632be53b106ef80f7ba6ca',
         owner: {
-          _account_id: 1011123,
+          _account_id: 1019328,
         },
         revisions: {
           rev1: {
             _number: 1,
-            uploader: {
-              _account_id: 1011123,
-            },
           },
         },
         current_revision: 'rev1',
@@ -292,8 +404,12 @@ limitations under the License.
         labels: {},
         mergeable: true,
       };
-      assert.equal(
-          element._computeShowUploaderHide(change), 'hideDisplay');
+      const result =
+          element._computePushCertificateValidation(serverConfig, change);
+      assert.equal(result.message,
+          'This patch set was created without a push certificate');
+      assert.equal(result.icon, 'gr-icons:help');
+      assert.equal(result.class, 'help');
     });
 
     test('_computeParents', () => {
@@ -585,6 +701,20 @@ limitations under the License.
               assert.equal(element.change.hashtags, newHashtag);
             });
       });
+    });
+
+    test('editTopic', () => {
+      element.account = {test: true};
+      element.change = {actions: {topic: {enabled: true}}};
+      flushAsynchronousOperations();
+
+      const label = element.$$('.topicEditableLabel');
+      assert.ok(label);
+      sandbox.stub(label, 'open');
+      element.editTopic();
+      flushAsynchronousOperations();
+
+      assert.isTrue(label.open.called);
     });
 
     suite('plugin endpoints', () => {

@@ -20,16 +20,18 @@ import com.google.common.collect.ImmutableList;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.RestResponse;
 import com.google.gerrit.acceptance.TestAccount;
+import com.google.gerrit.acceptance.testsuite.group.GroupOperations;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.config.AccessCheckInfo;
 import com.google.gerrit.extensions.api.config.AccessCheckInput;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
+import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
-import com.google.gerrit.server.group.InternalGroup;
 import com.google.gerrit.server.group.SystemGroupBackend;
+import com.google.inject.Inject;
 import java.util.List;
 import org.eclipse.jgit.lib.RefUpdate;
 import org.eclipse.jgit.lib.RefUpdate.Result;
@@ -39,35 +41,29 @@ import org.junit.Test;
 
 public class CheckAccessIT extends AbstractDaemonTest {
 
+  @Inject private GroupOperations groupOperations;
+
   private Project.NameKey normalProject;
   private Project.NameKey secretProject;
   private Project.NameKey secretRefProject;
   private TestAccount privilegedUser;
-  private InternalGroup privilegedGroup;
 
   @Before
   public void setUp() throws Exception {
     normalProject = createProject("normal");
     secretProject = createProject("secret");
     secretRefProject = createProject("secretRef");
-    privilegedGroup = group(createGroup("privilegedGroup"));
+    AccountGroup.UUID privilegedGroupUuid =
+        groupOperations.newGroup().name(name("privilegedGroup")).create();
 
     privilegedUser = accountCreator.create("privilegedUser", "snowden@nsa.gov", "Ed Snowden");
-    gApi.groups().id(privilegedGroup.getGroupUUID().get()).addMembers(privilegedUser.username);
+    groupOperations.group(privilegedGroupUuid).forUpdate().addMember(privilegedUser.id).update();
 
-    assertThat(gApi.groups().id(privilegedGroup.getGroupUUID().get()).members().get(0).email)
-        .contains("snowden");
-
-    grant(secretProject, "refs/*", Permission.READ, false, privilegedGroup.getGroupUUID());
+    grant(secretProject, "refs/*", Permission.READ, false, privilegedGroupUuid);
     block(secretProject, "refs/*", Permission.READ, SystemGroupBackend.REGISTERED_USERS);
 
     deny(secretRefProject, "refs/*", Permission.READ, SystemGroupBackend.ANONYMOUS_USERS);
-    grant(
-        secretRefProject,
-        "refs/heads/secret/*",
-        Permission.READ,
-        false,
-        privilegedGroup.getGroupUUID());
+    grant(secretRefProject, "refs/heads/secret/*", Permission.READ, false, privilegedGroupUuid);
     block(
         secretRefProject,
         "refs/heads/secret/*",
@@ -81,13 +77,8 @@ public class CheckAccessIT extends AbstractDaemonTest {
         SystemGroupBackend.REGISTERED_USERS);
 
     // Ref permission
-    grant(
-        normalProject,
-        "refs/*",
-        Permission.VIEW_PRIVATE_CHANGES,
-        false,
-        privilegedGroup.getGroupUUID());
-    grant(normalProject, "refs/*", Permission.FORGE_SERVER, false, privilegedGroup.getGroupUUID());
+    grant(normalProject, "refs/*", Permission.VIEW_PRIVATE_CHANGES, false, privilegedGroupUuid);
+    grant(normalProject, "refs/*", Permission.FORGE_SERVER, false, privilegedGroupUuid);
   }
 
   @Test

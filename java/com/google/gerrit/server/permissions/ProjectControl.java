@@ -15,6 +15,7 @@
 package com.google.gerrit.server.permissions;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.gerrit.reviewdb.client.RefNames.REFS_TAGS;
 
 import com.google.gerrit.common.data.AccessSection;
 import com.google.gerrit.common.data.Permission;
@@ -28,7 +29,6 @@ import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
-import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.account.GroupMembership;
 import com.google.gerrit.server.config.GitReceivePackGroups;
 import com.google.gerrit.server.config.GitUploadPackGroups;
@@ -69,7 +69,6 @@ class ProjectControl {
   private final ChangeControl.Factory changeControlFactory;
   private final PermissionCollection.Factory permissionFilter;
   private final DefaultRefFilter.Factory refFilterFactory;
-  private final IdentifiedUser.GenericFactory identifiedUserFactory;
 
   private List<SectionMatcher> allSections;
   private Map<String, RefControl> refControls;
@@ -83,7 +82,6 @@ class ProjectControl {
       ChangeControl.Factory changeControlFactory,
       PermissionBackend permissionBackend,
       DefaultRefFilter.Factory refFilterFactory,
-      IdentifiedUser.GenericFactory identifiedUserFactory,
       @Assisted CurrentUser who,
       @Assisted ProjectState ps) {
     this.changeControlFactory = changeControlFactory;
@@ -92,26 +90,8 @@ class ProjectControl {
     this.permissionFilter = permissionFilter;
     this.permissionBackend = permissionBackend;
     this.refFilterFactory = refFilterFactory;
-    this.identifiedUserFactory = identifiedUserFactory;
     user = who;
     state = ps;
-  }
-
-  ProjectControl forUser(CurrentUser who) {
-    ProjectControl r =
-        new ProjectControl(
-            uploadGroups,
-            receiveGroups,
-            permissionFilter,
-            changeControlFactory,
-            permissionBackend,
-            refFilterFactory,
-            identifiedUserFactory,
-            who,
-            state);
-    // Not per-user, and reusing saves lookup time.
-    r.allSections = allSections;
-    return r;
   }
 
   ForProject asForProject() {
@@ -138,7 +118,7 @@ class ProjectControl {
     RefControl ctl = refControls.get(refName);
     if (ctl == null) {
       PermissionCollection relevant = permissionFilter.filter(access(), refName, user);
-      ctl = new RefControl(identifiedUserFactory, this, refName, relevant);
+      ctl = new RefControl(this, refName, relevant);
       refControls.put(refName, ctl);
     }
     return ctl;
@@ -212,6 +192,10 @@ class ProjectControl {
     return (canPerformOnAnyRef(Permission.CREATE) || isAdmin());
   }
 
+  private boolean canAddTagRefs() {
+    return (canPerformOnTagRef(Permission.CREATE) || isAdmin());
+  }
+
   private boolean canCreateChanges() {
     for (SectionMatcher matcher : access()) {
       AccessSection section = matcher.getSection();
@@ -233,6 +217,26 @@ class ProjectControl {
     return declaredOwner;
   }
 
+  private boolean canPerformOnTagRef(String permissionName) {
+    for (SectionMatcher matcher : access()) {
+      AccessSection section = matcher.getSection();
+
+      if (section.getName().startsWith(REFS_TAGS)) {
+        Permission permission = section.getPermission(permissionName);
+        if (permission == null) {
+          continue;
+        }
+
+        Boolean can = canPerform(permissionName, section, permission);
+        if (can != null) {
+          return can;
+        }
+      }
+    }
+
+    return false;
+  }
+
   private boolean canPerformOnAnyRef(String permissionName) {
     for (SectionMatcher matcher : access()) {
       AccessSection section = matcher.getSection();
@@ -241,23 +245,31 @@ class ProjectControl {
         continue;
       }
 
-      for (PermissionRule rule : permission.getRules()) {
-        if (rule.isBlock() || rule.isDeny() || !match(rule)) {
-          continue;
-        }
-
-        // Being in a group that was granted this permission is only an
-        // approximation.  There might be overrides and doNotInherit
-        // that would render this to be false.
-        //
-        if (controlForRef(section.getName()).canPerform(permissionName)) {
-          return true;
-        }
-        break;
+      Boolean can = canPerform(permissionName, section, permission);
+      if (can != null) {
+        return can;
       }
     }
 
     return false;
+  }
+
+  private Boolean canPerform(String permissionName, AccessSection section, Permission permission) {
+    for (PermissionRule rule : permission.getRules()) {
+      if (rule.isBlock() || rule.isDeny() || !match(rule)) {
+        continue;
+      }
+
+      // Being in a group that was granted this permission is only an
+      // approximation.  There might be overrides and doNotInherit
+      // that would render this to be false.
+      //
+      if (controlForRef(section.getName()).canPerform(permissionName)) {
+        return true;
+      }
+      break;
+    }
+    return null;
   }
 
   private boolean canPerformOnAllRefs(String permission, Set<String> ignore) {
@@ -403,6 +415,8 @@ class ProjectControl {
 
         case CREATE_REF:
           return canAddRefs();
+        case CREATE_TAG_REF:
+          return canAddTagRefs();
         case CREATE_CHANGE:
           return canCreateChanges();
 

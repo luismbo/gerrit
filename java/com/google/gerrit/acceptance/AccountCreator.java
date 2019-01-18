@@ -14,8 +14,9 @@
 
 package com.google.gerrit.acceptance;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.gerrit.common.Nullable;
@@ -143,11 +144,16 @@ public class AccountCreator {
   }
 
   public TestAccount get(String username) {
-    return checkNotNull(accounts.get(username), "No TestAccount created for %s", username);
+    return requireNonNull(
+        accounts.get(username), () -> String.format("No TestAccount created for %s ", username));
   }
 
   public void evict(Collection<Account.Id> ids) {
     accounts.values().removeIf(a -> ids.contains(a.id));
+  }
+
+  public ImmutableList<TestAccount> getAll() {
+    return ImmutableList.copyOf(accounts.values());
   }
 
   private void addGroupMember(AccountGroup.UUID groupUuid, Account.Id accountId)

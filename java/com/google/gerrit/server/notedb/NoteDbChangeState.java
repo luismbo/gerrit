@@ -15,12 +15,12 @@
 package com.google.gerrit.server.notedb;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.gerrit.reviewdb.client.RefNames.changeMetaRef;
 import static com.google.gerrit.reviewdb.client.RefNames.refsDraftComments;
 import static com.google.gerrit.server.notedb.NoteDbChangeState.PrimaryStorage.NOTE_DB;
 import static com.google.gerrit.server.notedb.NoteDbChangeState.PrimaryStorage.REVIEW_DB;
+import static java.util.Objects.requireNonNull;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.annotations.VisibleForTesting;
@@ -30,11 +30,11 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.common.primitives.Longs;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.server.ReviewDbUtil;
 import com.google.gerrit.server.git.RefCache;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gwtorm.server.OrmRuntimeException;
 import java.io.IOException;
 import java.sql.Timestamp;
@@ -339,10 +339,10 @@ public class NoteDbChangeState {
       PrimaryStorage primaryStorage,
       Optional<RefState> refState,
       Optional<Timestamp> readOnlyUntil) {
-    this.changeId = checkNotNull(changeId);
-    this.primaryStorage = checkNotNull(primaryStorage);
-    this.refState = checkNotNull(refState);
-    this.readOnlyUntil = checkNotNull(readOnlyUntil);
+    this.changeId = requireNonNull(changeId);
+    this.primaryStorage = requireNonNull(primaryStorage);
+    this.refState = requireNonNull(refState);
+    this.readOnlyUntil = requireNonNull(readOnlyUntil);
 
     switch (primaryStorage) {
       case REVIEW_DB:

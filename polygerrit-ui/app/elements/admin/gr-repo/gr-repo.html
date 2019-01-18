@@ -55,7 +55,16 @@ limitations under the License.
     </style>
     <style include="gr-form-styles"></style>
     <main class="gr-form-styles read-only">
-      <h1 id="Title">[[repo]]</h1>
+      <style include="shared-styles"></style>
+      <div class="info">
+        <h1 id="Title" class$="name">
+          [[repo]]
+          <hr/>
+        </h1>
+        <div>
+          <a href$="[[_computeChangesUrl(repo)]]">(view changes)</a>
+        </div>
+      </div>
       <div id="loading" class$="[[_computeLoadingClass(_loading)]]">Loading...</div>
       <div id="loadedContent" class$="[[_computeLoadingClass(_loading)]]">
         <div id="downloadContent" class$="[[_computeDownloadClass(_schemes)]]">
@@ -267,6 +276,9 @@ limitations under the License.
                       is="iron-input"
                       type="text"
                       disabled$="[[_readOnly]]">
+                  <template is="dom-if" if="[[_repoConfig.max_object_size_limit.value]]">
+                    effective: [[_repoConfig.max_object_size_limit.value]] bytes
+                  </template>
                 </span>
               </section>
               <section>

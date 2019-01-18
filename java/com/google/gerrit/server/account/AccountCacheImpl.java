@@ -21,13 +21,15 @@ import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.server.FanOutExecutor;
 import com.google.gerrit.server.account.externalids.ExternalId;
 import com.google.gerrit.server.account.externalids.ExternalIds;
 import com.google.gerrit.server.cache.CacheModule;
 import com.google.gerrit.server.config.AllUsersName;
+import com.google.gerrit.server.logging.TraceContext;
+import com.google.gerrit.server.logging.TraceContext.TraceTimer;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.inject.Inject;
 import com.google.inject.Module;
 import com.google.inject.Singleton;
@@ -181,8 +183,9 @@ public class AccountCacheImpl implements AccountCache {
 
     @Override
     public Optional<AccountState> load(Account.Id who) throws Exception {
-      logger.atFine().log("Loading account %s", who);
-      return accounts.get(who);
+      try (TraceTimer timer = TraceContext.newTimer("Loading account %s", who)) {
+        return accounts.get(who);
+      }
     }
   }
 }

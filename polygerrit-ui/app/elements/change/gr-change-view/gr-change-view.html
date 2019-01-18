@@ -91,7 +91,7 @@ limitations under the License.
         font-size: 1.2rem;
       }
       .headerTitle .headerSubject {
-        font-family: var(--font-family-bold);
+        font-weight: var(--font-weight-bold);
       }
       #replyBtn {
         margin-bottom: 1em;
@@ -394,8 +394,10 @@ limitations under the License.
           <span class="headerSubject">[[_change.subject]]</span>
         </div><!-- end headerTitle -->
         <div class="commitActions" hidden$="[[!_loggedIn]]">
-          <gr-change-actions id="actions"
+          <gr-change-actions
+              id="actions"
               change="[[_change]]"
+              disable-edit="[[disableEdit]]"
               has-parent="[[hasParent]]"
               actions="[[_change.actions]]"
               revision-actions="[[_currentRevisionActions]]"
@@ -606,6 +608,8 @@ limitations under the License.
     </gr-overlay>
     <gr-overlay id="uploadHelpOverlay" with-backdrop>
       <gr-upload-help-dialog
+          revision="[[_currentRevision]]"
+          target-branch="[[_change.branch]]"
           on-close="_handleCloseUploadHelpDialog"></gr-upload-help-dialog>
     </gr-overlay>
     <gr-overlay id="includedInOverlay" with-backdrop>

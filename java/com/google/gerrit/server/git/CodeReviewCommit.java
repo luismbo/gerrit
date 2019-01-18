@@ -16,12 +16,16 @@ package com.google.gerrit.server.git;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Ordering;
+import com.google.gerrit.common.Nullable;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.submit.CommitMergeStatus;
 import java.io.IOException;
+import java.util.Optional;
+import java.util.Set;
 import org.eclipse.jgit.errors.IncorrectObjectTypeException;
 import org.eclipse.jgit.errors.MissingObjectException;
 import org.eclipse.jgit.lib.AnyObjectId;
@@ -118,6 +122,15 @@ public class CodeReviewCommit extends RevCommit {
    */
   private CommitMergeStatus statusCode;
 
+  /**
+   * Message for the status that is returned to the calling user if the status indicates a problem
+   * that prevents submit.
+   */
+  private Optional<String> statusMessage = Optional.empty();
+
+  /** List of files in this commit that contain Git conflict markers. */
+  private ImmutableSet<String> filesWithGitConflicts;
+
   public CodeReviewCommit(AnyObjectId id) {
     super(id);
   }
@@ -132,6 +145,25 @@ public class CodeReviewCommit extends RevCommit {
 
   public void setStatusCode(CommitMergeStatus statusCode) {
     this.statusCode = statusCode;
+  }
+
+  public Optional<String> getStatusMessage() {
+    return statusMessage;
+  }
+
+  public void setStatusMessage(@Nullable String statusMessage) {
+    this.statusMessage = Optional.ofNullable(statusMessage);
+  }
+
+  public ImmutableSet<String> getFilesWithGitConflicts() {
+    return filesWithGitConflicts != null ? filesWithGitConflicts : ImmutableSet.of();
+  }
+
+  public void setFilesWithGitConflicts(@Nullable Set<String> filesWithGitConflicts) {
+    this.filesWithGitConflicts =
+        filesWithGitConflicts != null && !filesWithGitConflicts.isEmpty()
+            ? ImmutableSet.copyOf(filesWithGitConflicts)
+            : null;
   }
 
   public PatchSet.Id getPatchsetId() {

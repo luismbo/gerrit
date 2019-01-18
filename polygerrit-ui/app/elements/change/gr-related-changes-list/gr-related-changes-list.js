@@ -57,9 +57,10 @@
         type: Object,
         value() { return {changes: []}; },
       },
+      /** @type {?} */
       _submittedTogether: {
-        type: Array,
-        value() { return []; },
+        type: Object,
+        value() { return {changes: []}; },
       },
       _conflicts: {
         type: Array,
@@ -81,7 +82,7 @@
     ],
 
     observers: [
-      '_resultsChanged(_relatedResponse.changes, _submittedTogether, ' +
+      '_resultsChanged(_relatedResponse, _submittedTogether, ' +
           '_conflicts, _cherryPicks, _sameTopic)',
     ],
 
@@ -90,7 +91,7 @@
       this.hidden = true;
 
       this._relatedResponse = {changes: []};
-      this._submittedTogether = [];
+      this._submittedTogether = {changes: []};
       this._conflicts = [];
       this._cherryPicks = [];
       this._sameTopic = [];
@@ -289,14 +290,14 @@
     _resultsChanged(related, submittedTogether, conflicts,
         cherryPicks, sameTopic) {
       const results = [
-        related,
-        submittedTogether,
+        related && related.changes,
+        submittedTogether && submittedTogether.changes,
         conflicts,
         cherryPicks,
         sameTopic,
       ];
       for (let i = 0; i < results.length; i++) {
-        if (results[i].length > 0) {
+        if (results[i] && results[i].length > 0) {
           this.hidden = false;
           this.fire('update', null, {bubbles: false});
           return;
@@ -338,6 +339,20 @@
         --pos;
       }
       return connected;
+    },
+
+    _computeSubmittedTogetherClass(submittedTogether) {
+      if (!submittedTogether || (
+          submittedTogether.changes.length === 0 &&
+          !submittedTogether.non_visible_changes)) {
+        return 'hidden';
+      }
+      return '';
+    },
+
+    _computeNonVisibleChangesNote(n) {
+      const noun = n === 1 ? 'change' : 'changes';
+      return `(+ ${n} non-visible ${noun})`;
     },
   });
 })();

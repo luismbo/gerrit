@@ -135,6 +135,52 @@
   const ANONYMIZED_REVISION_BASE_URL = ANONYMIZED_CHANGE_BASE_URL +
       '/revisions/*';
 
+  /**
+   * Wrapper around Map for caching server responses. Site-based so that
+   * changes to CANONICAL_PATH will result in a different cache going into
+   * effect.
+   */
+  class SiteBasedCache {
+    constructor() {
+      // Container of per-canonical-path caches.
+      this._data = new Map();
+    }
+
+    // Returns the cache for the current canonical path.
+    _cache() {
+      if (!this._data.has(window.CANONICAL_PATH)) {
+        this._data.set(window.CANONICAL_PATH, new Map());
+      }
+      return this._data.get(window.CANONICAL_PATH);
+    }
+
+    has(key) {
+      return this._cache().has(key);
+    }
+
+    get(key) {
+      return this._cache().get(key);
+    }
+
+    set(key, value) {
+      this._cache().set(key, value);
+    }
+
+    delete(key) {
+      this._cache().delete(key);
+    }
+
+    invalidatePrefix(prefix) {
+      const newMap = new Map();
+      for (const [key, value] of this._cache().entries()) {
+        if (!key.startsWith(prefix)) {
+          newMap.set(key, value);
+        }
+      }
+      this._data.set(window.CANONICAL_PATH, newMap);
+    }
+  }
+
   Polymer({
     is: 'gr-rest-api-interface',
 
@@ -171,7 +217,7 @@
     properties: {
       _cache: {
         type: Object,
-        value: {}, // Intentional to share the object across instances.
+        value: new SiteBasedCache(), // Shared across instances.
       },
       _credentialCheck: {
         type: Object,
@@ -268,7 +314,7 @@
         }
         return res;
       }).catch(err => {
-        const isLoggedIn = !!this._cache['/accounts/self/detail'];
+        const isLoggedIn = !!this._cache.get('/accounts/self/detail');
         if (isLoggedIn && err && err.message === FAILED_TO_FETCH_ERROR) {
           this.checkCredentials();
           return;
@@ -298,7 +344,7 @@
             req.errFn.call(null, response);
             return;
           }
-          this.fire('server-error', {response});
+          this.fire('server-error', {request: req, response});
           return;
         }
         return response && this.getResponseObject(response);
@@ -784,7 +830,7 @@
      */
     saveDiffPreferences(prefs, opt_errFn) {
       // Invalidate the cache.
-      this._cache['/accounts/self/preferences.diff'] = undefined;
+      this._cache.delete('/accounts/self/preferences.diff');
       return this._send({
         method: 'PUT',
         url: '/accounts/self/preferences.diff',
@@ -800,7 +846,7 @@
      */
     saveEditPreferences(prefs, opt_errFn) {
       // Invalidate the cache.
-      this._cache['/accounts/self/preferences.edit'] = undefined;
+      this._cache.delete('/accounts/self/preferences.edit');
       return this._send({
         method: 'PUT',
         url: '/accounts/self/preferences.edit',
@@ -816,7 +862,19 @@
         reportUrlAsIs: true,
         errFn: resp => {
           if (!resp || resp.status === 403) {
-            this._cache['/accounts/self/detail'] = null;
+            this._cache.delete('/accounts/self/detail');
+          }
+        },
+      });
+    },
+
+    getAvatarChangeUrl() {
+      return this._fetchSharedCacheURL({
+        url: '/accounts/self/avatar.change.url',
+        reportUrlAsIs: true,
+        errFn: resp => {
+          if (!resp || resp.status === 403) {
+            this._cache.delete('/accounts/self/avatar.change.url');
           }
         },
       });
@@ -898,7 +956,7 @@
       return this._send(req).then(() => {
         // If result of getAccountEmails is in cache, update it in the cache
         // so we don't have to invalidate it.
-        const cachedEmails = this._cache['/accounts/self/emails'];
+        const cachedEmails = this._cache.get('/accounts/self/emails');
         if (cachedEmails) {
           const emails = cachedEmails.map(entry => {
             if (entry.email === email) {
@@ -907,7 +965,7 @@
               return {email};
             }
           });
-          this._cache['/accounts/self/emails'] = emails;
+          this._cache.set('/accounts/self/emails', emails);
         }
       });
     },
@@ -918,11 +976,11 @@
     _updateCachedAccount(obj) {
       // If result of getAccount is in cache, update it in the cache
       // so we don't have to invalidate it.
-      const cachedAccount = this._cache['/accounts/self/detail'];
+      const cachedAccount = this._cache.get('/accounts/self/detail');
       if (cachedAccount) {
         // Replace object in cache with new object to force UI updates.
-        this._cache['/accounts/self/detail'] =
-            Object.assign({}, cachedAccount, obj);
+        this._cache.set('/accounts/self/detail',
+            Object.assign({}, cachedAccount, obj));
       }
     },
 
@@ -1052,14 +1110,14 @@
         if (!res) { return; }
         if (res.status === 403) {
           this.fire('auth-error');
-          this._cache['/accounts/self/detail'] = null;
+          this._cache.delete('/accounts/self/detail');
         } else if (res.ok) {
           return this.getResponseObject(res);
         }
       }).then(res => {
         this._credentialCheck.checking = false;
         if (res) {
-          this._cache['/accounts/self/detail'] = res;
+          this._cache.delete('/accounts/self/detail');
         }
         return res;
       }).catch(err => {
@@ -1142,13 +1200,13 @@
         return this._sharedFetchPromises[req.url];
       }
       // TODO(andybons): Periodic cache invalidation.
-      if (this._cache[req.url] !== undefined) {
-        return Promise.resolve(this._cache[req.url]);
+      if (this._cache.has(req.url)) {
+        return Promise.resolve(this._cache.get(req.url));
       }
       this._sharedFetchPromises[req.url] = this._fetchJSON(req)
           .then(response => {
             if (response !== undefined) {
-              this._cache[req.url] = response;
+              this._cache.set(req.url, response);
             }
             this._sharedFetchPromises[req.url] = undefined;
             return response;
@@ -1157,6 +1215,20 @@
             throw err;
           });
       return this._sharedFetchPromises[req.url];
+    },
+
+    /**
+     * @param {string} prefix
+     */
+    _invalidateSharedFetchPromisesPrefix(prefix) {
+      const newObject = {};
+      Object.entries(this._sharedFetchPromises).forEach(([key, value]) => {
+        if (!key.startsWith(prefix)) {
+          newObject[key] = value;
+        }
+      });
+      this._sharedFetchPromises = newObject;
+      this._cache.invalidatePrefix(prefix);
     },
 
     _isNarrowScreen() {
@@ -1249,21 +1321,27 @@
      * @param {function()=} opt_cancelCondition
      */
     getChangeDetail(changeNum, opt_errFn, opt_cancelCondition) {
-      const options = this.listChangesOptionsToHex(
-          this.ListChangesOption.ALL_COMMITS,
-          this.ListChangesOption.ALL_REVISIONS,
-          this.ListChangesOption.CHANGE_ACTIONS,
-          this.ListChangesOption.CURRENT_ACTIONS,
-          this.ListChangesOption.DETAILED_LABELS,
-          this.ListChangesOption.DOWNLOAD_COMMANDS,
-          this.ListChangesOption.MESSAGES,
-          this.ListChangesOption.SUBMITTABLE,
-          this.ListChangesOption.WEB_LINKS,
-          this.ListChangesOption.SKIP_MERGEABLE
-      );
-      return this._getChangeDetail(
-          changeNum, options, opt_errFn, opt_cancelCondition)
-          .then(GrReviewerUpdatesParser.parse);
+      const options = [
+        this.ListChangesOption.ALL_COMMITS,
+        this.ListChangesOption.ALL_REVISIONS,
+        this.ListChangesOption.CHANGE_ACTIONS,
+        this.ListChangesOption.CURRENT_ACTIONS,
+        this.ListChangesOption.DETAILED_LABELS,
+        this.ListChangesOption.DOWNLOAD_COMMANDS,
+        this.ListChangesOption.MESSAGES,
+        this.ListChangesOption.SUBMITTABLE,
+        this.ListChangesOption.WEB_LINKS,
+        this.ListChangesOption.SKIP_MERGEABLE,
+      ];
+      return this.getConfig(false).then(config => {
+        if (config.receive && config.receive.enable_signed_push) {
+          options.push(this.ListChangesOption.PUSH_CERTIFICATES);
+        }
+        const optionsHex = this.listChangesOptionsToHex(...options);
+        return this._getChangeDetail(
+            changeNum, optionsHex, opt_errFn, opt_cancelCondition)
+            .then(GrReviewerUpdatesParser.parse);
+      });
     },
 
     /**
@@ -1274,7 +1352,8 @@
     getDiffChangeDetail(changeNum, opt_errFn, opt_cancelCondition) {
       const params = this.listChangesOptionsToHex(
           this.ListChangesOption.ALL_COMMITS,
-          this.ListChangesOption.ALL_REVISIONS
+          this.ListChangesOption.ALL_REVISIONS,
+          this.ListChangesOption.SKIP_MERGEABLE
       );
       return this._getChangeDetail(changeNum, params, opt_errFn,
           opt_cancelCondition);
@@ -1306,7 +1385,7 @@
             if (opt_errFn) {
               opt_errFn.call(null, response);
             } else {
-              this.fire('server-error', {response});
+              this.fire('server-error', {request: req, response});
             }
             return;
           }
@@ -1478,25 +1557,20 @@
      * @param {string} filter
      * @param {number} groupsPerPage
      * @param {number=} opt_offset
-     * @return {!Promise<?Object>}
      */
-    getGroups(filter, groupsPerPage, opt_offset) {
+    _getGroupsUrl(filter, groupsPerPage, opt_offset) {
       const offset = opt_offset || 0;
 
-      return this._fetchSharedCacheURL({
-        url: `/groups/?n=${groupsPerPage + 1}&S=${offset}` +
-            this._computeFilter(filter),
-        anonymizedUrl: '/groups/?*',
-      });
+      return `/groups/?n=${groupsPerPage + 1}&S=${offset}` +
+        this._computeFilter(filter);
     },
 
     /**
      * @param {string} filter
      * @param {number} reposPerPage
      * @param {number=} opt_offset
-     * @return {!Promise<?Object>}
      */
-    getRepos(filter, reposPerPage, opt_offset) {
+    _getReposUrl(filter, reposPerPage, opt_offset) {
       const defaultFilter = 'state:active OR state:read-only';
       const namePartDelimiters = /[@.\-\s\/_]/g;
       const offset = opt_offset || 0;
@@ -1523,11 +1597,46 @@
       filter = filter.trim();
       const encodedFilter = encodeURIComponent(filter);
 
+      return `/projects/?n=${reposPerPage + 1}&S=${offset}` +
+        `&query=${encodedFilter}`;
+    },
+
+    invalidateGroupsCache() {
+      this._invalidateSharedFetchPromisesPrefix('/groups/?');
+    },
+
+    invalidateReposCache(filter, reposPerPage, opt_offset) {
+      this._invalidateSharedFetchPromisesPrefix('/projects/?');
+    },
+
+    /**
+     * @param {string} filter
+     * @param {number} groupsPerPage
+     * @param {number=} opt_offset
+     * @return {!Promise<?Object>}
+     */
+    getGroups(filter, groupsPerPage, opt_offset) {
+      const url = this._getGroupsUrl(filter, groupsPerPage, opt_offset);
+
+      return this._fetchSharedCacheURL({
+        url,
+        anonymizedUrl: '/groups/?*',
+      });
+    },
+
+    /**
+     * @param {string} filter
+     * @param {number} reposPerPage
+     * @param {number=} opt_offset
+     * @return {!Promise<?Object>}
+     */
+    getRepos(filter, reposPerPage, opt_offset) {
+      const url = this._getReposUrl(filter, reposPerPage, opt_offset);
+
       // TODO(kaspern): Rename rest api from /projects/ to /repos/ once backend
       // supports it.
       return this._fetchSharedCacheURL({
-        url: `/projects/?n=${reposPerPage + 1}&S=${offset}` +
-            `&query=${encodedFilter}`,
+        url,
         anonymizedUrl: '/projects/?*',
       });
     },
@@ -1734,7 +1843,7 @@
     getChangesSubmittedTogether(changeNum) {
       return this._getChangeURLAndFetch({
         changeNum,
-        endpoint: '/submitted_together',
+        endpoint: '/submitted_together?o=NON_VISIBLE_CHANGES',
         reportEndpointAsIs: true,
       });
     },
@@ -2037,10 +2146,17 @@
     },
 
     saveChangeStarred(changeNum, starred) {
-      return this._send({
-        method: starred ? 'PUT' : 'DELETE',
-        url: '/accounts/self/starred.changes/' + changeNum,
-        anonymizedUrl: '/accounts/self/starred.changes/*',
+      // Some servers may require the project name to be provided
+      // alongside the change number, so resolve the project name
+      // first.
+      return this.getFromProjectLookup(changeNum).then(project => {
+        const url = '/accounts/self/starred.changes/' +
+            (project ? encodeURIComponent(project) + '~' : '') + changeNum;
+        return this._send({
+          method: starred ? 'PUT' : 'DELETE',
+          url,
+          anonymizedUrl: '/accounts/self/starred.changes/*',
+        });
       });
     },
 
@@ -2085,7 +2201,7 @@
           if (req.errFn) {
             return req.errFn.call(undefined, response);
           }
-          this.fire('server-error', {response});
+          this.fire('server-error', {request: fetchReq, response});
         }
         return response;
       }).catch(err => {
@@ -2134,13 +2250,16 @@
      *     index.
      * @param {number|string} patchNum
      * @param {string} path
+     * @param {string=} opt_whitespace the ignore-whitespace level for the diff
+     *     algorithm.
      * @param {function(?Response, string=)=} opt_errFn
      */
-    getDiff(changeNum, basePatchNum, patchNum, path, opt_errFn) {
+    getDiff(changeNum, basePatchNum, patchNum, path, opt_whitespace,
+        opt_errFn) {
       const params = {
         context: 'ALL',
         intraline: null,
-        whitespace: 'IGNORE_NONE',
+        whitespace: opt_whitespace || 'IGNORE_NONE',
       };
       if (this.isMergeParent(basePatchNum)) {
         params.parent = this.getParentIndex(basePatchNum);
@@ -2637,6 +2756,14 @@
       });
     },
 
+    getTopMenus(opt_errFn) {
+      return this._fetchJSON({
+        url: '/config/server/top-menus',
+        errFn: opt_errFn,
+        reportUrlAsIs: true,
+      });
+    },
+
     setAssignee(changeNum, assignee) {
       return this._getChangeURLAndSend({
         changeNum,
@@ -2914,12 +3041,36 @@
       });
     },
 
+    /**
+     * @param {string} filter
+     * @return {!Promise<?Object>}
+     */
+    getDocumentationSearches(filter) {
+      filter = filter.trim();
+      const encodedFilter = encodeURIComponent(filter);
+
+      // TODO(kaspern): Rename rest api from /projects/ to /repos/ once backend
+      // supports it.
+      return this._fetchSharedCacheURL({
+        url: `/Documentation/?q=${encodedFilter}`,
+        anonymizedUrl: '/Documentation/?*',
+      });
+    },
+
     getMergeable(changeNum) {
       return this._getChangeURLAndFetch({
         changeNum,
         endpoint: '/revisions/current/mergeable',
         parseResponse: true,
         reportEndpointAsIs: true,
+      });
+    },
+
+    deleteDraftComments(query) {
+      return this._send({
+        method: 'POST',
+        url: '/accounts/self/drafts:delete',
+        body: {query},
       });
     },
   });

@@ -53,21 +53,29 @@ opts.add_option('--name', help='name of the generated project',
 opts.add_option('-b', '--batch', action='store_true',
                 dest='batch', help='Bazel batch option')
 opts.add_option('-j', '--java', action='store',
-                dest='java', help='Post Java 8 support (9|10|11|...)')
+                dest='java', help='Post Java 8 support (9)')
+opts.add_option('-e', '--edge_java', action='store',
+                dest='edge_java', help='Post Java 9 support (10|11|...)')
 args, _ = opts.parse_args()
 
 batch_option = '--batch' if args.batch else None
 custom_java = args.java
+edge_java = args.edge_java
 
 def _build_bazel_cmd(*args):
+    build = False
     cmd = ['bazel']
     if batch_option:
         cmd.append('--batch')
     for arg in args:
+        if arg == "build":
+            build = True
         cmd.append(arg)
-    if custom_java:
+    if custom_java and not edge_java:
         cmd.append('--host_java_toolchain=@bazel_tools//tools/jdk:toolchain_java%s' % custom_java)
         cmd.append('--java_toolchain=@bazel_tools//tools/jdk:toolchain_java%s' % custom_java)
+        if edge_java and build:
+            cmd.append(edge_java)
     return cmd
 
 
@@ -120,7 +128,9 @@ def gen_plugin_classpath(root):
         if path.exists(path.join(root, 'src', 'test', 'java')):
             testpath = """
   <classpathentry excluding="**/BUILD" kind="src" path="src/test/java"\
- out="eclipse-out/test"/>"""
+ out="eclipse-out/test">
+    <attributes><attribute name="test" value="true"/></attributes>
+  </classpathentry>"""
         else:
             testpath = ""
         print("""\
@@ -153,6 +163,13 @@ def gen_classpath(ext):
             e.setAttribute('output', out)
         if exported:
             e.setAttribute('exported', 'true')
+        if out and "test" in out:
+            atts = doc.createElement('attributes')
+            testAtt = doc.createElement('attribute')
+            testAtt.setAttribute('name', 'test')
+            testAtt.setAttribute('value', 'true')
+            atts.appendChild(testAtt)
+            e.appendChild(atts)
         doc.documentElement.appendChild(e)
 
     doc = make_classpath()

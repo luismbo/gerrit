@@ -15,12 +15,12 @@
 package com.google.gerrit.server.documentation;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Lists;
 import com.google.common.flogger.FluentLogger;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
@@ -85,9 +85,9 @@ public class QueryDocumentationExecutor {
       // and skipped paging. Maybe add paging later.
       TopDocs results = searcher.search(query, Integer.MAX_VALUE);
       ScoreDoc[] hits = results.scoreDocs;
-      int totalHits = results.totalHits;
+      long totalHits = results.totalHits;
 
-      List<DocResult> out = Lists.newArrayListWithCapacity(totalHits);
+      List<DocResult> out = new ArrayList<>();
       for (int i = 0; i < totalHits; i++) {
         DocResult result = new DocResult();
         Document doc = searcher.doc(hits[i].doc);
@@ -129,8 +129,9 @@ public class QueryDocumentationExecutor {
     return parser != null && searcher != null;
   }
 
-  @SuppressWarnings("serial")
   public static class DocQueryException extends Exception {
+    private static final long serialVersionUID = 1L;
+
     DocQueryException() {}
 
     DocQueryException(String msg) {

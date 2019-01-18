@@ -59,7 +59,8 @@ public class RebaseSorter {
     this.incoming = incoming;
   }
 
-  public List<CodeReviewCommit> sort(Collection<CodeReviewCommit> toSort) throws IOException {
+  public List<CodeReviewCommit> sort(Collection<CodeReviewCommit> toSort)
+      throws IOException, OrmException {
     final List<CodeReviewCommit> sorted = new ArrayList<>();
     final Set<CodeReviewCommit> sort = new HashSet<>(toSort);
     while (!sort.isEmpty()) {
@@ -82,6 +83,9 @@ public class RebaseSorter {
             // aren't permitted to merge at this time. Drop n.
             //
             n.setStatusCode(CommitMergeStatus.MISSING_DEPENDENCY);
+            n.setStatusMessage(
+                CommitMergeStatus.createMissingDependencyMessage(
+                    queryProvider, n.name(), c.name()));
           }
           // Stop RevWalk because c is either a merged commit or a missing
           // dependency. Not need to walk further.

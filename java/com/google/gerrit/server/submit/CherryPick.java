@@ -14,12 +14,13 @@
 
 package com.google.gerrit.server.submit;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.gerrit.server.submit.CommitMergeStatus.EMPTY_COMMIT;
 import static com.google.gerrit.server.submit.CommitMergeStatus.SKIPPED_IDENTICAL_TREE;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.collect.ImmutableList;
 import com.google.gerrit.extensions.restapi.MergeConflictException;
+import com.google.gerrit.extensions.restapi.MethodNotAllowedException;
 import com.google.gerrit.reviewdb.client.BooleanProjectConfig;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.PatchSetInfo;
@@ -90,7 +91,7 @@ public class CherryPick extends SubmitStrategy {
 
     @Override
     protected void updateRepoImpl(RepoContext ctx)
-        throws IntegrationException, IOException, OrmException {
+        throws IntegrationException, IOException, OrmException, MethodNotAllowedException {
       // If there is only one parent, a cherry-pick can be done by taking the
       // delta relative to that one parent and redoing that on the current merge
       // tip.
@@ -116,6 +117,7 @@ public class CherryPick extends SubmitStrategy {
                 cherryPickCmtMsg,
                 args.rw,
                 0,
+                false,
                 false,
                 true);
       } catch (MergeConflictException mce) {
@@ -150,10 +152,12 @@ public class CherryPick extends SubmitStrategy {
       if (newCommit == null && toMerge.getStatusCode() == SKIPPED_IDENTICAL_TREE) {
         return null;
       }
-      checkNotNull(
+      requireNonNull(
           newCommit,
-          "no new commit produced by CherryPick of %s, expected to fail fast",
-          toMerge.change().getId());
+          () ->
+              String.format(
+                  "no new commit produced by CherryPick of %s, expected to fail fast",
+                  toMerge.change().getId()));
       PatchSet prevPs = args.psUtil.current(ctx.getDb(), ctx.getNotes());
       PatchSet newPs =
           args.psUtil.insert(

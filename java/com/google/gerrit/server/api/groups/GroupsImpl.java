@@ -14,8 +14,8 @@
 
 package com.google.gerrit.server.api.groups;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.gerrit.server.api.ApiUtil.asRestApiException;
+import static java.util.Objects.requireNonNull;
 
 import com.google.gerrit.extensions.api.groups.GroupApi;
 import com.google.gerrit.extensions.api.groups.GroupInput;
@@ -26,10 +26,11 @@ import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.IdString;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.TopLevelResource;
+import com.google.gerrit.server.account.AccountResolver;
+import com.google.gerrit.server.group.GroupResolver;
 import com.google.gerrit.server.permissions.GlobalPermission;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.project.ProjectResource;
-import com.google.gerrit.server.restapi.account.AccountsCollection;
 import com.google.gerrit.server.restapi.group.CreateGroup;
 import com.google.gerrit.server.restapi.group.GroupsCollection;
 import com.google.gerrit.server.restapi.group.ListGroups;
@@ -43,8 +44,9 @@ import java.util.SortedMap;
 
 @Singleton
 class GroupsImpl implements Groups {
-  private final AccountsCollection accounts;
+  private final AccountResolver accountResolver;
   private final GroupsCollection groups;
+  private final GroupResolver groupResolver;
   private final ProjectsCollection projects;
   private final Provider<ListGroups> listGroups;
   private final Provider<QueryGroups> queryGroups;
@@ -54,16 +56,18 @@ class GroupsImpl implements Groups {
 
   @Inject
   GroupsImpl(
-      AccountsCollection accounts,
+      AccountResolver accountResolver,
       GroupsCollection groups,
+      GroupResolver groupResolver,
       ProjectsCollection projects,
       Provider<ListGroups> listGroups,
       Provider<QueryGroups> queryGroups,
       PermissionBackend permissionBackend,
       CreateGroup createGroup,
       GroupApiImpl.Factory api) {
-    this.accounts = accounts;
+    this.accountResolver = accountResolver;
     this.groups = groups;
+    this.groupResolver = groupResolver;
     this.projects = projects;
     this.listGroups = listGroups;
     this.queryGroups = queryGroups;
@@ -86,7 +90,7 @@ class GroupsImpl implements Groups {
 
   @Override
   public GroupApi create(GroupInput in) throws RestApiException {
-    if (checkNotNull(in, "GroupInput").name == null) {
+    if (requireNonNull(in, "GroupInput").name == null) {
       throw new BadRequestException("GroupInput must specify name");
     }
     try {
@@ -126,7 +130,7 @@ class GroupsImpl implements Groups {
     }
 
     for (String group : req.getGroups()) {
-      list.addGroup(groups.parse(group).getGroupUUID());
+      list.addGroup(groupResolver.parse(group).getGroupUUID());
     }
 
     list.setVisibleToAll(req.getVisibleToAll());
@@ -137,7 +141,7 @@ class GroupsImpl implements Groups {
 
     if (req.getUser() != null) {
       try {
-        list.setUser(accounts.parse(req.getUser()).getAccountId());
+        list.setUser(accountResolver.parse(req.getUser()).getAccountId());
       } catch (Exception e) {
         throw asRestApiException("Error looking up user " + req.getUser(), e);
       }

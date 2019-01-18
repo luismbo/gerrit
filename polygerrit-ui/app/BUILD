@@ -1,10 +1,8 @@
-package(
-    default_visibility = ["//visibility:public"],
-)
-
-load(":rules.bzl", "polygerrit_bundle")
 load("//tools/bzl:genrule2.bzl", "genrule2")
 load("//tools/bzl:js.bzl", "bower_component_bundle")
+load(":rules.bzl", "polygerrit_bundle")
+
+package(default_visibility = ["//visibility:public"])
 
 polygerrit_bundle(
     name = "polygerrit_ui",
@@ -25,7 +23,7 @@ polygerrit_bundle(
 
 bower_component_bundle(
     name = "test_components",
-    testonly = 1,
+    testonly = True,
     deps = [
         "//lib/js:iron-test-helpers",
         "//lib/js:test-fixture",

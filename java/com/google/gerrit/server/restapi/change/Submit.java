@@ -42,6 +42,7 @@ import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.ProjectUtil;
+import com.google.gerrit.server.account.AccountResolver;
 import com.google.gerrit.server.change.ChangeJson;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.change.RevisionResource;
@@ -55,7 +56,6 @@ import com.google.gerrit.server.project.NoSuchChangeException;
 import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gerrit.server.query.change.InternalChangeQuery;
-import com.google.gerrit.server.restapi.account.AccountsCollection;
 import com.google.gerrit.server.submit.ChangeSet;
 import com.google.gerrit.server.submit.MergeOp;
 import com.google.gerrit.server.submit.MergeSuperSet;
@@ -114,7 +114,7 @@ public class Submit
   private final ChangeNotes.Factory changeNotesFactory;
   private final Provider<MergeOp> mergeOpProvider;
   private final Provider<MergeSuperSet> mergeSuperSet;
-  private final AccountsCollection accounts;
+  private final AccountResolver accountResolver;
   private final String label;
   private final String labelWithParents;
   private final ParameterizedString titlePattern;
@@ -135,7 +135,7 @@ public class Submit
       ChangeNotes.Factory changeNotesFactory,
       Provider<MergeOp> mergeOpProvider,
       Provider<MergeSuperSet> mergeSuperSet,
-      AccountsCollection accounts,
+      AccountResolver accountResolver,
       @GerritServerConfig Config cfg,
       Provider<InternalChangeQuery> queryProvider,
       PatchSetUtil psUtil,
@@ -147,7 +147,7 @@ public class Submit
     this.changeNotesFactory = changeNotesFactory;
     this.mergeOpProvider = mergeOpProvider;
     this.mergeSuperSet = mergeSuperSet;
-    this.accounts = accounts;
+    this.accountResolver = accountResolver;
     this.label =
         MoreObjects.firstNonNull(
             Strings.emptyToNull(cfg.getString("change", null, "submitLabel")), "Submit");
@@ -248,6 +248,9 @@ public class Submit
   private String problemsForSubmittingChangeset(ChangeData cd, ChangeSet cs, CurrentUser user) {
     try {
       if (cs.furtherHiddenChanges()) {
+        logger.atFine().log(
+            "Change %d cannot be submitted by user %s because it depends on hidden changes: %s",
+            cd.getId().get(), user.getLoggableName(), cs.nonVisibleChanges());
         return BLOCKED_HIDDEN_SUBMIT_TOOLTIP;
       }
       for (ChangeData c : cs.changes()) {
@@ -263,6 +266,9 @@ public class Submit
                 .change(c)
                 .test(EnumSet.of(ChangePermission.READ, ChangePermission.SUBMIT));
         if (!can.contains(ChangePermission.READ)) {
+          logger.atFine().log(
+              "Change %d cannot be submitted by user %s because it depends on change %d which the user cannot read",
+              cd.getId().get(), user.getLoggableName(), c.getId().get());
           return BLOCKED_HIDDEN_SUBMIT_TOOLTIP;
         }
         if (!can.contains(ChangePermission.SUBMIT)) {
@@ -466,7 +472,7 @@ public class Submit
     perm.check(ChangePermission.SUBMIT_AS);
 
     CurrentUser caller = rsrc.getUser();
-    IdentifiedUser submitter = accounts.parseOnBehalfOf(caller, in.onBehalfOf);
+    IdentifiedUser submitter = accountResolver.parseOnBehalfOf(caller, in.onBehalfOf);
     try {
       permissionBackend
           .user(submitter)

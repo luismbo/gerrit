@@ -43,7 +43,7 @@ limitations under the License.
         background-color: var(--hover-background-color);
       }
       :host([needs-review]) {
-        font-family: var(--font-family-bold);
+        font-weight: var(--font-weight-bold);
       }
       :host([highlight]) {
         background-color: var(--assignee-highlight-color);
@@ -114,6 +114,9 @@ limitations under the License.
       .placeholder {
         color: var(--deemphasized-text-color);
       }
+      .cell.label {
+        font-weight: normal;
+      }
       @media only screen and (max-width: 50em) {
         :host {
           display: flex;
@@ -162,8 +165,9 @@ limitations under the License.
         hidden$="[[isColumnHidden('Assignee', visibleChangeTableColumns)]]">
       <template is="dom-if" if="[[change.assignee]]">
         <gr-account-link
+            id="assigneeAccountLink"
             account="[[change.assignee]]"
-            additional-text="[[_computeAccountStatusString(change.owner)]]"></gr-account-link>
+            additional-text="[[_computeAccountStatusString(change.assignee)]]"></gr-account-link>
       </template>
       <template is="dom-if" if="[[!change.assignee]]">
         <span class="placeholder">--</span>

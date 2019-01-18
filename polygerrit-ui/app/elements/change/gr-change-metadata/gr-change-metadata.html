@@ -27,6 +27,7 @@ limitations under the License.
 <link rel="import" href="../../shared/gr-account-link/gr-account-link.html">
 <link rel="import" href="../../shared/gr-date-formatter/gr-date-formatter.html">
 <link rel="import" href="../../shared/gr-editable-label/gr-editable-label.html">
+<link rel="import" href="../../shared/gr-icons/gr-icons.html">
 <link rel="import" href="../../shared/gr-limited-text/gr-limited-text.html">
 <link rel="import" href="../../shared/gr-linked-chip/gr-linked-chip.html">
 <link rel="import" href="../../shared/gr-tooltip-content/gr-tooltip-content.html">
@@ -57,7 +58,7 @@ limitations under the License.
       }
       .title {
         color: var(--deemphasized-text-color);
-        font-family: var(--font-family-bold);
+        font-weight: var(--font-weight-bold);
         max-width: 20em;
         padding-left: var(--metadata-horizontal-padding);
         padding-right: .5em;
@@ -114,6 +115,19 @@ limitations under the License.
       #parentNotCurrentMessage {
         display: none;
       }
+      .icon {
+        margin: -.25em 0;
+      }
+      .icon.help,
+      .icon.notTrusted {
+        color: #FFA62F;
+      }
+      .icon.invalid {
+        color: var(--vote-text-color-disliked);
+      }
+      .icon.trusted {
+        color: var(--vote-text-color-recommended);
+      }
       .parentList.notCurrent.nonMerge #parentNotCurrentMessage {
         --arrow-color: #ffa62f;
         display: inline-block;
@@ -137,13 +151,40 @@ limitations under the License.
         <span class="title">Owner</span>
         <span class="value">
           <gr-account-link account="[[change.owner]]"></gr-account-link>
+          <template is="dom-if" if="[[_pushCertificateValidation]]">
+            <gr-tooltip-content
+                has-tooltip
+                title$="[[_pushCertificateValidation.message]]">
+              <iron-icon
+                  class$="icon [[_pushCertificateValidation.class]]"
+                  icon="[[_pushCertificateValidation.icon]]">
+              </iron-icon>
+            </gr-tooltip-content>
+          </template>
         </span>
       </section>
-      <section class$="[[_computeShowUploaderHide(change)]]">
+      <section class$="[[_computeShowRoleClass(change, _CHANGE_ROLE.UPLOADER)]]">
         <span class="title">Uploader</span>
         <span class="value">
           <gr-account-link
-              account="[[_computeShowUploader(change)]]"></gr-account-link>
+              account="[[_getNonOwnerRole(change, _CHANGE_ROLE.UPLOADER)]]"
+              ></gr-account-link>
+        </span>
+      </section>
+      <section class$="[[_computeShowRoleClass(change, _CHANGE_ROLE.AUTHOR)]]">
+        <span class="title">Author</span>
+        <span class="value">
+          <gr-account-link
+              account="[[_getNonOwnerRole(change, _CHANGE_ROLE.AUTHOR)]]"
+              ></gr-account-link>
+        </span>
+      </section>
+      <section class$="[[_computeShowRoleClass(change, _CHANGE_ROLE.COMMITTER)]]">
+        <span class="title">Committer</span>
+        <span class="value">
+          <gr-account-link
+              account="[[_getNonOwnerRole(change, _CHANGE_ROLE.COMMITTER)]]"
+              ></gr-account-link>
         </span>
       </section>
       <section class="assignee">
@@ -244,6 +285,7 @@ limitations under the License.
               is="dom-if"
               if="[[_showAddTopic(change.*, _settingTopic)]]">
             <gr-editable-label
+                class="topicEditableLabel"
                 label-text="Add a topic"
                 value="[[change.topic]]"
                 max-length="1024"

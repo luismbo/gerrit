@@ -59,7 +59,7 @@ public class RebaseSubmitStrategy extends SubmitStrategy {
     List<CodeReviewCommit> sorted;
     try {
       sorted = args.rebaseSorter.sort(toMerge);
-    } catch (IOException e) {
+    } catch (IOException | OrmException e) {
       throw new IntegrationException("Commit sorting failed", e);
     }
     List<SubmitStrategyOp> ops = new ArrayList<>(sorted.size());
@@ -157,6 +157,7 @@ public class RebaseSubmitStrategy extends SubmitStrategy {
                   args.rw,
                   0,
                   true,
+                  false,
                   false); // XXX: CommitModifier not working in rebase yet.
         } catch (MergeConflictException mce) {
           // Unlike in Cherry-pick case, this should never happen.

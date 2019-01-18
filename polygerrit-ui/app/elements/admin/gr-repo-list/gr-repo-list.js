@@ -102,6 +102,10 @@
       return this.getUrl(this._path + '/', name);
     },
 
+    _computeChangesLink(name) {
+      return Gerrit.Nav.getUrlForProjectChanges(name);
+    },
+
     _getCreateRepoCapability() {
       return this.$.restAPI.getAccount().then(account => {
         if (!account) { return; }
@@ -125,8 +129,17 @@
           });
     },
 
+    _refreshReposList() {
+      this.$.restAPI.invalidateReposCache(this._filter,
+          this._reposPerPage, this._offset);
+      return this._getRepos(this._filter, this._reposPerPage,
+          this._offset);
+    },
+
     _handleCreateRepo() {
-      this.$.createNewModal.handleCreateRepo();
+      this.$.createNewModal.handleCreateRepo().then(() => {
+        this._refreshReposList();
+      });
     },
 
     _handleCloseCreate() {

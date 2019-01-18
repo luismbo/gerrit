@@ -17,6 +17,7 @@ package com.google.gerrit.server.project;
 import static com.google.gerrit.common.data.PermissionRule.Action.ALLOW;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
@@ -35,6 +36,11 @@ import com.google.gerrit.extensions.api.projects.ThemeInfo;
 import com.google.gerrit.extensions.client.SubmitType;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.index.project.ProjectData;
+import com.google.gerrit.metrics.Description;
+import com.google.gerrit.metrics.Description.Units;
+import com.google.gerrit.metrics.Field;
+import com.google.gerrit.metrics.MetricMaker;
+import com.google.gerrit.metrics.Timer1;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.BooleanProjectConfig;
 import com.google.gerrit.reviewdb.client.Branch;
@@ -89,6 +95,10 @@ public class ProjectState {
   private final Map<String, ProjectLevelConfig> configs;
   private final Set<AccountGroup.UUID> localOwners;
   private final long globalMaxObjectSizeLimit;
+  private final boolean inheritProjectMaxObjectSizeLimit;
+
+  // TODO(hiesel): Remove this once we got production data
+  private final Timer1<String> computationLatency;
 
   /** Last system time the configuration's revision was examined. */
   private volatile long lastCheckGeneration;
@@ -117,6 +127,7 @@ public class ProjectState {
       List<CommentLinkInfo> commentLinks,
       CapabilityCollection.Factory limitsFactory,
       TransferConfig transferConfig,
+      MetricMaker metricMaker,
       @Assisted ProjectConfig config) {
     this.sitePaths = sitePaths;
     this.projectCache = projectCache;
@@ -132,6 +143,15 @@ public class ProjectState {
             ? limitsFactory.create(config.getAccessSection(AccessSection.GLOBAL_CAPABILITIES))
             : null;
     this.globalMaxObjectSizeLimit = transferConfig.getMaxObjectSizeLimit();
+    this.inheritProjectMaxObjectSizeLimit = transferConfig.inheritProjectMaxObjectSizeLimit();
+
+    this.computationLatency =
+        metricMaker.newTimer(
+            "permissions/project_state/computation_latency",
+            new Description("Latency for access computations in ProjectState")
+                .setCumulative()
+                .setUnit(Units.NANOSECONDS),
+            Field.ofString("method"));
 
     if (isAllProjects && !Permission.canBeOnAllProjects(AccessSection.ALL, Permission.OWNER)) {
       localOwners = Collections.emptySet();
@@ -264,13 +284,58 @@ public class ProjectState {
     }
   }
 
-  public long getEffectiveMaxObjectSizeLimit() {
-    long local = config.getMaxObjectSizeLimit();
-    if (globalMaxObjectSizeLimit > 0 && local > 0) {
-      return Math.min(globalMaxObjectSizeLimit, local);
+  public static class EffectiveMaxObjectSizeLimit {
+    public long value;
+    public String summary;
+  }
+
+  private static final String MAY_NOT_SET = "This project may not set a higher limit.";
+
+  @VisibleForTesting
+  public static final String INHERITED_FROM_PARENT = "Inherited from parent project '%s'.";
+
+  @VisibleForTesting
+  public static final String OVERRIDDEN_BY_PARENT =
+      "Overridden by parent project '%s'. " + MAY_NOT_SET;
+
+  @VisibleForTesting
+  public static final String INHERITED_FROM_GLOBAL = "Inherited from the global config.";
+
+  @VisibleForTesting
+  public static final String OVERRIDDEN_BY_GLOBAL =
+      "Overridden by the global config. " + MAY_NOT_SET;
+
+  public EffectiveMaxObjectSizeLimit getEffectiveMaxObjectSizeLimit() {
+    EffectiveMaxObjectSizeLimit result = new EffectiveMaxObjectSizeLimit();
+
+    result.value = config.getMaxObjectSizeLimit();
+
+    if (inheritProjectMaxObjectSizeLimit) {
+      for (ProjectState parent : parents()) {
+        long parentValue = parent.config.getMaxObjectSizeLimit();
+        if (parentValue > 0 && result.value > 0) {
+          if (parentValue < result.value) {
+            result.value = parentValue;
+            result.summary = String.format(OVERRIDDEN_BY_PARENT, parent.config.getName());
+          }
+        } else if (parentValue > 0) {
+          result.value = parentValue;
+          result.summary = String.format(INHERITED_FROM_PARENT, parent.config.getName());
+        }
+      }
     }
-    // zero means "no limit", in this case the max is more limiting
-    return Math.max(globalMaxObjectSizeLimit, local);
+
+    if (globalMaxObjectSizeLimit > 0 && result.value > 0) {
+      if (globalMaxObjectSizeLimit < result.value) {
+        result.value = globalMaxObjectSizeLimit;
+        result.summary = OVERRIDDEN_BY_GLOBAL;
+      }
+    } else if (globalMaxObjectSizeLimit > result.value) {
+      // zero means "no limit", in this case the max is more limiting
+      result.value = globalMaxObjectSizeLimit;
+      result.summary = INHERITED_FROM_GLOBAL;
+    }
+    return result;
   }
 
   /** Get the sections that pertain only to this project. */
@@ -306,15 +371,20 @@ public class ProjectState {
    * cached. Callers should try to cache this result per-request as much as possible.
    */
   public List<SectionMatcher> getAllSections() {
-    if (isAllProjects) {
-      return getLocalAccessSections();
-    }
+    try (Timer1.Context ignored = computationLatency.start("getAllSections")) {
+      if (isAllProjects) {
+        return getLocalAccessSections();
+      }
 
-    List<SectionMatcher> all = new ArrayList<>();
-    for (ProjectState s : tree()) {
-      all.addAll(s.getLocalAccessSections());
+      List<SectionMatcher> all = new ArrayList<>();
+      Iterable<ProjectState> tree = tree();
+      try (Timer1.Context ignored2 = computationLatency.start("getAllSections-parsing-only")) {
+        for (ProjectState s : tree) {
+          all.addAll(s.getLocalAccessSections());
+        }
+      }
+      return all;
     }
-    return all;
   }
 
   /**

@@ -40,7 +40,6 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Streams;
 import com.google.common.truth.ThrowableSubject;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.GerritApi;
@@ -74,6 +73,7 @@ import com.google.gerrit.index.QueryOptions;
 import com.google.gerrit.index.Schema;
 import com.google.gerrit.lifecycle.LifecycleManager;
 import com.google.gerrit.reviewdb.client.Account;
+import com.google.gerrit.reviewdb.client.Account.Id;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Patch;
@@ -115,6 +115,7 @@ import com.google.gerrit.server.util.ManualRequestContext;
 import com.google.gerrit.server.util.OneOffRequestContext;
 import com.google.gerrit.server.util.RequestContext;
 import com.google.gerrit.server.util.ThreadLocalRequestContext;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gerrit.testing.DisabledReviewDb;
 import com.google.gerrit.testing.GerritServerTests;
 import com.google.gerrit.testing.InMemoryDatabase;
@@ -198,6 +199,9 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
   // These queries must be kept in sync with PolyGerrit:
   // polygerrit-ui/app/elements/change-list/gr-dashboard-view/gr-dashboard-view.js
 
+  protected static final String DASHBOARD_HAS_UNPUBLISHED_DRAFTS_QUERY = "has:draft";
+  protected static final String DASHBOARD_ASSIGNED_QUERY =
+      "assignee:${user} (-is:wip OR " + "owner:self OR assignee:self) is:open -is:ignored";
   protected static final String DASHBOARD_WORK_IN_PROGRESS_QUERY = "is:open owner:${user} is:wip";
   protected static final String DASHBOARD_OUTGOING_QUERY =
       "is:open owner:${user} -is:wip -is:ignored";
@@ -205,7 +209,8 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
       "is:open -owner:${user} -is:wip -is:ignored (reviewer:${user} OR assignee:${user})";
   protected static final String DASHBOARD_RECENTLY_CLOSED_QUERY =
       "is:closed -is:ignored (-is:wip OR owner:self) "
-          + "(owner:${user} OR reviewer:${user} OR assignee:${user})";
+          + "(owner:${user} OR reviewer:${user} OR assignee:${user} "
+          + "OR cc:${user})";
 
   protected abstract Injector createInjector();
 
@@ -833,6 +838,43 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
     assertQuery("repositories:repo1", change1);
     assertQuery("repositories:repo2", change2);
     assertQuery("repositories:repo", change2, change1);
+  }
+
+  @Test
+  public void byRepo() throws Exception {
+    TestRepository<Repo> repo1 = createProject("repo1");
+    TestRepository<Repo> repo2 = createProject("repo2");
+    Change change1 = insert(repo1, newChange(repo1));
+    Change change2 = insert(repo2, newChange(repo2));
+
+    assertQuery("repo:foo");
+    assertQuery("repo:repo");
+    assertQuery("repo:repo1", change1);
+    assertQuery("repo:repo2", change2);
+  }
+
+  @Test
+  public void byParentRepo() throws Exception {
+    TestRepository<Repo> repo1 = createProject("repo1");
+    TestRepository<Repo> repo2 = createProject("repo2", "repo1");
+    Change change1 = insert(repo1, newChange(repo1));
+    Change change2 = insert(repo2, newChange(repo2));
+
+    assertQuery("parentrepo:repo1", change2, change1);
+    assertQuery("parentrepo:repo2", change2);
+  }
+
+  @Test
+  public void byRepoPrefix() throws Exception {
+    TestRepository<Repo> repo1 = createProject("repo1");
+    TestRepository<Repo> repo2 = createProject("repo2");
+    Change change1 = insert(repo1, newChange(repo1));
+    Change change2 = insert(repo2, newChange(repo2));
+
+    assertQuery("repos:foo");
+    assertQuery("repos:repo1", change1);
+    assertQuery("repos:repo2", change2);
+    assertQuery("repos:repo", change2, change1);
   }
 
   @Test
@@ -1555,7 +1597,7 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
     in.add = ImmutableSet.of("foo");
     gApi.changes().id(change1.getId().get()).setHashtags(in);
 
-    in.add = ImmutableSet.of("foo", "bar", "a tag");
+    in.add = ImmutableSet.of("foo", "bar", "a tag", "ACamelCaseTag");
     gApi.changes().id(change2.getId().get()).setHashtags(in);
 
     return ImmutableList.of(change1, change2);
@@ -1572,6 +1614,8 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
     assertQuery("hashtag:\" a tag \"", changes.get(1));
     assertQuery("hashtag:\"#a tag\"", changes.get(1));
     assertQuery("hashtag:\"# #a tag\"", changes.get(1));
+    assertQuery("hashtag:acamelcasetag", changes.get(1));
+    assertQuery("hashtag:ACamelCaseTAg", changes.get(1));
   }
 
   @Test
@@ -1666,6 +1710,10 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
     Account.Id user2 =
         accountManager.authenticate(AuthRequest.forUser("anotheruser")).getAccountId();
     assertQuery(q + " visibleto:" + user2.get(), change1);
+
+    String g1 = createGroup("group1", "Administrators");
+    gApi.groups().id(g1).addMembers("anotheruser");
+    assertQuery(q + " visibleto:" + g1, change1);
 
     requestContext.setContext(
         newRequestContext(
@@ -1955,7 +2003,7 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
     actual = assertQuery(newQuery("-is:reviewed").withOption(REVIEWED), change1);
     assertThat(actual.get(0).reviewed).isNull();
 
-    actual = assertQuery("reviewedby:" + userId.get());
+    assertQuery("reviewedby:" + userId.get());
 
     actual =
         assertQuery(newQuery("reviewedby:" + user2.get()).withOption(REVIEWED), change3, change2);
@@ -2585,7 +2633,10 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
   protected class DashboardChangeState {
     private final Account.Id ownerId;
     private final List<Account.Id> reviewedBy;
+    private final List<Account.Id> cced;
     private final List<Account.Id> ignoredBy;
+    private final List<Account.Id> draftCommentBy;
+    private final List<Account.Id> deleteDraftCommentBy;
     private boolean wip;
     private boolean abandoned;
     @Nullable private Account.Id mergedBy;
@@ -2596,7 +2647,10 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
     DashboardChangeState(Account.Id ownerId) {
       this.ownerId = ownerId;
       reviewedBy = new ArrayList<>();
+      cced = new ArrayList<>();
       ignoredBy = new ArrayList<>();
+      draftCommentBy = new ArrayList<>();
+      deleteDraftCommentBy = new ArrayList<>();
     }
 
     DashboardChangeState assignTo(Account.Id assigneeId) {
@@ -2629,6 +2683,21 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
       return this;
     }
 
+    DashboardChangeState addCc(Account.Id ccId) {
+      cced.add(ccId);
+      return this;
+    }
+
+    DashboardChangeState draftCommentBy(Account.Id commenterId) {
+      draftCommentBy.add(commenterId);
+      return this;
+    }
+
+    DashboardChangeState draftAndDeleteCommentBy(Id commenterId) {
+      deleteDraftCommentBy.add(commenterId);
+      return this;
+    }
+
     DashboardChangeState create(TestRepository<Repo> repo) throws Exception {
       requestContext.setContext(newRequestContext(ownerId));
       Change change = insert(repo, newChange(repo), ownerId);
@@ -2648,10 +2717,27 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
       for (Account.Id reviewerId : reviewedBy) {
         cApi.addReviewer("" + reviewerId);
       }
+      for (Account.Id reviewerId : cced) {
+        AddReviewerInput in = new AddReviewerInput();
+        in.reviewer = reviewerId.toString();
+        in.state = ReviewerState.CC;
+        cApi.addReviewer(in);
+      }
       for (Account.Id ignorerId : ignoredBy) {
         requestContext.setContext(newRequestContext(ignorerId));
         StarsInput in = new StarsInput(new HashSet<>(Arrays.asList("ignore")));
         gApi.accounts().self().setStars("" + id, in);
+      }
+      DraftInput in = new DraftInput();
+      in.path = Patch.COMMIT_MSG;
+      in.message = "message";
+      for (Account.Id commenterId : draftCommentBy) {
+        requestContext.setContext(newRequestContext(commenterId));
+        gApi.changes().id(change.getChangeId()).current().createDraft(in);
+      }
+      for (Account.Id commenterId : deleteDraftCommentBy) {
+        requestContext.setContext(newRequestContext(commenterId));
+        gApi.changes().id(change.getChangeId()).current().createDraft(in).delete();
       }
       if (mergedBy != null) {
         requestContext.setContext(newRequestContext(mergedBy));
@@ -2671,6 +2757,51 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
       ids[i] = expected[i].id;
     }
     return assertQueryByIds(query.replaceAll("\\$\\{user}", viewedUser), ids);
+  }
+
+  @Test
+  public void dashboardHasUnpublishedDrafts() throws Exception {
+    TestRepository<Repo> repo = createProject("repo");
+    Account.Id otherAccountId = createAccount("other");
+    DashboardChangeState hasUnpublishedDraft =
+        new DashboardChangeState(otherAccountId).draftCommentBy(user.getAccountId()).create(repo);
+
+    // Create changes that should not be returned by query.
+    new DashboardChangeState(user.getAccountId()).create(repo);
+    new DashboardChangeState(user.getAccountId()).draftCommentBy(otherAccountId).create(repo);
+    new DashboardChangeState(user.getAccountId())
+        .draftAndDeleteCommentBy(user.getAccountId())
+        .create(repo);
+
+    assertDashboardQuery("self", DASHBOARD_HAS_UNPUBLISHED_DRAFTS_QUERY, hasUnpublishedDraft);
+  }
+
+  @Test
+  public void dashboardAssignedReviews() throws Exception {
+    TestRepository<Repo> repo = createProject("repo");
+    Account.Id otherAccountId = createAccount("other");
+    DashboardChangeState otherOpenWip =
+        new DashboardChangeState(otherAccountId).wip().assignTo(user.getAccountId()).create(repo);
+    DashboardChangeState selfOpenWip =
+        new DashboardChangeState(user.getAccountId())
+            .wip()
+            .assignTo(user.getAccountId())
+            .create(repo);
+
+    // Create changes that should not be returned by query.
+    new DashboardChangeState(user.getAccountId()).assignTo(user.getAccountId()).abandon();
+    new DashboardChangeState(user.getAccountId())
+        .assignTo(user.getAccountId())
+        .ignoreBy(user.getAccountId());
+    new DashboardChangeState(user.getAccountId())
+        .assignTo(user.getAccountId())
+        .mergeBy(user.getAccountId());
+
+    assertDashboardQuery("self", DASHBOARD_ASSIGNED_QUERY, selfOpenWip, otherOpenWip);
+
+    // Viewing another user's dashboard.
+    requestContext.setContext(newRequestContext(otherAccountId));
+    assertDashboardQuery(user.getUserName().get(), DASHBOARD_ASSIGNED_QUERY, otherOpenWip);
   }
 
   @Test
@@ -2773,6 +2904,11 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
             .ignoreBy(user.getAccountId())
             .mergeBy(user.getAccountId())
             .create(repo);
+    DashboardChangeState mergedCced =
+        new DashboardChangeState(otherAccountId)
+            .addCc(user.getAccountId())
+            .mergeBy(user.getAccountId())
+            .create(repo);
     DashboardChangeState mergedAssigned =
         new DashboardChangeState(otherAccountId)
             .assignTo(user.getAccountId())
@@ -2859,6 +2995,7 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
         abandonedOwnedIgnoredByOther,
         abandonedOwned,
         mergedAssigned,
+        mergedCced,
         mergedReviewing,
         mergedOwnedIgnoredByOther,
         mergedOwned);
@@ -2877,6 +3014,7 @@ public abstract class AbstractQueryChangesTest extends GerritServerTests {
         abandonedOwned,
         mergedAssignedIgnoredByUser,
         mergedAssigned,
+        mergedCced,
         mergedReviewingIgnoredByUser,
         mergedReviewing,
         mergedOwned);

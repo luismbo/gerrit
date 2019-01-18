@@ -566,15 +566,64 @@ public class ChangeNotificationsIT extends AbstractNotificationTest {
     addReviewerToReviewableChangeInNoteDbByOwnerCcingSelfNotifyNone(batch());
   }
 
+  private void addNonUserReviewerByEmailInNoteDb(Adder adder) throws Exception {
+    assume().that(notesMigration.readChanges()).isTrue();
+    StagedChange sc = stageReviewableChange();
+    addReviewer(adder, sc.changeId, sc.owner, "nonexistent@example.com");
+    assertThat(sender)
+        .sent("newchange", sc)
+        .to("nonexistent@example.com")
+        .cc(sc.reviewer)
+        .cc(sc.ccerByEmail, sc.reviewerByEmail)
+        .noOneElse();
+  }
+
+  @Test
+  public void addNonUserReviewerByEmailInNoteDbSingly() throws Exception {
+    addNonUserReviewerByEmailInNoteDb(singly(ReviewerState.REVIEWER));
+  }
+
+  @Test
+  public void addNonUserReviewerByEmailInNoteDbBatch() throws Exception {
+    addNonUserReviewerByEmailInNoteDb(batch(ReviewerState.REVIEWER));
+  }
+
+  private void addNonUserCcByEmailInNoteDb(Adder adder) throws Exception {
+    assume().that(notesMigration.readChanges()).isTrue();
+    StagedChange sc = stageReviewableChange();
+    addReviewer(adder, sc.changeId, sc.owner, "nonexistent@example.com");
+    assertThat(sender)
+        .sent("newchange", sc)
+        .cc("nonexistent@example.com")
+        .cc(sc.reviewer)
+        .cc(sc.ccerByEmail, sc.reviewerByEmail)
+        .noOneElse();
+  }
+
+  @Test
+  public void addNonUserCcByEmailInNoteDbSingly() throws Exception {
+    addNonUserCcByEmailInNoteDb(singly(ReviewerState.CC));
+  }
+
+  @Test
+  public void addNonUserCcByEmailInNoteDbBatch() throws Exception {
+    addNonUserCcByEmailInNoteDb(batch(ReviewerState.CC));
+  }
+
   private interface Adder {
     void addReviewer(String changeId, String reviewer, @Nullable NotifyHandling notify)
         throws Exception;
   }
 
   private Adder singly() {
+    return singly(ReviewerState.REVIEWER);
+  }
+
+  private Adder singly(ReviewerState reviewerState) {
     return (String changeId, String reviewer, @Nullable NotifyHandling notify) -> {
       AddReviewerInput in = new AddReviewerInput();
       in.reviewer = reviewer;
+      in.state = reviewerState;
       if (notify != null) {
         in.notify = notify;
       }
@@ -583,9 +632,13 @@ public class ChangeNotificationsIT extends AbstractNotificationTest {
   }
 
   private Adder batch() {
+    return batch(ReviewerState.REVIEWER);
+  }
+
+  private Adder batch(ReviewerState reviewerState) {
     return (String changeId, String reviewer, @Nullable NotifyHandling notify) -> {
       ReviewInput in = ReviewInput.noScore();
-      in.reviewer(reviewer);
+      in.reviewer(reviewer, reviewerState, false);
       if (notify != null) {
         in.notify = notify;
       }
@@ -1035,15 +1088,34 @@ public class ChangeNotificationsIT extends AbstractNotificationTest {
 
   @Test
   public void createReviewableChangeWithReviewersAndCcs() throws Exception {
-    // TODO(logan): Support reviewers/CCs-by-email via push option.
     StagedPreChange spc =
         stagePreChange(
             "refs/for/master",
             users -> ImmutableList.of("r=" + users.reviewer.username, "cc=" + users.ccer.username));
+    FakeEmailSenderSubject subject =
+        assertThat(sender).sent("newchange", spc).to(spc.reviewer, spc.watchingProjectOwner);
+    if (notesMigration.readChanges()) {
+      subject.cc(spc.ccer);
+    } else {
+      // CCs are considered reviewers in the storage layer.
+      subject.to(spc.ccer);
+    }
+    subject.bcc(NEW_CHANGES, NEW_PATCHSETS).noOneElse();
+  }
+
+  @Test
+  public void createReviewableChangeWithReviewersAndCcsByEmailInNoteDb() throws Exception {
+    assume().that(notesMigration.readChanges()).isTrue();
+    StagedPreChange spc =
+        stagePreChange(
+            "refs/for/master",
+            users -> ImmutableList.of("r=nobody1@example.com,cc=nobody2@example.com"));
+    spc.supportReviewersByEmail = true;
     assertThat(sender)
         .sent("newchange", spc)
-        .to(spc.reviewer, spc.watchingProjectOwner)
-        .cc(spc.ccer)
+        .to("nobody1@example.com")
+        .to(spc.watchingProjectOwner)
+        .cc("nobody2@example.com")
         .bcc(NEW_CHANGES, NEW_PATCHSETS)
         .noOneElse();
   }
@@ -1674,6 +1746,7 @@ public class ChangeNotificationsIT extends AbstractNotificationTest {
         .sent("newpatchset", sc)
         .notTo(sc.owner) // TODO(logan): This shouldn't be sent *from* the owner.
         .to(sc.reviewer)
+        .to(other)
         .cc(sc.ccer)
         .cc(sc.reviewerByEmail, sc.ccerByEmail)
         .noOneElse();
@@ -1689,6 +1762,7 @@ public class ChangeNotificationsIT extends AbstractNotificationTest {
         .sent("newpatchset", sc)
         .notTo(sc.owner) // TODO(logan): This shouldn't be sent *from* the owner.
         .to(sc.reviewer, sc.ccer)
+        .to(other)
         .noOneElse();
   }
 
@@ -1702,6 +1776,7 @@ public class ChangeNotificationsIT extends AbstractNotificationTest {
         .sent("newpatchset", sc)
         .notTo(sc.owner) // TODO(logan): This shouldn't be sent *from* the owner.
         .to(sc.reviewer)
+        .to(other)
         .cc(sc.ccer)
         .cc(sc.reviewerByEmail, sc.ccerByEmail)
         .noOneElse();
@@ -1716,6 +1791,7 @@ public class ChangeNotificationsIT extends AbstractNotificationTest {
     assertThat(sender)
         .sent("newpatchset", sc)
         .to(sc.reviewer, sc.ccer)
+        .to(other)
         .notTo(sc.owner) // TODO(logan): This shouldn't be sent *from* the owner.
         .noOneElse();
   }

@@ -382,7 +382,7 @@ limitations under the License.
           true);
     });
 
-    test('clear and empties', () => {
+    suite('hidden attribute and update event', () => {
       const changes = [{
         project: 'foo/bar',
         change_id: 'Ideadbeef',
@@ -397,39 +397,152 @@ limitations under the License.
         _current_revision_number: 1,
         status: 'NEW',
       }];
-      element._relatedResponse = {changes};
-      element._submittedTogether = changes;
-      element._conflicts = changes;
-      element._cherryPicks = changes;
-      element._sameTopic = changes;
 
-      element.hidden = false;
-      element.clear();
-      assert.isTrue(element.hidden);
-      assert.equal(element._relatedResponse.changes.length, 0);
-      assert.equal(element._submittedTogether.length, 0);
-      assert.equal(element._conflicts.length, 0);
-      assert.equal(element._cherryPicks.length, 0);
-      assert.equal(element._sameTopic.length, 0);
-    });
+      test('clear and empties', () => {
+        element._relatedResponse = {changes};
+        element._submittedTogether = {changes};
+        element._conflicts = changes;
+        element._cherryPicks = changes;
+        element._sameTopic = changes;
 
-    test('update fires', () => {
-      const updateHandler = sandbox.stub();
-      element.addEventListener('update', updateHandler);
+        element.hidden = false;
+        element.clear();
+        assert.isTrue(element.hidden);
+        assert.equal(element._relatedResponse.changes.length, 0);
+        assert.equal(element._submittedTogether.changes.length, 0);
+        assert.equal(element._conflicts.length, 0);
+        assert.equal(element._cherryPicks.length, 0);
+        assert.equal(element._sameTopic.length, 0);
+      });
 
-      element._resultsChanged([], [], [], [], []);
-      assert.isTrue(element.hidden);
-      assert.isFalse(updateHandler.called);
+      test('update fires', () => {
+        const updateHandler = sandbox.stub();
+        element.addEventListener('update', updateHandler);
 
-      element._resultsChanged([], [], [], [], ['test']);
-      assert.isFalse(element.hidden);
-      assert.isTrue(updateHandler.called);
+        element._resultsChanged({}, {}, [], [], []);
+        assert.isTrue(element.hidden);
+        assert.isFalse(updateHandler.called);
+
+        element._resultsChanged({}, {}, [], [], ['test']);
+        assert.isFalse(element.hidden);
+        assert.isTrue(updateHandler.called);
+      });
+
+      suite('hiding and unhiding', () => {
+        test('related response', () => {
+          assert.isTrue(element.hidden);
+          element._resultsChanged({changes}, {}, [], [], []);
+          assert.isFalse(element.hidden);
+        });
+
+        test('submitted together', () => {
+          assert.isTrue(element.hidden);
+          element._resultsChanged({}, {changes}, [], [], []);
+          assert.isFalse(element.hidden);
+        });
+
+        test('conflicts', () => {
+          assert.isTrue(element.hidden);
+          element._resultsChanged({}, {}, changes, [], []);
+          assert.isFalse(element.hidden);
+        });
+
+        test('cherrypicks', () => {
+          assert.isTrue(element.hidden);
+          element._resultsChanged({}, {}, [], changes, []);
+          assert.isFalse(element.hidden);
+        });
+
+        test('same topic', () => {
+          assert.isTrue(element.hidden);
+          element._resultsChanged({}, {}, [], [], changes);
+          assert.isFalse(element.hidden);
+        });
+      });
     });
 
     test('_computeChangeURL uses Gerrit.Nav', () => {
       const getUrlStub = sandbox.stub(Gerrit.Nav, 'getUrlForChangeById');
       element._computeChangeURL(123, 'abc/def', 12);
       assert.isTrue(getUrlStub.called);
+    });
+
+    suite('submitted together changes', () => {
+      const change = {
+        project: 'foo/bar',
+        change_id: 'Ideadbeef',
+        commit: {
+          commit: 'deadbeef',
+          parents: [{commit: 'abc123'}],
+          author: {},
+          subject: 'do that thing',
+        },
+        _change_number: 12345,
+        _revision_number: 1,
+        _current_revision_number: 1,
+        status: 'NEW',
+      };
+
+      test('_computeSubmittedTogetherClass', () => {
+        assert.strictEqual(
+            element._computeSubmittedTogetherClass(undefined),
+            'hidden');
+        assert.strictEqual(
+            element._computeSubmittedTogetherClass({changes: []}),
+            'hidden');
+        assert.strictEqual(
+            element._computeSubmittedTogetherClass({changes: [{}]}),
+            '');
+        assert.strictEqual(
+            element._computeSubmittedTogetherClass({
+              changes: [],
+              non_visible_changes: 0,
+            }),
+            'hidden');
+        assert.strictEqual(
+            element._computeSubmittedTogetherClass({
+              changes: [],
+              non_visible_changes: 1,
+            }),
+            '');
+        assert.strictEqual(
+            element._computeSubmittedTogetherClass({
+              changes: [{}],
+              non_visible_changes: 1,
+            }),
+            '');
+      });
+
+      test('no submitted together changes', () => {
+        flushAsynchronousOperations();
+        assert.include(element.$.submittedTogether.className, 'hidden');
+      });
+
+      test('no non-visible submitted together changes', () => {
+        element._submittedTogether = {changes: [change]};
+        flushAsynchronousOperations();
+        assert.notInclude(element.$.submittedTogether.className, 'hidden');
+        assert.isNull(element.$$('.note'));
+      });
+
+      test('no visible submitted together changes', () => {
+        // Technically this should never happen, but worth asserting the logic.
+        element._submittedTogether = {changes: [], non_visible_changes: 1};
+        flushAsynchronousOperations();
+        assert.notInclude(element.$.submittedTogether.className, 'hidden');
+        assert.isNotNull(element.$$('.note'));
+        assert.strictEqual(
+            element.$$('.note').innerText, '(+ 1 non-visible change)');
+      });
+
+      test('visible and non-visible submitted together changes', () => {
+        element._submittedTogether = {changes: [change], non_visible_changes: 2};
+        flushAsynchronousOperations();
+        assert.notInclude(element.$.submittedTogether.className, 'hidden');
+        assert.isNotNull(element.$$('.note'));
+        assert.strictEqual(
+            element.$$('.note').innerText, '(+ 2 non-visible changes)');
+      });
     });
   });
 </script>

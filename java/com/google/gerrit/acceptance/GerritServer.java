@@ -15,15 +15,19 @@
 package com.google.gerrit.acceptance;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
+import static org.apache.log4j.Logger.getLogger;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.gerrit.acceptance.testsuite.account.AccountOperations;
 import com.google.gerrit.acceptance.testsuite.account.AccountOperationsImpl;
+import com.google.gerrit.acceptance.testsuite.group.GroupOperations;
+import com.google.gerrit.acceptance.testsuite.group.GroupOperationsImpl;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.config.FactoryModule;
 import com.google.gerrit.lucene.LuceneIndexModule;
@@ -39,6 +43,7 @@ import com.google.gerrit.server.util.OneOffRequestContext;
 import com.google.gerrit.server.util.SocketUtil;
 import com.google.gerrit.server.util.SystemLog;
 import com.google.gerrit.testing.FakeEmailSender;
+import com.google.gerrit.testing.FakeGroupAuditService;
 import com.google.gerrit.testing.InMemoryDatabase;
 import com.google.gerrit.testing.InMemoryRepositoryManager;
 import com.google.gerrit.testing.NoteDbChecker;
@@ -66,8 +71,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
+import org.apache.log4j.ConsoleAppender;
 import org.apache.log4j.Level;
+import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
+import org.apache.log4j.PatternLayout;
 import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.RepositoryCache;
 import org.eclipse.jgit.util.FS;
@@ -189,6 +197,44 @@ public class GerritServer implements AutoCloseable {
     }
   }
 
+  private static final ImmutableMap<String, Level> LOG_LEVELS =
+      ImmutableMap.<String, Level>builder()
+          .put("com.google.gerrit", Level.DEBUG)
+
+          // Silence non-critical messages from MINA SSHD.
+          .put("org.apache.mina", Level.WARN)
+          .put("org.apache.sshd.common", Level.WARN)
+          .put("org.apache.sshd.server", Level.WARN)
+          .put("org.apache.sshd.common.keyprovider.FileKeyPairProvider", Level.INFO)
+          .put("com.google.gerrit.sshd.GerritServerSession", Level.WARN)
+
+          // Silence non-critical messages from mime-util.
+          .put("eu.medsea.mimeutil", Level.WARN)
+
+          // Silence non-critical messages from openid4java.
+          .put("org.apache.xml", Level.WARN)
+          .put("org.openid4java", Level.WARN)
+          .put("org.openid4java.consumer.ConsumerManager", Level.FATAL)
+          .put("org.openid4java.discovery.Discovery", Level.ERROR)
+          .put("org.openid4java.server.RealmVerifier", Level.ERROR)
+          .put("org.openid4java.message.AuthSuccess", Level.ERROR)
+
+          // Silence non-critical messages from c3p0 (if used).
+          .put("com.mchange.v2.c3p0", Level.WARN)
+          .put("com.mchange.v2.resourcepool", Level.WARN)
+          .put("com.mchange.v2.sql", Level.WARN)
+
+          // Silence non-critical messages from apache.http.
+          .put("org.apache.http", Level.WARN)
+
+          // Silence non-critical messages from Jetty.
+          .put("org.eclipse.jetty", Level.WARN)
+
+          // Silence non-critical messages from JGit.
+          .put("org.eclipse.jgit.transport.PacketLineIn", Level.WARN)
+          .put("org.eclipse.jgit.transport.PacketLineOut", Level.WARN)
+          .build();
+
   private static boolean forceLocalDisk() {
     String value = Strings.nullToEmpty(System.getenv("GERRIT_FORCE_LOCAL_DISK"));
     if (value.isEmpty()) {
@@ -263,9 +309,6 @@ public class GerritServer implements AutoCloseable {
   public static GerritServer initAndStart(
       Description desc, Config baseConfig, @Nullable Module testSysModule) throws Exception {
     Path site = TempFileUtil.createTempDirectory().toPath();
-    baseConfig = new Config(baseConfig);
-    baseConfig.setString("gerrit", null, "basePath", site.resolve("git").toString());
-    baseConfig.setString("gerrit", null, "tempSiteDir", site.toString());
     try {
       if (!desc.memory()) {
         init(desc, baseConfig, site);
@@ -307,7 +350,7 @@ public class GerritServer implements AutoCloseable {
       throws Exception {
     checkArgument(site != null, "site is required (even for in-memory server");
     desc.checkValidAnnotations();
-    Logger.getLogger("com.google.gerrit").setLevel(Level.DEBUG);
+    configureLogging();
     CyclicBarrier serverStarted = new CyclicBarrier(2);
     Daemon daemon =
         new Daemon(
@@ -320,9 +363,9 @@ public class GerritServer implements AutoCloseable {
             },
             site);
     daemon.setEmailModuleForTesting(new FakeEmailSender.Module());
+    daemon.setAuditEventModuleForTesting(new FakeGroupAuditService.Module());
     daemon.setAdditionalSysModuleForTesting(testSysModule);
     daemon.setEnableSshd(desc.useSsh());
-    daemon.setSlave(isSlave(baseConfig));
 
     if (desc.memory()) {
       checkArgument(additionalArgs.length == 0, "cannot pass args to in-memory server");
@@ -341,6 +384,7 @@ public class GerritServer implements AutoCloseable {
       @Nullable InMemoryDatabase.Instance inMemoryDatabaseInstance)
       throws Exception {
     Config cfg = desc.buildConfig(baseConfig);
+    daemon.setSlave(isSlave(baseConfig) || cfg.getBoolean("container", "slave", false));
     mergeTestConfig(cfg);
     // Set the log4j configuration to an invalid one to prevent system logs
     // from getting configured and creating log files.
@@ -348,6 +392,7 @@ public class GerritServer implements AutoCloseable {
     cfg.setBoolean("httpd", null, "requestLog", false);
     cfg.setBoolean("sshd", null, "requestLog", false);
     cfg.setBoolean("index", "lucene", "testInmemory", true);
+    cfg.setBoolean("index", null, "onlineUpgrade", false);
     cfg.setString("gitweb", null, "cgi", "");
     daemon.setEnableHttpd(desc.httpd());
     daemon.setLuceneModule(LuceneIndexModule.singleVersionAllLatest(0, isSlave(baseConfig)));
@@ -376,7 +421,7 @@ public class GerritServer implements AutoCloseable {
       CyclicBarrier serverStarted,
       String[] additionalArgs)
       throws Exception {
-    checkNotNull(site);
+    requireNonNull(site);
     ExecutorService daemonService = Executors.newSingleThreadExecutor();
     String[] args =
         Stream.concat(
@@ -404,6 +449,25 @@ public class GerritServer implements AutoCloseable {
     System.out.println("Gerrit Server Started");
 
     return new GerritServer(desc, site, createTestInjector(daemon), daemon, daemonService);
+  }
+
+  private static void configureLogging() {
+    LogManager.resetConfiguration();
+
+    PatternLayout layout = new PatternLayout();
+    layout.setConversionPattern("%-5p %c %x: %m%n");
+
+    ConsoleAppender dst = new ConsoleAppender();
+    dst.setLayout(layout);
+    dst.setTarget("System.err");
+    dst.setThreshold(Level.DEBUG);
+    dst.activateOptions();
+
+    Logger root = LogManager.getRootLogger();
+    root.removeAllAppenders();
+    root.addAppender(dst);
+
+    LOG_LEVELS.entrySet().stream().forEach(e -> getLogger(e.getKey()).setLevel(e.getValue()));
   }
 
   private static void mergeTestConfig(Config cfg) {
@@ -441,6 +505,7 @@ public class GerritServer implements AutoCloseable {
             bindConstant().annotatedWith(SshEnabled.class).to(daemon.getEnableSshd());
             bind(AccountCreator.class);
             bind(AccountOperations.class).to(AccountOperationsImpl.class);
+            bind(GroupOperations.class).to(GroupOperationsImpl.class);
             factory(PushOneCommit.Factory.class);
             install(InProcessProtocol.module());
             install(new NoSshModule());
@@ -480,10 +545,10 @@ public class GerritServer implements AutoCloseable {
       Injector testInjector,
       Daemon daemon,
       @Nullable ExecutorService daemonService) {
-    this.desc = checkNotNull(desc);
+    this.desc = requireNonNull(desc);
     this.sitePath = sitePath;
-    this.testInjector = checkNotNull(testInjector);
-    this.daemon = checkNotNull(daemon);
+    this.testInjector = requireNonNull(testInjector);
+    this.daemon = requireNonNull(daemon);
     this.daemonService = daemonService;
 
     Config cfg = testInjector.getInstance(Key.get(Config.class, GerritServerConfig.class));

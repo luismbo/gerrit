@@ -20,7 +20,13 @@ limitations under the License.
 <link rel="import" href="../../../styles/shared-styles.html">
 <link rel="import" href="../../change-list/gr-change-list/gr-change-list.html">
 <link rel="import" href="../../core/gr-reporting/gr-reporting.html">
+<link rel="import" href="../../shared/gr-button/gr-button.html">
+<link rel="import" href="../../shared/gr-dialog/gr-dialog.html">
+<link rel="import" href="../../shared/gr-overlay/gr-overlay.html">
 <link rel="import" href="../../shared/gr-rest-api-interface/gr-rest-api-interface.html">
+<link rel="import" href="../gr-create-commands-dialog/gr-create-commands-dialog.html">
+<link rel="import" href="../gr-create-change-help/gr-create-change-help.html">
+<link rel="import" href="../gr-create-destination-dialog/gr-create-destination-dialog.html">
 <link rel="import" href="../gr-user-header/gr-user-header.html">
 
 <dom-module id="gr-dashboard-view">
@@ -37,11 +43,27 @@ limitations under the License.
       gr-change-list {
         width: 100%;
       }
+      gr-user-header {
+        border-bottom: 1px solid var(--border-color);
+      }
+      .banner {
+        align-items: center;
+        background-color: var(--comment-background-color);
+        border-bottom: 1px solid var(--border-color);
+        display: flex;
+        justify-content: space-between;
+        padding: .25em var(--default-horizontal-margin);
+      }
+      .banner gr-button {
+        --gr-button: {
+          color: var(--primary-text-color);
+        }
+      }
       .hide {
         display: none;
       }
-      gr-user-header {
-        border-bottom: 1px solid var(--border-color);
+      #emptyOutgoing {
+        display: block;
       }
       @media only screen and (max-width: 50em) {
         .loading {
@@ -49,11 +71,23 @@ limitations under the License.
         }
       }
     </style>
+    <div class$="banner [[_computeBannerClass(_showDraftsBanner)]]">
+      <div>
+        You have draft comments on closed changes.
+        <a href$="[[_computeDraftsLink(_showDraftsBanner)]]" target="_blank">(view all)</a>
+      </div>
+      <div>
+        <gr-button
+            class="delete"
+            link
+            on-tap="_handleOpenDeleteDialog">Delete All</gr-button>
+      </div>
+    </div>
     <div class="loading" hidden$="[[!_loading]]">Loading...</div>
     <div hidden$="[[_loading]]" hidden>
       <gr-user-header
           user-id="[[params.user]]"
-          class$="[[_computeUserHeaderClass(params.user)]]"></gr-user-header>
+          class$="[[_computeUserHeaderClass(params)]]"></gr-user-header>
       <gr-change-list
           show-star
           show-reviewed-state
@@ -62,8 +96,36 @@ limitations under the License.
           selected-index="{{viewState.selectedChangeIndex}}"
           sections="[[_results]]"
           on-toggle-star="_handleToggleStar"
-          on-toggle-reviewed="_handleToggleReviewed"></gr-change-list>
+          on-toggle-reviewed="_handleToggleReviewed">
+        <div id="emptyOutgoing" slot="empty-outgoing">
+          <template is="dom-if" if="[[_showNewUserHelp]]">
+            <gr-create-change-help on-create-tap="createChangeTap"></gr-create-change-help>
+          </template>
+          <template is="dom-if" if="[[!_showNewUserHelp]]">
+            No changes
+          </template>
+        </div>
+      </gr-change-list>
     </div>
+    <gr-overlay id="confirmDeleteOverlay" with-backdrop>
+      <gr-dialog
+          id="confirmDeleteDialog"
+          confirm-label="Delete"
+          on-confirm="_handleConfirmDelete"
+          on-cancel="_closeConfirmDeleteOverlay">
+        <div class="header" slot="header">
+          Delete comments
+        </div>
+        <div class="main" slot="main">
+          Are you sure you want to delete all your draft comments in closed changes? This action
+          cannot be undone.
+        </div>
+      </gr-dialog>
+    </gr-overlay>
+    <gr-create-destination-dialog
+        id="destinationDialog"
+        on-confirm="_handleDestinationConfirm"></gr-create-destination-dialog>
+    <gr-create-commands-dialog id="commandsDialog"></gr-create-commands-dialog>
     <gr-rest-api-interface id="restAPI"></gr-rest-api-interface>
     <gr-reporting id="reporting"></gr-reporting>
   </template>

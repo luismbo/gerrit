@@ -344,7 +344,17 @@ public class RefAdvertisementIT extends AbstractDaemonTest {
   }
 
   @Test
-  public void uploadPackNoSearchingChangeCacheImpl() throws Exception {
+  public void uploadPackNoSearchingChangeCacheImplMaster() throws Exception {
+    uploadPackNoSearchingChangeCacheImpl();
+  }
+
+  @Test
+  @GerritConfig(name = "container.slave", value = "true")
+  public void uploadPackNoSearchingChangeCacheImplSlave() throws Exception {
+    uploadPackNoSearchingChangeCacheImpl();
+  }
+
+  private void uploadPackNoSearchingChangeCacheImpl() throws Exception {
     allow("refs/heads/*", Permission.READ, REGISTERED_USERS);
 
     setApiUser(user);
@@ -585,6 +595,22 @@ public class RefAdvertisementIT extends AbstractDaemonTest {
 
       gApi.changes().id(c3.getId().get()).setPrivate(true, null);
       assertThat(getRefs(git)).contains(change3RefName);
+    }
+  }
+
+  @Test
+  @GerritConfig(name = "auth.skipFullRefEvaluationIfAllRefsAreVisible", value = "false")
+  public void advertisedReferencesOmitPrivateChangesOfOtherUsersWhenShortcutDisabled()
+      throws Exception {
+    allow("refs/*", Permission.READ, REGISTERED_USERS);
+
+    TestRepository<?> userTestRepository = cloneProject(project, user);
+    try (Git git = userTestRepository.git()) {
+      String change3RefName = c3.currentPatchSet().getRefName();
+      assertWithMessage("Precondition violated").that(getRefs(git)).contains(change3RefName);
+
+      gApi.changes().id(c3.getId().get()).setPrivate(true, null);
+      assertThat(getRefs(git)).doesNotContain(change3RefName);
     }
   }
 

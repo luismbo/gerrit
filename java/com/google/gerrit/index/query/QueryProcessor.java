@@ -17,6 +17,8 @@ package com.google.gerrit.index.query;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.flogger.LazyArgs.lazy;
+import static java.util.stream.Collectors.toSet;
 
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
@@ -35,6 +37,7 @@ import com.google.gerrit.metrics.Description;
 import com.google.gerrit.metrics.Field;
 import com.google.gerrit.metrics.MetricMaker;
 import com.google.gerrit.metrics.Timer1;
+import com.google.gerrit.server.logging.CallerFinder;
 import com.google.gwtorm.server.OrmException;
 import com.google.gwtorm.server.OrmRuntimeException;
 import com.google.gwtorm.server.ResultSet;
@@ -78,6 +81,7 @@ public abstract class QueryProcessor<T> {
   private final IndexRewriter<T> rewriter;
   private final String limitField;
   private final IntSupplier permittedLimit;
+  private final CallerFinder callerFinder;
 
   // This class is not generally thread-safe, but programmer error may result in it being shared
   // across threads. At least ensure the bit for checking if it's been used is threadsafe.
@@ -105,6 +109,13 @@ public abstract class QueryProcessor<T> {
     this.limitField = limitField;
     this.permittedLimit = permittedLimit;
     this.used = new AtomicBoolean(false);
+    this.callerFinder =
+        CallerFinder.builder()
+            .addTarget(InternalQuery.class)
+            .addTarget(QueryProcessor.class)
+            .matchSubClasses(true)
+            .skip(1)
+            .build();
   }
 
   public QueryProcessor<T> setStart(int n) {
@@ -204,6 +215,9 @@ public abstract class QueryProcessor<T> {
       return disabledResults(queryStrings, queries);
     }
 
+    logger.atFine().log(
+        "Executing %d %s index queries for %s",
+        cnt, schemaDef.getName(), callerFinder.findCaller());
     List<QueryResult<T>> out;
     try {
       // Parse and rewrite all queries.
@@ -255,7 +269,9 @@ public abstract class QueryProcessor<T> {
       out = new ArrayList<>(cnt);
       for (int i = 0; i < cnt; i++) {
         List<T> matchesList = matches.get(i).toList();
-        logger.atFine().log("Matches[%d]:\n%s", i, matchesList);
+        logger.atFine().log(
+            "Matches[%d]:\n%s",
+            i, lazy(() -> matchesList.stream().map(this::formatForLogging).collect(toSet())));
         out.add(
             QueryResult.create(
                 queryStrings != null ? queryStrings.get(i) : null,
@@ -363,4 +379,6 @@ public abstract class QueryProcessor<T> {
         .map(QueryParseException.class::cast)
         .findFirst();
   }
+
+  protected abstract String formatForLogging(T t);
 }

@@ -27,7 +27,7 @@ import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.CurrentUser;
-import com.google.gerrit.server.IdentifiedUser;
+import com.google.gerrit.server.logging.CallerFinder;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.permissions.PermissionBackend.ForChange;
 import com.google.gerrit.server.permissions.PermissionBackend.ForRef;
@@ -44,12 +44,13 @@ import java.util.Set;
 class RefControl {
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
-  private final IdentifiedUser.GenericFactory identifiedUserFactory;
   private final ProjectControl projectControl;
   private final String refName;
 
   /** All permissions that apply to this reference. */
   private final PermissionCollection relevant;
+
+  private final CallerFinder callerFinder;
 
   // The next 4 members are cached canPerform() permissions.
 
@@ -58,15 +59,17 @@ class RefControl {
   private Boolean canForgeCommitter;
   private Boolean isVisible;
 
-  RefControl(
-      IdentifiedUser.GenericFactory identifiedUserFactory,
-      ProjectControl projectControl,
-      String ref,
-      PermissionCollection relevant) {
-    this.identifiedUserFactory = identifiedUserFactory;
+  RefControl(ProjectControl projectControl, String ref, PermissionCollection relevant) {
     this.projectControl = projectControl;
     this.refName = ref;
     this.relevant = relevant;
+    this.callerFinder =
+        CallerFinder.builder()
+            .addTarget(PermissionBackend.class)
+            .matchSubClasses(true)
+            .matchInnerClasses(true)
+            .skip(1)
+            .build();
   }
 
   ProjectControl getProjectControl() {
@@ -75,14 +78,6 @@ class RefControl {
 
   CurrentUser getUser() {
     return projectControl.getUser();
-  }
-
-  RefControl forUser(CurrentUser who) {
-    ProjectControl newCtl = projectControl.forUser(who);
-    if (relevant.isUserSpecific()) {
-      return newCtl.controlForRef(refName);
-    }
-    return new RefControl(identifiedUserFactory, newCtl, refName, relevant);
   }
 
   /** Is this user a ref owner? */
@@ -396,36 +391,39 @@ class RefControl {
   private boolean canPerform(String permissionName, boolean isChangeOwner, boolean withForce) {
     if (isBlocked(permissionName, isChangeOwner, withForce)) {
       logger.atFine().log(
-          "'%s' cannot perform '%s' with force=%s on project '%s' for ref '%s'"
+          "'%s' cannot perform '%s' with force=%s on project '%s' for ref '%s' (caller: %s)"
               + " because this permission is blocked",
           getUser().getLoggableName(),
           permissionName,
           withForce,
           projectControl.getProject().getName(),
-          refName);
+          refName,
+          callerFinder.findCaller());
       return false;
     }
 
     for (PermissionRule pr : relevant.getAllowRules(permissionName)) {
       if (isAllow(pr, withForce) && projectControl.match(pr, isChangeOwner)) {
         logger.atFine().log(
-            "'%s' can perform '%s' with force=%s on project '%s' for ref '%s'",
+            "'%s' can perform '%s' with force=%s on project '%s' for ref '%s' (caller: %s)",
             getUser().getLoggableName(),
             permissionName,
             withForce,
             projectControl.getProject().getName(),
-            refName);
+            refName,
+            callerFinder.findCaller());
         return true;
       }
     }
 
     logger.atFine().log(
-        "'%s' cannot perform '%s' with force=%s on project '%s' for ref '%s'",
+        "'%s' cannot perform '%s' with force=%s on project '%s' for ref '%s' (caller: %s)",
         getUser().getLoggableName(),
         permissionName,
         withForce,
         projectControl.getProject().getName(),
-        refName);
+        refName,
+        callerFinder.findCaller());
     return false;
   }
 

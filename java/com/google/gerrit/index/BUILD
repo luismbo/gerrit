@@ -1,5 +1,3 @@
-load("//tools/bzl:genrule2.bzl", "genrule2")
-
 QUERY_PARSE_EXCEPTION_SRCS = [
     "query/QueryParseException.java",
     "query/QueryRequiresAuthException.java",
@@ -25,6 +23,7 @@ java_library(
         "//java/com/google/gerrit/extensions:api",
         "//java/com/google/gerrit/metrics",
         "//java/com/google/gerrit/reviewdb:server",
+        "//java/com/google/gerrit/server/logging",
         "//lib:guava",
         "//lib:gwtjsonrpc",
         "//lib:gwtorm",

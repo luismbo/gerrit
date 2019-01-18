@@ -15,6 +15,7 @@
 package com.google.gerrit.server.restapi.project;
 
 import com.google.common.collect.ListMultimap;
+import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.registration.DynamicMap;
 import com.google.gerrit.extensions.restapi.AuthException;
@@ -46,6 +47,8 @@ import org.eclipse.jgit.lib.Constants;
 @Singleton
 public class ProjectsCollection
     implements RestCollection<TopLevelResource, ProjectResource>, NeedsParams {
+  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
+
   private final DynamicMap<RestView<ProjectResource>> views;
   private final Provider<ListProjects> list;
   private final Provider<QueryProjects> queryProjects;
@@ -143,27 +146,25 @@ public class ProjectsCollection
       return null;
     }
 
+    logger.atFine().log("Project %s has state %s", nameKey, state.getProject().getState());
+
     if (checkAccess) {
       // Hidden projects(permitsRead = false) should only be accessible by the project owners.
-      // READ_CONFIG is checked here because it's only allowed to project owners(ACCESS may also
+      // WRITE_CONFIG is checked here because it's only allowed to project owners (ACCESS may also
       // be allowed for other users). Allowing project owners to access here will help them to view
       // and update the config of hidden projects easily.
-      ProjectPermission permissionToCheck =
-          state.statePermitsRead() ? ProjectPermission.ACCESS : ProjectPermission.READ_CONFIG;
-      try {
-        permissionBackend.currentUser().project(nameKey).check(permissionToCheck);
-      } catch (AuthException e) {
-        return null; // Pretend like not found on access denied.
-      }
-      // If the project's state does not permit reading, we want to hide it from all callers. The
-      // only exception to that are users who are allowed to mutate the project's configuration.
-      // This enables these users to still mutate the project's state (e.g. set a HIDDEN project to
-      // ACTIVE). Individual views should still check for checkStatePermitsRead() and this should
-      // just serve as a safety net in case the individual check is forgotten.
-      try {
-        permissionBackend.currentUser().project(nameKey).check(ProjectPermission.WRITE_CONFIG);
-      } catch (AuthException e) {
-        state.checkStatePermitsRead();
+      if (state.statePermitsRead()) {
+        try {
+          permissionBackend.currentUser().project(nameKey).check(ProjectPermission.ACCESS);
+        } catch (AuthException e) {
+          return null;
+        }
+      } else {
+        try {
+          permissionBackend.currentUser().project(nameKey).check(ProjectPermission.WRITE_CONFIG);
+        } catch (AuthException e) {
+          state.checkStatePermitsRead();
+        }
       }
     }
     return new ProjectResource(state, user.get());

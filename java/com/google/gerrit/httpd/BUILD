@@ -2,7 +2,10 @@ java_library(
     name = "httpd",
     srcs = glob(["**/*.java"]),
     resource_strip_prefix = "resources",
-    resources = ["//resources/com/google/gerrit/httpd"],
+    resources = [
+        "//resources/com/google/gerrit/httpd",
+        "//resources/com/google/gerrit/httpd/raw",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//java/com/google/gerrit/common:annotations",
@@ -16,7 +19,9 @@ java_library(
         "//java/com/google/gerrit/server/audit",
         "//java/com/google/gerrit/server/git/receive",
         "//java/com/google/gerrit/server/ioutil",
+        "//java/com/google/gerrit/server/logging",
         "//java/com/google/gerrit/server/restapi",
+        "//java/com/google/gerrit/server/util/time",
         "//java/com/google/gerrit/util/cli",
         "//java/com/google/gerrit/util/http",
         "//java/org/eclipse/jgit:server",

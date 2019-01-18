@@ -65,9 +65,11 @@ public abstract class AbstractGitCommand extends BaseCommand {
 
             @Override
             public Project.NameKey getProjectName() {
-              return projectState.getNameKey();
+              Project project = projectState.getProject();
+              return project.getNameKey();
             }
-          });
+          },
+          AccessPath.GIT);
     } finally {
       sshScope.set(old);
     }
@@ -79,7 +81,6 @@ public abstract class AbstractGitCommand extends BaseCommand {
             session,
             session.getRemoteAddress(),
             userFactory.create(session.getRemoteAddress(), user.getAccountId()));
-    n.setAccessPath(AccessPath.GIT);
     return n;
   }
 

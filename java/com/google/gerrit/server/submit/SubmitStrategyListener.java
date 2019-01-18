@@ -16,6 +16,7 @@ package com.google.gerrit.server.submit;
 
 import com.google.common.base.CharMatcher;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.extensions.api.changes.SubmitInput;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.reviewdb.client.Change;
@@ -30,6 +31,8 @@ import java.util.Set;
 import org.eclipse.jgit.revwalk.RevCommit;
 
 public class SubmitStrategyListener implements BatchUpdateListener {
+  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
+
   private final Collection<SubmitStrategy> strategies;
   private final CommitStatus commitStatus;
   private final boolean failAfterRefUpdates;
@@ -106,8 +109,16 @@ public class SubmitStrategyListener implements BatchUpdateListener {
       CodeReviewCommit commit = commitStatus.get(id);
       CommitMergeStatus s = commit != null ? commit.getStatusCode() : null;
       if (s == null) {
+        logger.atSevere().log("change %d: change not processed by merge strategy", id.get());
         commitStatus.problem(id, "internal error: change not processed by merge strategy");
         continue;
+      }
+      if (commit.getStatusMessage().isPresent()) {
+        logger.atFine().log(
+            "change %d: Status for commit %s is %s. %s",
+            id.get(), commit.name(), s, commit.getStatusMessage().get());
+      } else {
+        logger.atFine().log("change %d: Status for commit %s is %s.", id.get(), commit.name(), s);
       }
       switch (s) {
         case CLEAN_MERGE:
@@ -128,13 +139,14 @@ public class SubmitStrategyListener implements BatchUpdateListener {
         case CANNOT_REBASE_ROOT:
         case NOT_FAST_FORWARD:
         case EMPTY_COMMIT:
+        case MISSING_DEPENDENCY:
           // TODO(dborowitz): Reformat these messages to be more appropriate for
           // short problem descriptions.
-          commitStatus.problem(id, CharMatcher.is('\n').collapseFrom(s.getMessage(), ' '));
-          break;
-
-        case MISSING_DEPENDENCY:
-          commitStatus.problem(id, "depends on change that was not submitted");
+          String message = s.getDescription();
+          if (commit.getStatusMessage().isPresent()) {
+            message += " " + commit.getStatusMessage().get();
+          }
+          commitStatus.problem(id, CharMatcher.is('\n').collapseFrom(message, ' '));
           break;
 
         default:

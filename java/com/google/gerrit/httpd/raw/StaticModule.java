@@ -71,7 +71,15 @@ public class StaticModule extends ServletModule {
    */
   public static final ImmutableList<String> POLYGERRIT_INDEX_PATHS =
       ImmutableList.of(
-          "/", "/c/*", "/p/*", "/q/*", "/x/*", "/admin/*", "/dashboard/*", "/settings/*");
+          "/",
+          "/c/*",
+          "/p/*",
+          "/q/*",
+          "/x/*",
+          "/admin/*",
+          "/dashboard/*",
+          "/settings/*",
+          "/Documentation/q/*");
   // TODO(dborowitz): These fragments conflict with the REST API
   // namespace, so they will need to use a different path.
   // "/groups/*",
@@ -119,6 +127,8 @@ public class StaticModule extends ServletModule {
 
   @Override
   protected void configureServlets() {
+    serveRegex("^/Documentation$").with(named(DOC_SERVLET));
+    serveRegex("^/Documentation/$").with(named(DOC_SERVLET));
     serveRegex("^/Documentation/(.+)$").with(named(DOC_SERVLET));
     serve("/static/*").with(SiteStaticDirectoryServlet.class);
     install(
@@ -132,10 +142,8 @@ public class StaticModule extends ServletModule {
         });
     if (!options.headless()) {
       install(new CoreStaticModule());
+      install(new PolyGerritModule());
     }
-
-    install(new PolyGerritModule());
-
     if (options.enableGwtUi()) {
       install(new GwtUiModule());
     }
@@ -365,9 +373,7 @@ public class StaticModule extends ServletModule {
             && GerritLauncher.NOT_ARCHIVED.equals(e.getMessage())) {
           return null;
         }
-        ProvisionException pe = new ProvisionException("Error reading gerrit.war");
-        pe.initCause(e);
-        throw pe;
+        throw new ProvisionException("Error reading gerrit.war", e);
       }
       return war;
     }
@@ -395,9 +401,7 @@ public class StaticModule extends ServletModule {
           return dstwar.getAbsoluteFile().toPath();
         }
       } catch (IOException e) {
-        ProvisionException pe = new ProvisionException("Cannot create war tempdir");
-        pe.initCause(e);
-        throw pe;
+        throw new ProvisionException("Cannot create war tempdir", e);
       }
     }
   }

@@ -15,12 +15,12 @@
 package com.google.gerrit.server.restapi.change;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.gerrit.server.CommentsUtil.setCommentRevId;
 import static com.google.gerrit.server.notedb.ReviewerStateInternal.REVIEWER;
 import static com.google.gerrit.server.permissions.LabelPermission.ForUser.ON_BEHALF_OF;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.groupingBy;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
@@ -37,7 +37,6 @@ import com.google.common.flogger.FluentLogger;
 import com.google.common.hash.HashCode;
 import com.google.common.hash.Hashing;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.LabelTypes;
 import com.google.gerrit.extensions.api.changes.AddReviewerInput;
@@ -89,9 +88,13 @@ import com.google.gerrit.server.OutputFormat;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.PublishCommentUtil;
 import com.google.gerrit.server.ReviewerSet;
+import com.google.gerrit.server.account.AccountResolver;
+import com.google.gerrit.server.change.AddReviewersEmail;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.change.EmailReviewComments;
 import com.google.gerrit.server.change.NotifyUtil;
+import com.google.gerrit.server.change.ReviewerAdder;
+import com.google.gerrit.server.change.ReviewerAdder.ReviewerAddition;
 import com.google.gerrit.server.change.RevisionResource;
 import com.google.gerrit.server.change.WorkInProgressOp;
 import com.google.gerrit.server.config.GerritServerConfig;
@@ -111,7 +114,6 @@ import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.query.change.ChangeData;
-import com.google.gerrit.server.restapi.account.AccountsCollection;
 import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.server.update.BatchUpdateOp;
 import com.google.gerrit.server.update.ChangeContext;
@@ -120,6 +122,7 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.LabelVote;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gson.Gson;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
@@ -149,8 +152,6 @@ public class PostReview
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
   public static final String ERROR_ADDING_REVIEWER = "error adding reviewer";
-  public static final String ERROR_ONLY_OWNER_CAN_MODIFY_WORK_IN_PROGRESS =
-      "only change owner can specify work_in_progress or ready";
   public static final String ERROR_WIP_READY_MUTUALLY_EXCLUSIVE =
       "work_in_progress and ready are mutually exclusive";
 
@@ -168,10 +169,11 @@ public class PostReview
   private final PublishCommentUtil publishCommentUtil;
   private final PatchSetUtil psUtil;
   private final PatchListCache patchListCache;
-  private final AccountsCollection accounts;
+  private final AccountResolver accountResolver;
   private final EmailReviewComments.Factory email;
   private final CommentAdded commentAdded;
-  private final PostReviewers postReviewers;
+  private final ReviewerAdder reviewerAdder;
+  private final AddReviewersEmail addReviewersEmail;
   private final NotesMigration migration;
   private final NotifyUtil notifyUtil;
   private final Config gerritConfig;
@@ -192,10 +194,11 @@ public class PostReview
       PublishCommentUtil publishCommentUtil,
       PatchSetUtil psUtil,
       PatchListCache patchListCache,
-      AccountsCollection accounts,
+      AccountResolver accountResolver,
       EmailReviewComments.Factory email,
       CommentAdded commentAdded,
-      PostReviewers postReviewers,
+      ReviewerAdder reviewerAdder,
+      AddReviewersEmail addReviewersEmail,
       NotesMigration migration,
       NotifyUtil notifyUtil,
       @GerritServerConfig Config gerritConfig,
@@ -212,10 +215,11 @@ public class PostReview
     this.patchListCache = patchListCache;
     this.approvalsUtil = approvalsUtil;
     this.cmUtil = cmUtil;
-    this.accounts = accounts;
+    this.accountResolver = accountResolver;
     this.email = email;
     this.commentAdded = commentAdded;
-    this.postReviewers = postReviewers;
+    this.reviewerAdder = reviewerAdder;
+    this.addReviewersEmail = addReviewersEmail;
     this.migration = migration;
     this.notifyUtil = notifyUtil;
     this.gerritConfig = gerritConfig;
@@ -271,17 +275,21 @@ public class PostReview
         notifyUtil.resolveAccounts(input.notifyDetails);
 
     Map<String, AddReviewerResult> reviewerJsonResults = null;
-    List<PostReviewers.Addition> reviewerResults = Lists.newArrayList();
+    List<ReviewerAddition> reviewerResults = Lists.newArrayList();
     boolean hasError = false;
     boolean confirm = false;
     if (input.reviewers != null) {
       reviewerJsonResults = Maps.newHashMap();
       for (AddReviewerInput reviewerInput : input.reviewers) {
-        // Prevent notifications because setting reviewers is batched.
+        // Prevent individual AddReviewersOps from sending one email each. Instead, we call
+        // batchEmailReviewers at the very end to send out a single email.
+        // TODO(dborowitz): I think this still sends out separate emails if any of input.reviewers
+        // specifies explicit accountsToNotify. Unclear whether that's a good thing.
         reviewerInput.notify = NotifyHandling.NONE;
 
-        PostReviewers.Addition result =
-            postReviewers.prepareApplication(revision.getChangeResource(), reviewerInput, true);
+        ReviewerAddition result =
+            reviewerAdder.prepare(
+                db.get(), revision.getNotes(), revision.getUser(), reviewerInput, true);
         reviewerJsonResults.put(reviewerInput.reviewer, result.result);
         if (result.result.error != null) {
           hasError = true;
@@ -321,7 +329,7 @@ public class PostReview
       // Apply reviewer changes first. Revision emails should be sent to the
       // updated set of reviewers. Also keep track of whether the user added
       // themselves as a reviewer or to the CC list.
-      for (PostReviewers.Addition reviewerResult : reviewerResults) {
+      for (ReviewerAddition reviewerResult : reviewerResults) {
         bu.addOp(revision.getChange().getId(), reviewerResult.op);
         if (!ccOrReviewer && reviewerResult.result.reviewers != null) {
           for (ReviewerInfo reviewerInfo : reviewerResult.result.reviewers) {
@@ -345,8 +353,7 @@ public class PostReview
         // User posting this review isn't currently in the reviewer or CC list,
         // isn't being explicitly added, and isn't voting on any label.
         // Automatically CC them on this change so they receive replies.
-        PostReviewers.Addition selfAddition =
-            postReviewers.ccCurrentUser(revision.getUser(), revision);
+        ReviewerAddition selfAddition = reviewerAdder.ccCurrentUser(revision.getUser(), revision);
         bu.addOp(revision.getChange().getId(), selfAddition.op);
       }
 
@@ -356,10 +363,10 @@ public class PostReview
           output.error = ERROR_WIP_READY_MUTUALLY_EXCLUSIVE;
           return Response.withStatusCode(SC_BAD_REQUEST, output);
         }
-        if (!revision.getChange().getOwner().equals(revision.getUser().getAccountId())) {
-          output.error = ERROR_ONLY_OWNER_CAN_MODIFY_WORK_IN_PROGRESS;
-          return Response.withStatusCode(SC_BAD_REQUEST, output);
-        }
+
+        WorkInProgressOp.checkPermissions(
+            permissionBackend, revision.getUser(), revision.getChange());
+
         if (input.ready) {
           output.ready = true;
         }
@@ -380,14 +387,23 @@ public class PostReview
 
       bu.execute();
 
-      for (PostReviewers.Addition reviewerResult : reviewerResults) {
-        reviewerResult.gatherResults();
+      // Re-read change to take into account results of the update.
+      ChangeData cd =
+          changeDataFactory.create(db.get(), revision.getProject(), revision.getChange().getId());
+      for (ReviewerAddition reviewerResult : reviewerResults) {
+        reviewerResult.gatherResults(cd);
       }
 
       boolean readyForReview =
           (output.ready != null && output.ready) || !revision.getChange().isWorkInProgress();
-      emailReviewers(
-          revision.getChange(), reviewerResults, reviewerNotify, accountsToNotify, readyForReview);
+      // Sending from AddReviewersOp was suppressed so we can send a single batch email here.
+      batchEmailReviewers(
+          revision.getUser(),
+          revision.getChange(),
+          reviewerResults,
+          reviewerNotify,
+          accountsToNotify,
+          readyForReview);
     }
 
     return Response.ok(output);
@@ -416,9 +432,10 @@ public class PostReview
     return NotifyHandling.ALL;
   }
 
-  private void emailReviewers(
+  private void batchEmailReviewers(
+      CurrentUser user,
       Change change,
-      List<PostReviewers.Addition> reviewerAdditions,
+      List<ReviewerAddition> reviewerAdditions,
       @Nullable NotifyHandling notify,
       ListMultimap<RecipientType, Account.Id> accountsToNotify,
       boolean readyForReview) {
@@ -426,22 +443,25 @@ public class PostReview
     List<Account.Id> cc = new ArrayList<>();
     List<Address> toByEmail = new ArrayList<>();
     List<Address> ccByEmail = new ArrayList<>();
-    for (PostReviewers.Addition addition : reviewerAdditions) {
-      if (addition.state == ReviewerState.REVIEWER) {
+    for (ReviewerAddition addition : reviewerAdditions) {
+      if (addition.state() == ReviewerState.REVIEWER) {
         to.addAll(addition.reviewers);
         toByEmail.addAll(addition.reviewersByEmail);
-      } else if (addition.state == ReviewerState.CC) {
+      } else if (addition.state() == ReviewerState.CC) {
         cc.addAll(addition.reviewers);
         ccByEmail.addAll(addition.reviewersByEmail);
       }
     }
-    if (reviewerAdditions.size() > 0) {
-      reviewerAdditions
-          .get(0)
-          .op
-          .emailReviewers(
-              change, to, cc, toByEmail, ccByEmail, notify, accountsToNotify, readyForReview);
-    }
+    addReviewersEmail.emailReviewers(
+        user.asIdentifiedUser(),
+        change,
+        to,
+        cc,
+        toByEmail,
+        ccByEmail,
+        notify,
+        accountsToNotify,
+        readyForReview);
   }
 
   private RevisionResource onBehalfOf(RevisionResource rev, LabelTypes labelTypes, ReviewInput in)
@@ -486,7 +506,7 @@ public class PostReview
           String.format("label required to post review on behalf of \"%s\"", in.onBehalfOf));
     }
 
-    IdentifiedUser reviewer = accounts.parseOnBehalfOf(caller, in.onBehalfOf);
+    IdentifiedUser reviewer = accountResolver.parseOnBehalfOf(caller, in.onBehalfOf);
     try {
       permissionBackend
           .user(reviewer)
@@ -867,7 +887,7 @@ public class PostReview
       this.projectState = projectState;
       this.psId = psId;
       this.in = in;
-      this.accountsToNotify = checkNotNull(accountsToNotify);
+      this.accountsToNotify = requireNonNull(accountsToNotify);
     }
 
     @Override
@@ -1167,7 +1187,7 @@ public class PostReview
       ChangeUpdate update = ctx.getUpdate(psId);
       for (Map.Entry<String, Short> ent : allApprovals.entrySet()) {
         String name = ent.getKey();
-        LabelType lt = checkNotNull(labelTypes.byLabel(name), name);
+        LabelType lt = requireNonNull(labelTypes.byLabel(name), name);
 
         PatchSetApproval c = current.remove(lt.getName());
         String normName = lt.getName();
@@ -1254,7 +1274,7 @@ public class PostReview
       List<String> disallowed = new ArrayList<>(labelTypes.getLabelTypes().size());
 
       for (PatchSetApproval psa : del) {
-        LabelType lt = checkNotNull(labelTypes.byLabel(psa.getLabel()));
+        LabelType lt = requireNonNull(labelTypes.byLabel(psa.getLabel()));
         String normName = lt.getName();
         if (!lt.allowPostSubmit()) {
           disallowed.add(normName);
@@ -1266,7 +1286,7 @@ public class PostReview
       }
 
       for (PatchSetApproval psa : ups) {
-        LabelType lt = checkNotNull(labelTypes.byLabel(psa.getLabel()));
+        LabelType lt = requireNonNull(labelTypes.byLabel(psa.getLabel()));
         String normName = lt.getName();
         if (!lt.allowPostSubmit()) {
           disallowed.add(normName);

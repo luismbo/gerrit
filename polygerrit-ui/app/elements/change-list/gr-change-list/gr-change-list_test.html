@@ -42,6 +42,17 @@ limitations under the License.
 
 <script>
   suite('gr-change-list basic tests', () => {
+    // Define keybindings before attaching other fixtures.
+    const kb = window.Gerrit.KeyboardShortcutBinder;
+    kb.bindShortcut(kb.Shortcut.CURSOR_NEXT_CHANGE, 'j');
+    kb.bindShortcut(kb.Shortcut.CURSOR_PREV_CHANGE, 'k');
+    kb.bindShortcut(kb.Shortcut.OPEN_CHANGE, 'o');
+    kb.bindShortcut(kb.Shortcut.REFRESH_CHANGE_LIST, 'shift+r');
+    kb.bindShortcut(kb.Shortcut.TOGGLE_CHANGE_REVIEWED, 'r');
+    kb.bindShortcut(kb.Shortcut.TOGGLE_CHANGE_STAR, 's');
+    kb.bindShortcut(kb.Shortcut.NEXT_PAGE, 'n');
+    kb.bindShortcut(kb.Shortcut.NEXT_PAGE, 'p');
+
     let element;
     let sandbox;
 
@@ -268,6 +279,32 @@ limitations under the License.
       const noChangesMsg = Polymer.dom(element.root).querySelectorAll(
           '.noChanges');
       assert.equal(noChangesMsg.length, 2);
+    });
+
+    suite('empty outgoing', () => {
+      test('not shown on empty non-outgoing sections', () => {
+        const section = {results: []};
+        assert.isTrue(element._isEmpty(section));
+        assert.isFalse(element._isOutgoing(section));
+      });
+
+      test('shown on empty outgoing sections', () => {
+        const section = {results: [], isOutgoing: true};
+        assert.isTrue(element._isEmpty(section));
+        assert.isTrue(element._isOutgoing(section));
+      });
+
+      test('not shown on non-empty outgoing sections', () => {
+        const section = {isOutgoing: true, results: [
+          {_number: 0, labels: {Verified: {approved: {}}}}]};
+        assert.isFalse(element._isEmpty(section));
+        assert.isTrue(element._isOutgoing(section));
+      });
+    });
+
+    test('_isOutgoing', () => {
+      assert.isTrue(element._isOutgoing({results: [], isOutgoing: true}));
+      assert.isFalse(element._isOutgoing({results: []}));
     });
 
     suite('empty column preference', () => {

@@ -43,6 +43,19 @@ limitations under the License.
 
 <script>
   suite('gr-change-view tests', () => {
+    const kb = window.Gerrit.KeyboardShortcutBinder;
+    kb.bindShortcut(kb.Shortcut.SEND_REPLY, 'ctrl+enter');
+    kb.bindShortcut(kb.Shortcut.REFRESH_CHANGE, 'shift+r');
+    kb.bindShortcut(kb.Shortcut.OPEN_REPLY_DIALOG, 'a');
+    kb.bindShortcut(kb.Shortcut.OPEN_DOWNLOAD_DIALOG, 'd');
+    kb.bindShortcut(kb.Shortcut.TOGGLE_DIFF_MODE, 'm');
+    kb.bindShortcut(kb.Shortcut.TOGGLE_CHANGE_STAR, 's');
+    kb.bindShortcut(kb.Shortcut.UP_TO_DASHBOARD, 'u');
+    kb.bindShortcut(kb.Shortcut.EXPAND_ALL_MESSAGES, 'x');
+    kb.bindShortcut(kb.Shortcut.COLLAPSE_ALL_MESSAGES, 'z');
+    kb.bindShortcut(kb.Shortcut.OPEN_DIFF_PREFS, ',');
+    kb.bindShortcut(kb.Shortcut.EDIT_TOPIC, 't');
+
     let element;
     let sandbox;
     let navigateToChangeStub;
@@ -83,6 +96,12 @@ limitations under the License.
     };
 
     suite('keyboard shortcuts', () => {
+      test('t to add topic', () => {
+        const editStub = sandbox.stub(element.$.metadata, 'editTopic');
+        MockInteractions.pressAndReleaseKeyOn(element, 83, null, 't');
+        assert(editStub.called);
+      });
+
       test('S should toggle the CL star', () => {
         const starStub = sandbox.stub(element.$.changeStar, 'toggleStar');
         MockInteractions.pressAndReleaseKeyOn(element, 83, null, 's');
@@ -277,11 +296,11 @@ limitations under the License.
         flushAsynchronousOperations();
 
         element.viewState.diffMode = 'SIDE_BY_SIDE';
-        element._handleMKey(e);
+        element._handleToggleDiffMode(e);
         assert.isTrue(setModeStub.calledWith('UNIFIED_DIFF'));
 
         element.viewState.diffMode = 'UNIFIED_DIFF';
-        element._handleMKey(e);
+        element._handleToggleDiffMode(e);
         assert.isTrue(setModeStub.calledWith('SIDE_BY_SIDE'));
       });
     });
@@ -556,6 +575,7 @@ limitations under the License.
       };
       element._change = {
         change_id: 'Iad9dc96274af6946f3632be53b106ef80f7ba6ca',
+        owner: {email: 'abc@def'},
         revisions: {
           rev2: {_number: 2, commit: {parents: []}},
           rev1: {_number: 1, commit: {parents: []}},

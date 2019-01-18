@@ -20,6 +20,15 @@ by RetryHelper to execute an action (1 == single attempt, no retry)
 * `action/retry_timeout_count`: Number of action executions of RetryHelper
 that ultimately timed out
 
+=== Pushes
+
+* `receivecommits/changes`: histogram of number of changes processed
+in a single upload, split up by update type (new change created,
+existing changed updated, change autoclosed).
+* `receivecommits/latency`: latency per change for processing a push,
+split up by update type (create+replace, and autoclose)
+* `receivecommits/timeout`: number of timeouts during push processing.
+
 === Process
 
 * `proc/birth_timestamp`: Time at which the Gerrit process started.
@@ -138,6 +147,16 @@ failed by table.
 * `notedb/read_all_external_ids_latency`: Latency for reading all
 external ID's from NoteDb.
 
+=== Permissions
+
+* `permissions/project_state/computation_latency`: Latency to compute current access
+sections on a project by traversing it's parents.
+* `permissions/permission_collection/filter_latency`: Latency to filter access sections
+by user and ref.
+* `permissions/ref_filter/full_filter_count`: Rate of full ref filter operations
+* `permissions/ref_filter/skip_filter_count`: Rate of ref filter operations where
+we skip full evaluation because the user can read all refs
+
 === Reviewer Suggestion
 
 * `reviewer_suggestion/query_accounts`: Latency for querying accounts for
@@ -152,6 +171,11 @@ suggestion.
 === Repo Sequences
 
 * `sequence/next_id_latency`: Latency of requesting IDs from repo sequences.
+
+=== Plugin
+
+* `plugin/latency`: Latency for plugin invocation.
+* `plugin/error_count`: Number of plugin errors.
 
 === Replication Plugin
 

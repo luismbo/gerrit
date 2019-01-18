@@ -23,7 +23,6 @@ import com.google.gerrit.extensions.annotations.RequiresCapability;
 import com.google.gerrit.extensions.api.groups.GroupInput;
 import com.google.gerrit.extensions.client.ListGroupsOption;
 import com.google.gerrit.extensions.common.GroupInfo;
-import com.google.gerrit.extensions.registration.DynamicSet;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.IdString;
@@ -43,6 +42,7 @@ import com.google.gerrit.server.account.CreateGroupArgs;
 import com.google.gerrit.server.account.GroupCache;
 import com.google.gerrit.server.account.GroupUUID;
 import com.google.gerrit.server.config.GerritServerConfig;
+import com.google.gerrit.server.group.GroupResolver;
 import com.google.gerrit.server.group.GroupResource;
 import com.google.gerrit.server.group.InternalGroup;
 import com.google.gerrit.server.group.InternalGroupDescription;
@@ -51,6 +51,7 @@ import com.google.gerrit.server.group.db.GroupsUpdate;
 import com.google.gerrit.server.group.db.InternalGroupCreation;
 import com.google.gerrit.server.group.db.InternalGroupUpdate;
 import com.google.gerrit.server.permissions.PermissionBackendException;
+import com.google.gerrit.server.plugincontext.PluginSetContext;
 import com.google.gerrit.server.validators.GroupCreationValidationListener;
 import com.google.gerrit.server.validators.ValidationException;
 import com.google.gwtorm.server.OrmDuplicateKeyException;
@@ -77,9 +78,9 @@ public class CreateGroup
   private final PersonIdent serverIdent;
   private final Provider<GroupsUpdate> groupsUpdateProvider;
   private final GroupCache groupCache;
-  private final GroupsCollection groups;
+  private final GroupResolver groups;
   private final GroupJson json;
-  private final DynamicSet<GroupCreationValidationListener> groupCreationValidationListeners;
+  private final PluginSetContext<GroupCreationValidationListener> groupCreationValidationListeners;
   private final AddMembers addMembers;
   private final SystemGroupBackend systemGroupBackend;
   private final boolean defaultVisibleToAll;
@@ -91,9 +92,9 @@ public class CreateGroup
       @GerritPersonIdent PersonIdent serverIdent,
       @UserInitiated Provider<GroupsUpdate> groupsUpdateProvider,
       GroupCache groupCache,
-      GroupsCollection groups,
+      GroupResolver groups,
       GroupJson json,
-      DynamicSet<GroupCreationValidationListener> groupCreationValidationListeners,
+      PluginSetContext<GroupCreationValidationListener> groupCreationValidationListeners,
       AddMembers addMembers,
       SystemGroupBackend systemGroupBackend,
       @GerritServerConfig Config cfg,
@@ -158,12 +159,11 @@ public class CreateGroup
               : Collections.<Account.Id>emptySet();
     }
 
-    for (GroupCreationValidationListener l : groupCreationValidationListeners) {
-      try {
-        l.validateNewGroup(args);
-      } catch (ValidationException e) {
-        throw new ResourceConflictException(e.getMessage(), e);
-      }
+    try {
+      groupCreationValidationListeners.runEach(
+          l -> l.validateNewGroup(args), ValidationException.class);
+    } catch (ValidationException e) {
+      throw new ResourceConflictException(e.getMessage(), e);
     }
 
     return json.format(new InternalGroupDescription(createGroup(args)));

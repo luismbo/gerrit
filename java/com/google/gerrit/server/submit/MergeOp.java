@@ -15,16 +15,15 @@
 package com.google.gerrit.server.submit;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Comparator.comparing;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toSet;
 
 import com.github.rholder.retry.Attempt;
 import com.github.rholder.retry.RetryListener;
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Joiner;
-import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
@@ -33,7 +32,6 @@ import com.google.common.collect.MultimapBuilder;
 import com.google.common.collect.SetMultimap;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.common.data.SubmitRecord;
 import com.google.gerrit.common.data.SubmitRequirement;
 import com.google.gerrit.common.data.SubmitTypeRecord;
@@ -79,6 +77,7 @@ import com.google.gerrit.server.update.ChangeContext;
 import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryHelper.ActionType;
 import com.google.gerrit.server.update.UpdateException;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
@@ -174,10 +173,6 @@ public class MergeOp implements AutoCloseable {
       return problems.isEmpty();
     }
 
-    public ImmutableListMultimap<Change.Id, String> getProblems() {
-      return ImmutableListMultimap.copyOf(problems);
-    }
-
     public List<SubmitRecord> getSubmitRecords(Change.Id id) {
       // Use the cached submit records from the original ChangeData in the input
       // ChangeSet, which were checked earlier in the integrate process. Even in
@@ -187,8 +182,8 @@ public class MergeOp implements AutoCloseable {
       //
       // However, do NOT expose that ChangeData directly, as it is way out of
       // date by this point.
-      ChangeData cd = checkNotNull(changes.get(id), "ChangeData for %s", id);
-      return checkNotNull(
+      ChangeData cd = requireNonNull(changes.get(id), () -> String.format("ChangeData for %s", id));
+      return requireNonNull(
           cd.getSubmitRecords(submitRuleOptions(allowClosed)),
           "getSubmitRecord only valid after submit rules are evalutated");
     }
@@ -457,7 +452,7 @@ public class MergeOp implements AutoCloseable {
     this.caller = caller;
     this.ts = TimeUtil.nowTs();
     this.db = db;
-    this.submissionId = RequestId.forChange(change);
+    this.submissionId = new RequestId(change.getId().toString());
 
     try (TraceContext traceContext =
         TraceContext.open().addTag(RequestId.Type.SUBMISSION_ID, submissionId)) {
@@ -666,11 +661,11 @@ public class MergeOp implements AutoCloseable {
       OpenRepo or = orm.getRepo(branch.getParentKey());
       if (toSubmit.containsKey(branch)) {
         BranchBatch submitting = toSubmit.get(branch);
+        logger.atFine().log("adding ops for branch batch %s", submitting);
         OpenBranch ob = or.getBranch(branch);
-        checkNotNull(
+        requireNonNull(
             submitting.submitType(),
-            "null submit type for %s; expected to previously fail fast",
-            submitting);
+            String.format("null submit type for %s; expected to previously fail fast", submitting));
         Set<CodeReviewCommit> commitsToSubmit = submitting.commits();
         ob.mergeTip = new MergeTip(ob.oldTip, commitsToSubmit);
         SubmitStrategy strategy =
@@ -728,7 +723,7 @@ public class MergeOp implements AutoCloseable {
       throw new IntegrationException("Failed to determine already accepted commits.", e);
     }
 
-    logger.atFine().log("Found %d existing heads", alreadyAccepted.size());
+    logger.atFine().log("Found %d existing heads: %s", alreadyAccepted.size(), alreadyAccepted);
     return alreadyAccepted;
   }
 

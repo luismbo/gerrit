@@ -195,8 +195,8 @@ public abstract class AbstractNotificationTest extends AbstractDaemonTest {
       if (recipients.get(type).contains(email) != expected) {
         failWithoutActual(
             fact(
-                expected ? "notifies" : "doesn't notify",
-                "[\n" + type + ": " + users.emailToName(email) + "\n]"));
+                expected ? "should notify" : "shouldn't notify",
+                type + ": " + users.emailToName(email)));
       }
       if (expected) {
         accountedFor.add(email);
@@ -319,7 +319,8 @@ public abstract class AbstractNotificationTest extends AbstractDaemonTest {
     public final String ccerByEmail = "ccByEmail@example.com";
     private final Map<NotifyType, TestAccount> watchers = new HashMap<>();
     private final Map<String, TestAccount> accountsByEmail = new HashMap<>();
-    boolean supportReviewersByEmail;
+
+    public boolean supportReviewersByEmail;
 
     private String usersCacheKey() {
       return description.getClassName();

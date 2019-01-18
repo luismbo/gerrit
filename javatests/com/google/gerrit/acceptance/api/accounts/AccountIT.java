@@ -14,9 +14,10 @@
 
 package com.google.gerrit.acceptance.api.accounts;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.common.truth.Truth.assert_;
 import static com.google.common.truth.Truth8.assertThat;
 import static com.google.gerrit.acceptance.GitUtil.deleteRef;
 import static com.google.gerrit.acceptance.GitUtil.fetch;
@@ -32,6 +33,7 @@ import static com.google.gerrit.server.account.externalids.ExternalId.SCHEME_GPG
 import static com.google.gerrit.server.group.SystemGroupBackend.ANONYMOUS_USERS;
 import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toSet;
 import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
@@ -50,20 +52,23 @@ import com.google.common.util.concurrent.Runnables;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.GerritConfig;
 import com.google.gerrit.acceptance.PushOneCommit;
+import com.google.gerrit.acceptance.Sandboxed;
 import com.google.gerrit.acceptance.TestAccount;
 import com.google.gerrit.acceptance.UseSsh;
 import com.google.gerrit.acceptance.testsuite.account.AccountOperations;
 import com.google.gerrit.acceptance.testsuite.account.TestSshKeys;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.common.data.AccessSection;
 import com.google.gerrit.common.data.GlobalCapability;
 import com.google.gerrit.common.data.GroupReference;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.common.data.PermissionRule.Action;
 import com.google.gerrit.extensions.api.accounts.AccountInput;
+import com.google.gerrit.extensions.api.accounts.DeleteDraftCommentsInput;
+import com.google.gerrit.extensions.api.accounts.DeletedDraftCommentInfo;
 import com.google.gerrit.extensions.api.accounts.EmailInput;
 import com.google.gerrit.extensions.api.changes.AddReviewerInput;
+import com.google.gerrit.extensions.api.changes.DraftInput;
 import com.google.gerrit.extensions.api.changes.ReviewInput;
 import com.google.gerrit.extensions.api.changes.StarsInput;
 import com.google.gerrit.extensions.api.config.ConsistencyCheckInfo;
@@ -73,6 +78,7 @@ import com.google.gerrit.extensions.api.config.ConsistencyCheckInput.CheckAccoun
 import com.google.gerrit.extensions.common.AccountDetailInfo;
 import com.google.gerrit.extensions.common.AccountInfo;
 import com.google.gerrit.extensions.common.ChangeInfo;
+import com.google.gerrit.extensions.common.CommentInfo;
 import com.google.gerrit.extensions.common.EmailInfo;
 import com.google.gerrit.extensions.common.GpgKeyInfo;
 import com.google.gerrit.extensions.common.GroupInfo;
@@ -92,14 +98,17 @@ import com.google.gerrit.gpg.PublicKeyStore;
 import com.google.gerrit.gpg.testing.TestKey;
 import com.google.gerrit.mail.Address;
 import com.google.gerrit.reviewdb.client.Account;
+import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.Sequences;
 import com.google.gerrit.server.ServerInitiated;
+import com.google.gerrit.server.account.AccountManager;
 import com.google.gerrit.server.account.AccountProperties;
 import com.google.gerrit.server.account.AccountState;
 import com.google.gerrit.server.account.AccountsUpdate;
+import com.google.gerrit.server.account.AuthRequest;
 import com.google.gerrit.server.account.Emails;
 import com.google.gerrit.server.account.ProjectWatches;
 import com.google.gerrit.server.account.ProjectWatches.NotifyType;
@@ -118,6 +127,7 @@ import com.google.gerrit.server.project.RefPattern;
 import com.google.gerrit.server.query.account.InternalAccountQuery;
 import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.util.MagicBranch;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gerrit.server.validators.AccountActivationValidationListener;
 import com.google.gerrit.server.validators.ValidationException;
 import com.google.gerrit.testing.ConfigSuite;
@@ -221,6 +231,8 @@ public class AccountIT extends AbstractDaemonTest {
 
   @Inject
   private DynamicSet<AccountActivationValidationListener> accountActivationValidationListeners;
+
+  @Inject private AccountManager accountManager;
 
   private AccountIndexedCounter accountIndexedCounter;
   private RegistrationHandle accountIndexEventCounterHandle;
@@ -526,9 +538,9 @@ public class AccountIT extends AbstractDaemonTest {
 
   @Test
   public void validateAccountActivation() throws Exception {
-    com.google.gerrit.acceptance.testsuite.account.TestAccount activatableAccount =
+    Account.Id activatableAccountId =
         accountOperations.newAccount().inactive().preferredEmail("foo@activatable.com").create();
-    com.google.gerrit.acceptance.testsuite.account.TestAccount deactivatableAccount =
+    Account.Id deactivatableAccountId =
         accountOperations.newAccount().preferredEmail("foo@deactivatable.com").create();
     RegistrationHandle registrationHandle =
         accountActivationValidationListeners.add(
@@ -554,61 +566,56 @@ public class AccountIT extends AbstractDaemonTest {
       /* Test account that can be activated, but not deactivated */
       // Deactivate account that is already inactive
       try {
-        gApi.accounts().id(activatableAccount.accountId().get()).setActive(false);
+        gApi.accounts().id(activatableAccountId.get()).setActive(false);
         fail("Expected exception");
       } catch (ResourceConflictException e) {
         assertThat(e.getMessage()).isEqualTo("account not active");
       }
-      assertThat(accountOperations.account(activatableAccount.accountId()).get().active())
-          .isFalse();
+      assertThat(accountOperations.account(activatableAccountId).get().active()).isFalse();
 
       // Activate account that can be activated
-      gApi.accounts().id(activatableAccount.accountId().get()).setActive(true);
-      assertThat(accountOperations.account(activatableAccount.accountId()).get().active()).isTrue();
+      gApi.accounts().id(activatableAccountId.get()).setActive(true);
+      assertThat(accountOperations.account(activatableAccountId).get().active()).isTrue();
 
       // Activate account that is already active
-      gApi.accounts().id(activatableAccount.accountId().get()).setActive(true);
-      assertThat(accountOperations.account(activatableAccount.accountId()).get().active()).isTrue();
+      gApi.accounts().id(activatableAccountId.get()).setActive(true);
+      assertThat(accountOperations.account(activatableAccountId).get().active()).isTrue();
 
       // Try deactivating account that cannot be deactivated
       try {
-        gApi.accounts().id(activatableAccount.accountId().get()).setActive(false);
+        gApi.accounts().id(activatableAccountId.get()).setActive(false);
         fail("Expected exception");
       } catch (ResourceConflictException e) {
         assertThat(e.getMessage()).isEqualTo("not allowed to deactive account");
       }
-      assertThat(accountOperations.account(activatableAccount.accountId()).get().active()).isTrue();
+      assertThat(accountOperations.account(activatableAccountId).get().active()).isTrue();
 
       /* Test account that can be deactivated, but not activated */
       // Activate account that is already inactive
-      gApi.accounts().id(deactivatableAccount.accountId().get()).setActive(true);
-      assertThat(accountOperations.account(deactivatableAccount.accountId()).get().active())
-          .isTrue();
+      gApi.accounts().id(deactivatableAccountId.get()).setActive(true);
+      assertThat(accountOperations.account(deactivatableAccountId).get().active()).isTrue();
 
       // Deactivate account that can be deactivated
-      gApi.accounts().id(deactivatableAccount.accountId().get()).setActive(false);
-      assertThat(accountOperations.account(deactivatableAccount.accountId()).get().active())
-          .isFalse();
+      gApi.accounts().id(deactivatableAccountId.get()).setActive(false);
+      assertThat(accountOperations.account(deactivatableAccountId).get().active()).isFalse();
 
       // Deactivate account that is already inactive
       try {
-        gApi.accounts().id(deactivatableAccount.accountId().get()).setActive(false);
+        gApi.accounts().id(deactivatableAccountId.get()).setActive(false);
         fail("Expected exception");
       } catch (ResourceConflictException e) {
         assertThat(e.getMessage()).isEqualTo("account not active");
       }
-      assertThat(accountOperations.account(deactivatableAccount.accountId()).get().active())
-          .isFalse();
+      assertThat(accountOperations.account(deactivatableAccountId).get().active()).isFalse();
 
       // Try activating account that cannot be activated
       try {
-        gApi.accounts().id(deactivatableAccount.accountId().get()).setActive(true);
+        gApi.accounts().id(deactivatableAccountId.get()).setActive(true);
         fail("Expected exception");
       } catch (ResourceConflictException e) {
         assertThat(e.getMessage()).isEqualTo("not allowed to active account");
       }
-      assertThat(accountOperations.account(deactivatableAccount.accountId()).get().active())
-          .isFalse();
+      assertThat(accountOperations.account(deactivatableAccountId).get().active()).isFalse();
     } finally {
       registrationHandle.remove();
     }
@@ -1175,6 +1182,33 @@ public class AccountIT extends AbstractDaemonTest {
     info = gApi.accounts().self().get();
     assertUser(info, admin);
     accountIndexedCounter.assertReindexOf(admin);
+  }
+
+  @Test
+  public void setName() throws Exception {
+    gApi.accounts().self().setName("Admin McAdminface");
+    assertThat(gApi.accounts().self().get().name).isEqualTo("Admin McAdminface");
+  }
+
+  @Test
+  public void adminCanSetNameOfOtherUser() throws Exception {
+    gApi.accounts().id(user.username).setName("User McUserface");
+    assertThat(gApi.accounts().id(user.username).get().name).isEqualTo("User McUserface");
+  }
+
+  @Test
+  public void userCannotSetNameOfOtherUser() throws Exception {
+    setApiUser(user);
+    exception.expect(AuthException.class);
+    gApi.accounts().id(admin.username).setName("Admin McAdminface");
+  }
+
+  @Test
+  @Sandboxed
+  public void userCanSetNameOfOtherUserWithModifyAccountPermission() throws Exception {
+    allowGlobalCapabilities(REGISTERED_USERS, GlobalCapability.MODIFY_ACCOUNT);
+    gApi.accounts().id(admin.username).setName("Admin McAdminface");
+    assertThat(gApi.accounts().id(admin.username).get().name).isEqualTo("Admin McAdminface");
   }
 
   @Test
@@ -1975,12 +2009,10 @@ public class AccountIT extends AbstractDaemonTest {
 
     exception.expect(BadRequestException.class);
     exception.expectMessage("Cannot both add and delete key: " + keyToString(key2.getPublicKey()));
-    infos =
-        gApi.accounts()
-            .self()
-            .putGpgKeys(
-                ImmutableList.of(key2.getPublicKeyArmored()),
-                ImmutableList.of(key2.getKeyIdString()));
+    gApi.accounts()
+        .self()
+        .putGpgKeys(
+            ImmutableList.of(key2.getPublicKeyArmored()), ImmutableList.of(key2.getKeyIdString()));
   }
 
   @Test
@@ -2166,6 +2198,38 @@ public class AccountIT extends AbstractDaemonTest {
     assertThat(groups)
         .comparingElementsUsing(getGroupToNameCorrespondence())
         .containsExactly("Anonymous Users", "Registered Users", "Administrators");
+  }
+
+  @Test
+  public void createUserWithValidUsername() throws Exception {
+    ImmutableList<String> names =
+        ImmutableList.of(
+            "user@domain",
+            "user-name",
+            "user_name",
+            "1234",
+            "user1234",
+            "1234@domain",
+            "user!+alias{*}#$%&’^=~|@domain");
+    for (String name : names) {
+      gApi.accounts().create(name);
+    }
+  }
+
+  @Test
+  public void createUserWithInvalidUsername() throws Exception {
+    ImmutableList<String> invalidNames =
+        ImmutableList.of(
+            "@", "@foo", "-", "-foo", "_", "_foo", "!", "+", "{", "}", "*", "%", "#", "$", "&", "’",
+            "^", "=", "~");
+    for (String name : invalidNames) {
+      try {
+        gApi.accounts().create(name);
+        fail(String.format("Expected BadRequestException for username [%s]", name));
+      } catch (BadRequestException e) {
+        assertThat(e).hasMessageThat().isEqualTo(String.format("Invalid username '%s'", name));
+      }
+    }
   }
 
   @Test
@@ -2556,6 +2620,172 @@ public class AccountIT extends AbstractDaemonTest {
     assertThat(stalenessChecker.isStale(accountId)).isFalse();
   }
 
+  @Test
+  public void deleteAllDraftComments() throws Exception {
+    try {
+      TestTimeUtil.resetWithClockStep(1, SECONDS);
+      Project.NameKey project2 = createProject("project2");
+      PushOneCommit.Result r1 = createChange();
+
+      TestRepository<?> tr2 = cloneProject(project2);
+      PushOneCommit.Result r2 =
+          createChange(
+              tr2,
+              "refs/heads/master",
+              "Change in project2",
+              PushOneCommit.FILE_NAME,
+              "content2",
+              null);
+
+      // Create 2 drafts each on both changes for user.
+      setApiUser(user);
+      createDraft(r1, PushOneCommit.FILE_NAME, "draft 1a");
+      createDraft(r1, PushOneCommit.FILE_NAME, "draft 1b");
+      createDraft(r2, PushOneCommit.FILE_NAME, "draft 2a");
+      createDraft(r2, PushOneCommit.FILE_NAME, "draft 2b");
+      assertThat(gApi.changes().id(r1.getChangeId()).current().draftsAsList()).hasSize(2);
+      assertThat(gApi.changes().id(r2.getChangeId()).current().draftsAsList()).hasSize(2);
+
+      // Create 1 draft on first change for admin.
+      setApiUser(admin);
+      createDraft(r1, PushOneCommit.FILE_NAME, "admin draft");
+      assertThat(gApi.changes().id(r1.getChangeId()).current().draftsAsList()).hasSize(1);
+
+      // Delete user's draft comments; leave admin's alone.
+      setApiUser(user);
+      List<DeletedDraftCommentInfo> result =
+          gApi.accounts().self().deleteDraftComments(new DeleteDraftCommentsInput());
+
+      // Results are ordered according to the change search, most recently updated first.
+      assertThat(result).hasSize(2);
+      DeletedDraftCommentInfo del2 = result.get(0);
+      assertThat(del2.change.changeId).isEqualTo(r2.getChangeId());
+      assertThat(del2.deleted.stream().map(c -> c.message)).containsExactly("draft 2a", "draft 2b");
+      DeletedDraftCommentInfo del1 = result.get(1);
+      assertThat(del1.change.changeId).isEqualTo(r1.getChangeId());
+      assertThat(del1.deleted.stream().map(c -> c.message)).containsExactly("draft 1a", "draft 1b");
+
+      assertThat(gApi.changes().id(r1.getChangeId()).current().draftsAsList()).isEmpty();
+      assertThat(gApi.changes().id(r2.getChangeId()).current().draftsAsList()).isEmpty();
+
+      setApiUser(admin);
+      assertThat(gApi.changes().id(r1.getChangeId()).current().draftsAsList()).hasSize(1);
+    } finally {
+      cleanUpDrafts();
+    }
+  }
+
+  @Test
+  public void deleteDraftCommentsByQuery() throws Exception {
+    try {
+      PushOneCommit.Result r1 = createChange();
+      PushOneCommit.Result r2 = createChange();
+
+      createDraft(r1, PushOneCommit.FILE_NAME, "draft a");
+      createDraft(r2, PushOneCommit.FILE_NAME, "draft b");
+      assertThat(gApi.changes().id(r1.getChangeId()).current().draftsAsList()).hasSize(1);
+      assertThat(gApi.changes().id(r2.getChangeId()).current().draftsAsList()).hasSize(1);
+
+      List<DeletedDraftCommentInfo> result =
+          gApi.accounts()
+              .self()
+              .deleteDraftComments(new DeleteDraftCommentsInput("change:" + r1.getChangeId()));
+      assertThat(result).hasSize(1);
+      assertThat(result.get(0).change.changeId).isEqualTo(r1.getChangeId());
+      assertThat(result.get(0).deleted.stream().map(c -> c.message)).containsExactly("draft a");
+
+      assertThat(gApi.changes().id(r1.getChangeId()).current().draftsAsList()).isEmpty();
+      assertThat(gApi.changes().id(r2.getChangeId()).current().draftsAsList()).hasSize(1);
+    } finally {
+      cleanUpDrafts();
+    }
+  }
+
+  @Test
+  public void deleteOtherUsersDraftCommentsDisallowed() throws Exception {
+    try {
+      PushOneCommit.Result r = createChange();
+      setApiUser(user);
+      createDraft(r, PushOneCommit.FILE_NAME, "draft");
+      setApiUser(admin);
+      try {
+        gApi.accounts().id(user.id.get()).deleteDraftComments(new DeleteDraftCommentsInput());
+        assert_().fail("expected AuthException");
+      } catch (AuthException e) {
+        assertThat(e).hasMessageThat().isEqualTo("Cannot delete drafts of other user");
+      }
+    } finally {
+      cleanUpDrafts();
+    }
+  }
+
+  @Test
+  public void deleteDraftCommentsSkipsInvisibleChanges() throws Exception {
+    try {
+      createBranch(new Branch.NameKey(project, "secret"));
+      PushOneCommit.Result r1 = createChange();
+      PushOneCommit.Result r2 = createChange("refs/for/secret");
+
+      setApiUser(user);
+      createDraft(r1, PushOneCommit.FILE_NAME, "draft a");
+      createDraft(r2, PushOneCommit.FILE_NAME, "draft b");
+      assertThat(gApi.changes().id(r1.getChangeId()).current().draftsAsList()).hasSize(1);
+      assertThat(gApi.changes().id(r2.getChangeId()).current().draftsAsList()).hasSize(1);
+
+      block(project, "refs/heads/secret", Permission.READ, REGISTERED_USERS);
+      List<DeletedDraftCommentInfo> result =
+          gApi.accounts().self().deleteDraftComments(new DeleteDraftCommentsInput());
+      assertThat(result).hasSize(1);
+      assertThat(result.get(0).change.changeId).isEqualTo(r1.getChangeId());
+      assertThat(result.get(0).deleted.stream().map(c -> c.message)).containsExactly("draft a");
+
+      removePermission(project, "refs/heads/secret", Permission.READ);
+      assertThat(gApi.changes().id(r1.getChangeId()).current().draftsAsList()).isEmpty();
+      // Draft still exists since change wasn't visible when drafts where deleted.
+      assertThat(gApi.changes().id(r2.getChangeId()).current().draftsAsList()).hasSize(1);
+    } finally {
+      cleanUpDrafts();
+    }
+  }
+
+  @Test
+  public void updateDisplayName() throws Exception {
+    String name = name("test");
+    gApi.accounts().create(name);
+    AuthRequest who = AuthRequest.forUser(name);
+    accountManager.authenticate(who);
+    assertThat(gApi.accounts().id(name).get().name).isEqualTo(name);
+    who.setDisplayName("Something Else");
+    accountManager.authenticate(who);
+    assertThat(gApi.accounts().id(name).get().name).isEqualTo("Something Else");
+  }
+
+  private void createDraft(PushOneCommit.Result r, String path, String message) throws Exception {
+    DraftInput in = new DraftInput();
+    in.path = path;
+    in.line = 1;
+    in.message = message;
+    gApi.changes().id(r.getChangeId()).current().createDraft(in);
+  }
+
+  private void cleanUpDrafts() throws Exception {
+    for (TestAccount testAccount : accountCreator.getAll()) {
+      setApiUser(testAccount);
+      for (ChangeInfo changeInfo : gApi.changes().query("has:draft").get()) {
+        for (CommentInfo c :
+            gApi.changes()
+                .id(changeInfo.id)
+                .drafts()
+                .values()
+                .stream()
+                .flatMap(List::stream)
+                .collect(toImmutableList())) {
+          gApi.changes().id(changeInfo.id).revision(c.patchSet).draft(c.id).delete();
+        }
+      }
+    }
+  }
+
   private static Correspondence<GroupInfo, String> getGroupToNameCorrespondence() {
     return new Correspondence<GroupInfo, String>() {
       @Override
@@ -2662,7 +2892,7 @@ public class AccountIT extends AbstractDaemonTest {
   }
 
   private void addExternalIdEmail(TestAccount account, String email) throws Exception {
-    checkNotNull(email);
+    requireNonNull(email);
     accountsUpdateProvider
         .get()
         .update(

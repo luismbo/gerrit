@@ -616,7 +616,10 @@ set to `${sAMAccountName.toLowerCase}`). It is important that for all
 existing accounts this username is already in lower case. It is not
 possible to convert the usernames of the existing accounts to lower
 case because this would break the access to existing per-user
-branches.
+branches and Gerrit provides no tool to do such a conversion.
++
+Setting this parameter to `true` will prevent all users from login that
+have a non-lower-case username.
 +
 This parameter only affects git over http and git over SSH traffic.
 +
@@ -661,6 +664,13 @@ link:#accountDeactivation[accountDeactivation] section appropriately.
 +
 By default, false.
 
+[[auth.skipFullRefEvaluationIfAllRefsAreVisible]]auth.skipFullRefEvaluationIfAllRefsAreVisible::
++
+Whether to skip the full ref visibility checks as a performance shortcut when all refs are
+visible to a user. Full ref filtering would filter out things like pending edits.
++
+By default, true.
+
 [[cache]]
 === Section cache
 
@@ -687,7 +697,7 @@ H2 uses memory to cache its database content. The parameter `h2CacheSize`
 allows to limit the memory used by H2 and thus prevent out-of-memory
 caused by the H2 database using too much memory.
 +
-See <<database.h2.cachesize,database.h2.cachesize>> for a detailed discussion.
+See <<database.h2.cacheSize,database.h2.cacheSize>> for a detailed discussion.
 +
 Default is unset, using up to half of the available memory.
 +
@@ -1207,15 +1217,6 @@ stored in the repository, only the diff cache. This can result in slight
 performance improvements by reducing the number of refs in the repo.
 +
 Default is true.
-
-[[change.enableParallelFormatting]]change.enableParallelFormatting::
-+
-Whether or not changes can be formatted in parallel when requesting
-multiple changes at once. An example for this is Dashboards.
-+
-This setting is experimental.
-+
-Default is `false`.
 
 [[change.showAssigneeInChangesTable]]change.showAssigneeInChangesTable::
 +
@@ -2983,10 +2984,10 @@ Sample Lucene index configuration:
 === Section elasticsearch
 
 WARNING: Support for Elasticsearch is still experimental and is not recommended
-for production use. Support has been tested with Elasticsearch versions 2.4, 5.6,
-6.2 and 6.3. Support for other versions is not guaranteed.
+for production use. For compatibility information, please refer to the
+link:https://www.gerritcodereview.com/elasticsearch.html[project homepage].
 
-When using Elasticsearch versions 2.4 and 5.6, the open and closed changes are
+When using Elasticsearch version 5.6, the open and closed changes are
 indexed in a single index, separated into types `open_changes` and `closed_changes`
 respectively. When using version 6.2 or later, the open and closed changes are
 merged into the default `_doc` type. The latter is also used for the accounts and
@@ -3023,6 +3024,22 @@ The value is in the usual time-unit format like `1 m`, `5 m`.
 +
 Defaults to `30000 ms`.
 
+[[elasticsearch.numberOfShards]]elasticsearch.numberOfShards::
++
+Sets the number of shards to use per index. Refer to the
+link:https://www.elastic.co/guide/en/elasticsearch/reference/current/_basic_concepts.html#getting-started-shards-and-replicas[
+Elasticsearch documentation] for details.
++
+Defaults to 5.
+
+[[elasticsearch.numberOfReplicas]]elasticsearch.numberOfReplicas::
++
+Sets the number of replicas to use per index. Refer to the
+link:https://www.elastic.co/guide/en/elasticsearch/reference/current/_basic_concepts.html#getting-started-shards-and-replicas[
+Elasticsearch documentation] for details.
++
+Defaults to 1.
+
 ==== Elasticsearch Security
 
 When security is enabled in Elasticsearch, the username and password must be provided.
@@ -3030,10 +3047,11 @@ Note that the same username and password are used for all servers.
 
 For further information about Elasticsearch security, please refer to the documentation:
 
-* link:https://www.elastic.co/guide/en/elasticsearch/plugins/2.4/security.html[Elasticsearch 2.4]
 * link:https://www.elastic.co/guide/en/x-pack/5.6/security-getting-started.html[Elasticsearch 5.6]
 * link:https://www.elastic.co/guide/en/x-pack/6.2/security-getting-started.html[Elasticsearch 6.2]
 * link:https://www.elastic.co/guide/en/elastic-stack-overview/6.3/security-getting-started.html[Elasticsearch 6.3]
+* link:https://www.elastic.co/guide/en/elastic-stack-overview/6.4/security-getting-started.html[Elasticsearch 6.4]
+* link:https://www.elastic.co/guide/en/elastic-stack-overview/6.5/security-getting-started.html[Elasticsearch 6.5]
 
 [[elasticsearch.username]]elasticsearch.username::
 +
@@ -3074,6 +3092,19 @@ Directory and link:https://www.freeipa.org[FreeIPA].
   groupBase = ou=groups,dc=example,dc=com
   groupMemberPattern = (&(objectClass=group)(member=${dn}))
 ----
+
+[[ldap.guessRelevantGroups]]ldap.guessRelevantGroups::
++
+Filter the groups found in LDAP by guessing the ones relevant to
+Gerrit and removing the others from list completions and ACL evaluations.
+The guess is based on two elements: the projects most recently
+accessed in the cache and the list of LDAP groups included in their ACLs.
++
+Please note that projects rarely used and thus not cached may be
+temporarily inaccessible by users even with LDAP membership and grants
+referenced in the ACLs.
++
+By default, true.
 
 [[ldap.server]]ldap.server::
 +
@@ -3680,6 +3711,9 @@ allow the owner to circumvent certain enforced rules (like important
 BLOCK rules).
 +
 Default is false.
++
+This value supports configuration reloads:
+link:cmd-reload-config.html[reload-config]
 
 [[receive.checkReferencedObjectsAreReachable]]receive.checkReferencedObjectsAreReachable::
 +
@@ -3748,6 +3782,14 @@ Default is zero.
 +
 Common unit suffixes of 'k', 'm', or 'g' are supported.
 
+[[receive.inheritProjectMaxObjectSizeLimit]]receive.inheritProjectMaxObjectSizeLimit::
++
+Controls whether the project-level link:config-project-config.html[`receive.maxObjectSizeLimit`]
+value is inherited from the parent project. When `true`, the value is
+inherited, otherwise it is not inherited.
++
+Default is false, the value is not inherited.
+
 [[receive.maxTrustDepth]]receive.maxTrustDepth::
 +
 If signed push validation is link:#receive.enableSignedPush[enabled],
@@ -3792,7 +3834,6 @@ link:https://www.gnupg.org/documentation/manuals/gnupg/OpenPGP-Key-Management.ht
 +
 If no keys are specified, web-of-trust checks are disabled. This is the
 default behavior.
-
 
 [[repository]]
 === Section repository
@@ -5076,16 +5117,6 @@ command.
 
 The format is one Base-64 encoded public key per line.
 
-
-== Database system_config
-
-Several columns in the `system_config` table within the metadata
-database may be set to control how Gerrit behaves.
-
-[NOTE]
-The contents of the `system_config` table are cached at startup
-by Gerrit.  If you modify any columns in this table, Gerrit needs
-to be restarted before it will use the new values.
 
 == Configuring the Polygerrit UI
 

@@ -14,8 +14,8 @@
 
 package com.google.gerrit.sshd.commands;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
@@ -48,6 +48,7 @@ import org.kohsuke.args4j.Argument;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
 import org.kohsuke.args4j.Option;
+import org.kohsuke.args4j.ParserProperties;
 
 /** Allows getting archives for Git repositories over SSH using the Git upload-archive protocol. */
 public class UploadArchive extends AbstractGitCommand {
@@ -151,7 +152,8 @@ public class UploadArchive extends AbstractGitCommand {
 
     try {
       // Parse them into the 'options' field
-      CmdLineParser parser = new CmdLineParser(options);
+      CmdLineParser parser =
+          new CmdLineParser(options, ParserProperties.defaults().withAtSyntax(false));
       parser.parseArgument(args);
       if (options.path == null || Arrays.asList(".").equals(options.path)) {
         options.path = Collections.emptyList();
@@ -244,7 +246,7 @@ public class UploadArchive extends AbstractGitCommand {
 
   private boolean canRead(ObjectId revId) throws IOException, PermissionBackendException {
     ProjectState projectState = projectCache.get(projectName);
-    checkNotNull(projectState, "Failed to load project %s", projectName);
+    requireNonNull(projectState, () -> String.format("Failed to load project %s", projectName));
 
     if (!projectState.statePermitsRead()) {
       return false;

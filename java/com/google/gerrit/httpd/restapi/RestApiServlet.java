@@ -16,7 +16,6 @@
 package com.google.gerrit.httpd.restapi;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.flogger.LazyArgs.lazy;
 import static com.google.common.net.HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS;
@@ -33,6 +32,7 @@ import static com.google.common.net.HttpHeaders.VARY;
 import static java.math.RoundingMode.CEILING;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 import static javax.servlet.http.HttpServletResponse.SC_ACCEPTED;
 import static javax.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
@@ -67,7 +67,6 @@ import com.google.common.math.IntMath;
 import com.google.common.net.HttpHeaders;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.RawInputUtil;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.extensions.registration.DynamicItem;
 import com.google.gerrit.extensions.registration.DynamicMap;
 import com.google.gerrit.extensions.registration.PluginName;
@@ -110,11 +109,13 @@ import com.google.gerrit.server.audit.ExtendedHttpAuditEvent;
 import com.google.gerrit.server.cache.PerThreadCache;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.git.LockFailureException;
+import com.google.gerrit.server.logging.RequestId;
 import com.google.gerrit.server.logging.TraceContext;
 import com.google.gerrit.server.permissions.GlobalPermission;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.update.UpdateException;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gerrit.util.http.CacheHeaders;
 import com.google.gerrit.util.http.RequestUtil;
 import com.google.gson.ExclusionStrategy;
@@ -267,7 +268,7 @@ public class RestApiServlet extends HttpServlet {
       Provider<? extends RestCollection<? extends RestResource, ? extends RestResource>> members) {
     @SuppressWarnings("unchecked")
     Provider<RestCollection<RestResource, RestResource>> n =
-        (Provider<RestCollection<RestResource, RestResource>>) checkNotNull((Object) members);
+        (Provider<RestCollection<RestResource, RestResource>>) requireNonNull((Object) members);
     this.globals = globals;
     this.members = n;
   }
@@ -444,6 +445,7 @@ public class RestApiServlet extends HttpServlet {
         }
 
         if (notModified(req, rsrc, viewData.view)) {
+          logger.atFinest().log("REST call succeeded: %d", SC_NOT_MODIFIED);
           res.sendError(SC_NOT_MODIFIED);
           return;
         }
@@ -1322,11 +1324,42 @@ public class RestApiServlet extends HttpServlet {
   }
 
   private TraceContext enableTracing(HttpServletRequest req, HttpServletResponse res) {
-    String traceValue = req.getParameter(ParameterParser.TRACE_PARAMETER);
-    return TraceContext.newTrace(
-        traceValue != null,
-        traceValue,
-        (tagName, traceId) -> res.setHeader(X_GERRIT_TRACE, traceId.toString()));
+    // There are 2 ways to enable tracing for REST calls:
+    // 1. by using the 'trace' or 'trace=<trace-id>' request parameter
+    // 2. by setting the 'X-Gerrit-Trace:' or 'X-Gerrit-Trace:<trace-id>' header
+    String traceValueFromHeader = req.getHeader(X_GERRIT_TRACE);
+    String traceValueFromRequestParam = req.getParameter(ParameterParser.TRACE_PARAMETER);
+    boolean doTrace = traceValueFromHeader != null || traceValueFromRequestParam != null;
+
+    // Check whether no trace ID, one trace ID or 2 different trace IDs have been specified.
+    String traceId1;
+    String traceId2;
+    if (!Strings.isNullOrEmpty(traceValueFromHeader)) {
+      traceId1 = traceValueFromHeader;
+      if (!Strings.isNullOrEmpty(traceValueFromRequestParam)
+          && !traceValueFromHeader.equals(traceValueFromRequestParam)) {
+        traceId2 = traceValueFromRequestParam;
+      } else {
+        traceId2 = null;
+      }
+    } else {
+      traceId1 = Strings.emptyToNull(traceValueFromRequestParam);
+      traceId2 = null;
+    }
+
+    // Use the first trace ID to start tracing. If this trace ID is null, a trace ID will be
+    // generated.
+    TraceContext traceContext =
+        TraceContext.newTrace(
+            doTrace,
+            traceId1,
+            (tagName, traceId) -> res.setHeader(X_GERRIT_TRACE, traceId.toString()));
+    // If a second trace ID was specified, add a tag for it as well.
+    if (traceId2 != null) {
+      traceContext.addTag(RequestId.Type.TRACE_ID, traceId2);
+      res.addHeader(X_GERRIT_TRACE, traceId2);
+    }
+    return traceContext;
   }
 
   private boolean isDelete(HttpServletRequest req) {
@@ -1360,20 +1393,24 @@ public class RestApiServlet extends HttpServlet {
 
   private void checkRequiresCapability(ViewData d)
       throws AuthException, PermissionBackendException {
-    globals
-        .permissionBackend
-        .currentUser()
-        .checkAny(GlobalPermission.fromAnnotation(d.pluginName, d.view.getClass()));
+    try {
+      globals.permissionBackend.currentUser().check(GlobalPermission.ADMINISTRATE_SERVER);
+    } catch (AuthException e) {
+      // Skiping
+      globals
+          .permissionBackend
+          .currentUser()
+          .checkAny(GlobalPermission.fromAnnotation(d.pluginName, d.view.getClass()));
+    }
   }
 
   private static long handleException(
       Throwable err, HttpServletRequest req, HttpServletResponse res) throws IOException {
     String uri = req.getRequestURI();
     if (!Strings.isNullOrEmpty(req.getQueryString())) {
-      uri += "?" + req.getQueryString();
+      uri += "?" + LogRedactUtil.redactQueryString(req.getQueryString());
     }
     logger.atSevere().withCause(err).log("Error in %s %s", req.getMethod(), uri);
-
     if (!res.isCommitted()) {
       res.reset();
       return replyError(req, res, SC_INTERNAL_SERVER_ERROR, "Internal server error", err);
@@ -1507,8 +1544,9 @@ public class RestApiServlet extends HttpServlet {
     return new TemporaryBuffer.Heap(est, max);
   }
 
-  @SuppressWarnings("serial")
   private static class AmbiguousViewException extends Exception {
+    private static final long serialVersionUID = 1L;
+
     AmbiguousViewException(String message) {
       super(message);
     }

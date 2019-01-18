@@ -1,5 +1,6 @@
 workspace(name = "gerrit")
 
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_file")
 load("//tools/bzl:maven_jar.bzl", "GERRIT", "MAVEN_LOCAL", "maven_jar")
 load("//lib/codemirror:cm.bzl", "CM_VERSION", "DIFF_MATCH_PATCH_VERSION")
@@ -14,9 +15,9 @@ http_archive(
 
 http_archive(
     name = "io_bazel_rules_closure",
-    sha256 = "4dd84dd2bdd6c9f56cb5a475d504ea31d199c34309e202e9379501d01c3067e5",
-    strip_prefix = "rules_closure-3103a773820b59b76345f94c231cb213e0d404e2",
-    urls = ["https://github.com/bazelbuild/rules_closure/archive/3103a773820b59b76345f94c231cb213e0d404e2.tar.gz"],
+    sha256 = "4f2c173ebf95e94d98a0d5cb799e734536eaf3eca280eb15e124f5e5ef8b6e39",
+    strip_prefix = "rules_closure-6fd76e645b5c622221c9920f41a4d0bc578a3046",
+    urls = ["https://github.com/bazelbuild/rules_closure/archive/6fd76e645b5c622221c9920f41a4d0bc578a3046.tar.gz"],
 )
 
 # File is specific to Polymer and copied from the Closure Github -- should be
@@ -24,13 +25,14 @@ http_archive(
 # https://github.com/google/closure-compiler/blob/master/contrib/externs/polymer-1.0.js
 http_file(
     name = "polymer_closure",
-    sha256 = "5a589bdba674e1fec7188e9251c8624ebf2d4d969beb6635f9148f420d1e08b1",
-    urls = ["https://raw.githubusercontent.com/google/closure-compiler/775609aad61e14aef289ebec4bfc09ad88877f9e/contrib/externs/polymer-1.0.js"],
+    downloaded_file_path = "polymer_closure.js",
+    sha256 = "4d63a36dcca040475bd6deb815b9a600bd686e1413ac1ebd4b04516edd675020",
+    urls = ["https://raw.githubusercontent.com/google/closure-compiler/35d2b3340ff23a69441f10fa3bc820691c2942f2/contrib/externs/polymer-1.0.js"],
 )
 
-load("@bazel_skylib//:lib.bzl", "versions")
+load("@bazel_skylib//lib:versions.bzl", "versions")
 
-versions.check(minimum_bazel_version = "0.14.0")
+versions.check(minimum_bazel_version = "0.19.0")
 
 load("@io_bazel_rules_closure//closure:defs.bzl", "closure_repositories")
 
@@ -41,6 +43,42 @@ load("@io_bazel_rules_closure//closure:defs.bzl", "closure_repositories")
 closure_repositories(
     omit_aopalliance = True,
     omit_javax_inject = True,
+)
+
+# Golang support for PolyGerrit local dev server.
+http_archive(
+    name = "io_bazel_rules_go",
+    sha256 = "ee5fe78fe417c685ecb77a0a725dc9f6040ae5beb44a0ba4ddb55453aad23a8a",
+    url = "https://github.com/bazelbuild/rules_go/releases/download/0.16.0/rules_go-0.16.0.tar.gz",
+)
+
+load("@io_bazel_rules_go//go:def.bzl", "go_register_toolchains", "go_rules_dependencies")
+
+go_rules_dependencies()
+
+go_register_toolchains()
+
+http_archive(
+    name = "bazel_gazelle",
+    sha256 = "c0a5739d12c6d05b6c1ad56f2200cb0b57c5a70e03ebd2f7b87ce88cabf09c7b",
+    urls = ["https://github.com/bazelbuild/bazel-gazelle/releases/download/0.14.0/bazel-gazelle-0.14.0.tar.gz"],
+)
+
+load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies", "go_repository")
+
+gazelle_dependencies()
+
+# Dependencies for PolyGerrit local dev server.
+go_repository(
+    name = "com_github_robfig_soy",
+    commit = "82face14ebc0883b4ca9c901b5aaf3738b9f6a24",
+    importpath = "github.com/robfig/soy",
+)
+
+go_repository(
+    name = "com_github_howeyc_fsnotify",
+    commit = "441bbc86b167f3c1f4786afae9931403b99fdacf",
+    importpath = "github.com/howeyc/fsnotify",
 )
 
 ANTLR_VERS = "3.5.2"
@@ -70,24 +108,24 @@ maven_jar(
     sha1 = "83cd2cd674a217ade95a4bb83a8a14f351f48bd0",
 )
 
-GUICE_VERS = "4.2.0"
+GUICE_VERS = "4.2.1"
 
 maven_jar(
     name = "guice-library",
     artifact = "com.google.inject:guice:" + GUICE_VERS,
-    sha1 = "25e1f4c1d528a1cffabcca0d432f634f3132f6c8",
+    sha1 = "f77dfd89318fe3ff293bafceaa75fbf66e4e4b10",
 )
 
 maven_jar(
     name = "guice-assistedinject",
     artifact = "com.google.inject.extensions:guice-assistedinject:" + GUICE_VERS,
-    sha1 = "e7270305960ad7db56f7e30cb9df6be9ff1cfb45",
+    sha1 = "d327e4aee7c96f08cd657c17da231a1f4a8999ac",
 )
 
 maven_jar(
     name = "guice-servlet",
     artifact = "com.google.inject.extensions:guice-servlet:" + GUICE_VERS,
-    sha1 = "f57581625c36c148f088d9f52a568d5bdf12c61d",
+    sha1 = "3927e462f923b0c672fdb045c5645bca4beab5c0",
 )
 
 maven_jar(
@@ -216,8 +254,8 @@ maven_jar(
 
 maven_jar(
     name = "protobuf",
-    artifact = "com.google.protobuf:protobuf-java:3.5.1",
-    sha1 = "8c3492f7662fa1cbf8ca76a0f5eb1146f7725acd",
+    artifact = "com.google.protobuf:protobuf-java:3.6.1",
+    sha1 = "0d06d46ecfd92ec6d0f3b423b4cd81cb38d8b924",
 )
 
 load("//lib:guava.bzl", "GUAVA_BIN_SHA1", "GUAVA_VERSION")
@@ -292,8 +330,8 @@ maven_jar(
 
 maven_jar(
     name = "args4j-intern",
-    artifact = "args4j:args4j:2.0.29",
-    sha1 = "55ca4ddc4e906ffbaec043113b36bb410a3d909e",
+    artifact = "args4j:args4j:2.33",
+    sha1 = "bd87a75374a6d6523de82fef51fc3cfe9baf9fc9",
 )
 
 maven_jar(
@@ -327,6 +365,8 @@ maven_jar(
     sha1 = "30be73c965cc990b153a100aaaaafcf239f82d39",
 )
 
+# Transitive dependency of commons-dbcp, do not update without
+# also updating commons-dbcp
 maven_jar(
     name = "commons-pool",
     artifact = "commons-pool:commons-pool:1.5.5",
@@ -599,36 +639,36 @@ maven_jar(
     sha1 = "05b6f921f1810bdf90e25471968f741f87168b64",
 )
 
-LUCENE_VERS = "5.5.4"
+LUCENE_VERS = "6.6.5"
 
 maven_jar(
     name = "lucene-core",
     artifact = "org.apache.lucene:lucene-core:" + LUCENE_VERS,
-    sha1 = "ab9c77e75cf142aa6e284b310c8395617bd9b19b",
+    sha1 = "2983f80b1037e098209657b0ca9176827892d0c0",
 )
 
 maven_jar(
     name = "lucene-analyzers-common",
     artifact = "org.apache.lucene:lucene-analyzers-common:" + LUCENE_VERS,
-    sha1 = "08ce9d34c8124c80e176e8332ee947480bbb9576",
+    sha1 = "6094f91071d90570b7f5f8ce481d5de7d2d2e9d5",
 )
 
 maven_jar(
     name = "backward-codecs",
     artifact = "org.apache.lucene:lucene-backward-codecs:" + LUCENE_VERS,
-    sha1 = "a933f42e758c54c43083398127ea7342b54d8212",
+    sha1 = "460a19e8d1aa7d31e9614cf528a6cb508c9e823d",
 )
 
 maven_jar(
     name = "lucene-misc",
     artifact = "org.apache.lucene:lucene-misc:" + LUCENE_VERS,
-    sha1 = "a74388857f73614e528ae44d742c60187cb55a5a",
+    sha1 = "ce3a1b7b6a92b9af30791356a4bd46d1cea6cc1e",
 )
 
 maven_jar(
     name = "lucene-queryparser",
     artifact = "org.apache.lucene:lucene-queryparser:" + LUCENE_VERS,
-    sha1 = "8a06fad4675473d98d93b61fea529e3f464bf69e",
+    sha1 = "2db9ca0086a4b8e0b9bc9f08a9b420303168e37c",
 )
 
 maven_jar(
@@ -688,10 +728,10 @@ maven_jar(
 
 maven_jar(
     name = "blame-cache",
-    artifact = "com/google/gitiles:blame-cache:0.2-6",
+    artifact = "com/google/gitiles:blame-cache:0.2-7",
     attach_source = False,
     repository = GERRIT,
-    sha1 = "64827f1bc2cbdbb6515f1d29ce115db94c03bb6a",
+    sha1 = "8170f33b8b1db6f55e41d7069fa050a4d102a62b",
 )
 
 # Keep this version of Soy synchronized with the version used in Gitiles.
@@ -719,7 +759,7 @@ maven_jar(
     sha1 = "bb562ee73f740bb6b2bf7955f97be6b870d9e9f0",
 )
 
-# When updading Bouncy Castle, also update it in bazlets.
+# When updating Bouncy Castle, also update it in bazlets.
 BC_VERS = "1.60"
 
 maven_jar(
@@ -740,13 +780,10 @@ maven_jar(
     sha1 = "d0c46320fbc07be3a24eb13a56cee4e3d38e0c75",
 )
 
-# TODO(davido): Remove exlusion of file system provider, when this issue is fixed:
-# https://issues.apache.org/jira/browse/SSHD-736
 maven_jar(
     name = "sshd",
-    artifact = "org.apache.sshd:sshd-core:1.7.0",
-    exclude = ["META-INF/services/java.nio.file.spi.FileSystemProvider"],
-    sha1 = "2e8b14f6d841b098e46bf407b6fdccab4c19fa41",
+    artifact = "org.apache.sshd:sshd-core:2.0.0",
+    sha1 = "f4275079a2463cfd2bf1548a80e1683288a8e86b",
 )
 
 maven_jar(
@@ -757,8 +794,14 @@ maven_jar(
 
 maven_jar(
     name = "mina-core",
-    artifact = "org.apache.mina:mina-core:2.0.16",
-    sha1 = "f720f17643eaa7b0fec07c1d7f6272972c02bba4",
+    artifact = "org.apache.mina:mina-core:2.0.17",
+    sha1 = "7e10ec974760436d931f3e58be507d1957bcc8db",
+)
+
+maven_jar(
+    name = "sshd-mina",
+    artifact = "org.apache.sshd:sshd-mina:2.0.0",
+    sha1 = "50f2669312494f6c1996d8bd0d266c1fca7be6f6",
 )
 
 maven_jar(
@@ -790,10 +833,18 @@ maven_jar(
     sha1 = "f5aa318bda4c6c8d688c9d00b90681dcd82ce636",
 )
 
+# elasticsearch-rest-client explicitly depends on this version
 maven_jar(
-    name = "httpmime",
-    artifact = "org.apache.httpcomponents:httpmime:" + HTTPCOMP_VERS,
-    sha1 = "2f8757f5ac5e38f46c794e5229d1f3c522e9b1df",
+    name = "httpasyncclient",
+    artifact = "org.apache.httpcomponents:httpasyncclient:4.1.2",
+    sha1 = "95aa3e6fb520191a0970a73cf09f62948ee614be",
+)
+
+# elasticsearch-rest-client explicitly depends on this version
+maven_jar(
+    name = "httpcore-nio",
+    artifact = "org.apache.httpcomponents:httpcore-nio:4.4.5",
+    sha1 = "f4be009e7505f6ceddf21e7960c759f413f15056",
 )
 
 # Test-only dependencies below.
@@ -913,71 +964,71 @@ maven_jar(
 
 maven_jar(
     name = "derby",
-    artifact = "org.apache.derby:derby:10.11.1.1",
+    artifact = "org.apache.derby:derby:10.12.1.1",
     attach_source = False,
-    sha1 = "df4b50061e8e4c348ce243b921f53ee63ba9bbe1",
+    sha1 = "75070c744a8e52a7d17b8b476468580309d5cd09",
 )
 
-JETTY_VERS = "9.3.18.v20170406"
+JETTY_VERS = "9.4.12.v20180830"
 
 maven_jar(
     name = "jetty-servlet",
     artifact = "org.eclipse.jetty:jetty-servlet:" + JETTY_VERS,
-    sha1 = "534e7fa0e4fb6e08f89eb3f6a8c48b4f81ff5738",
+    sha1 = "4c1149328eda9fa39a274262042420f66d9ffd5f",
 )
 
 maven_jar(
     name = "jetty-security",
     artifact = "org.eclipse.jetty:jetty-security:" + JETTY_VERS,
-    sha1 = "16b900e91b04511f42b706c925c8af6023d2c05e",
+    sha1 = "299e0602a9c0b753ba232cc1c1dda72ddd9addcf",
 )
 
 maven_jar(
     name = "jetty-servlets",
     artifact = "org.eclipse.jetty:jetty-servlets:" + JETTY_VERS,
-    sha1 = "f9311d1d8e6124d2792f4db5b29514d0ecf46812",
+    sha1 = "53745200718fe4ddf57f04ad3ba34778a6aca585",
 )
 
 maven_jar(
     name = "jetty-server",
     artifact = "org.eclipse.jetty:jetty-server:" + JETTY_VERS,
-    sha1 = "0a32feea88cba2d43951d22b60861c643454bb3f",
+    sha1 = "b0f25df0d32a445fd07d5f16fff1411c16b888fa",
 )
 
 maven_jar(
     name = "jetty-jmx",
     artifact = "org.eclipse.jetty:jetty-jmx:" + JETTY_VERS,
-    sha1 = "f988136dc5aa634afed6c5a35d910ee9599c6c23",
+    sha1 = "7e9e589dd749a8c096008c0c4af863a81e67c55b",
 )
 
 maven_jar(
     name = "jetty-continuation",
     artifact = "org.eclipse.jetty:jetty-continuation:" + JETTY_VERS,
-    sha1 = "3c5d89c8204d4a48a360087f95e4cbd4520b5de0",
+    sha1 = "5f6d6e06f95088a3a7118b9065bc49ce7c014b75",
 )
 
 maven_jar(
     name = "jetty-http",
     artifact = "org.eclipse.jetty:jetty-http:" + JETTY_VERS,
-    sha1 = "30ece6d732d276442d513b94d914de6fa1075fae",
+    sha1 = "1341796dde4e16df69bca83f3e87688ba2e7d703",
 )
 
 maven_jar(
     name = "jetty-io",
     artifact = "org.eclipse.jetty:jetty-io:" + JETTY_VERS,
-    sha1 = "36cb411ee89be1b527b0c10747aa3153267fc3ec",
+    sha1 = "e93f5adaa35a9a6a85ba130f589c5305c6ecc9e3",
 )
 
 maven_jar(
     name = "jetty-util",
     artifact = "org.eclipse.jetty:jetty-util:" + JETTY_VERS,
-    sha1 = "8600b7d028a38cb462eff338de91390b3ff5040e",
+    sha1 = "cb4ccec9bd1fe4b10a04a0fb25d7053c1050188a",
 )
 
 maven_jar(
     name = "openid-consumer",
-    artifact = "org.openid4java:openid4java:0.9.8",
-    sha1 = "de4f1b33d3b0f0b2ab1d32834ec1190b39db4160",
+    artifact = "org.openid4java:openid4java:1.0.0",
+    sha1 = "541091bb49f2c0d583544c5bb1e6df7612d31e3e",
 )
 
 maven_jar(
@@ -995,8 +1046,8 @@ maven_jar(
 
 maven_jar(
     name = "postgresql",
-    artifact = "org.postgresql:postgresql:42.2.4",
-    sha1 = "dff98730c28a4b3a3263f0cf4abb9a3392f815a7",
+    artifact = "org.postgresql:postgresql:42.2.5",
+    sha1 = "951b7eda125f3137538a94e2cbdcf744088ad4c2",
 )
 
 maven_jar(
@@ -1026,46 +1077,44 @@ maven_jar(
 
 maven_jar(
     name = "asciidoctor",
-    artifact = "org.asciidoctor:asciidoctorj:1.5.6",
-    sha1 = "bb757d4b8b0f8438ce2ed781f6688cc6c01d9237",
+    artifact = "org.asciidoctor:asciidoctorj:1.5.7",
+    sha1 = "8e8c1d8fc6144405700dd8df3b177f2801ac5987",
 )
 
 maven_jar(
     name = "jruby",
-    artifact = "org.jruby:jruby-complete:9.1.13.0",
-    sha1 = "8903bf42272062e87a7cbc1d98919e0729a9939f",
+    artifact = "org.jruby:jruby-complete:9.1.17.0",
+    sha1 = "76716d529710fc03d1d429b43e3cedd4419f78d4",
 )
 
+# When upgrading elasticsearch-rest-client, also upgrade http-niocore
+# and httpasyncclient as necessary.
 maven_jar(
     name = "elasticsearch-rest-client",
-    artifact = "org.elasticsearch.client:elasticsearch-rest-client:6.3.2",
-    sha1 = "2077ea5f00fdd2d6af85223b730ba8047303297f",
+    artifact = "org.elasticsearch.client:elasticsearch-rest-client:6.5.4",
+    sha1 = "552175b06e34df96f114d1c8aaa908e535c8f1be",
 )
 
-JACKSON_VERSION = "2.8.9"
+JACKSON_VERSION = "2.9.8"
 
 maven_jar(
     name = "jackson-core",
     artifact = "com.fasterxml.jackson.core:jackson-core:" + JACKSON_VERSION,
-    sha1 = "569b1752705da98f49aabe2911cc956ff7d8ed9d",
+    sha1 = "0f5a654e4675769c716e5b387830d19b501ca191",
 )
 
-maven_jar(
-    name = "httpasyncclient",
-    artifact = "org.apache.httpcomponents:httpasyncclient:4.1.2",
-    sha1 = "95aa3e6fb520191a0970a73cf09f62948ee614be",
-)
-
-maven_jar(
-    name = "httpcore-nio",
-    artifact = "org.apache.httpcomponents:httpcore-nio:" + HTTPCOMP_VERS,
-    sha1 = "a8c5e3c3bfea5ce23fb647c335897e415eb442e3",
-)
+TESTCONTAINERS_VERSION = "1.10.3"
 
 maven_jar(
     name = "testcontainers",
-    artifact = "org.testcontainers:testcontainers:1.8.0",
-    sha1 = "bc413912f7044f9f12aa0782853aef0a067ee52a",
+    artifact = "org.testcontainers:testcontainers:" + TESTCONTAINERS_VERSION,
+    sha1 = "e561ce99fc616b383d85f35ce881e58e8de59ae7",
+)
+
+maven_jar(
+    name = "testcontainers-elasticsearch",
+    artifact = "org.testcontainers:elasticsearch:" + TESTCONTAINERS_VERSION,
+    sha1 = "0cb114ecba0ed54a116e2be2f031bc45ca4cbfc8",
 )
 
 maven_jar(

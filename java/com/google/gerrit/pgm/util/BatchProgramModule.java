@@ -47,6 +47,7 @@ import com.google.gerrit.server.change.RebaseChangeOp;
 import com.google.gerrit.server.config.AdministrateServerGroups;
 import com.google.gerrit.server.config.CanonicalWebUrl;
 import com.google.gerrit.server.config.CanonicalWebUrlProvider;
+import com.google.gerrit.server.config.DefaultUrlFormatter;
 import com.google.gerrit.server.config.DisableReverseDnsLookup;
 import com.google.gerrit.server.config.DisableReverseDnsLookupProvider;
 import com.google.gerrit.server.config.GerritServerConfig;
@@ -112,6 +113,7 @@ public class BatchProgramModule extends FactoryModule {
     install(new SysExecutorModule());
     install(BatchUpdate.module());
     install(PatchListCacheImpl.module());
+    install(new DefaultUrlFormatter.Module());
 
     // There is the concept of LifecycleModule, in Gerrit's own extension to Guice, which has these:
     //  listener().to(SomeClassImplementingLifecycleListener.class);

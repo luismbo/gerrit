@@ -20,6 +20,8 @@ import static javax.servlet.http.HttpServletResponse.SC_OK;
 import com.google.gerrit.common.RawInputUtil;
 import com.google.gerrit.extensions.api.accounts.AccountApi;
 import com.google.gerrit.extensions.api.accounts.AgreementInput;
+import com.google.gerrit.extensions.api.accounts.DeleteDraftCommentsInput;
+import com.google.gerrit.extensions.api.accounts.DeletedDraftCommentInfo;
 import com.google.gerrit.extensions.api.accounts.EmailApi;
 import com.google.gerrit.extensions.api.accounts.EmailInput;
 import com.google.gerrit.extensions.api.accounts.GpgKeyApi;
@@ -39,6 +41,7 @@ import com.google.gerrit.extensions.common.EmailInfo;
 import com.google.gerrit.extensions.common.GpgKeyInfo;
 import com.google.gerrit.extensions.common.GroupInfo;
 import com.google.gerrit.extensions.common.Input;
+import com.google.gerrit.extensions.common.NameInput;
 import com.google.gerrit.extensions.common.SshKeyInfo;
 import com.google.gerrit.extensions.restapi.IdString;
 import com.google.gerrit.extensions.restapi.Response;
@@ -51,6 +54,7 @@ import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.restapi.account.AddSshKey;
 import com.google.gerrit.server.restapi.account.CreateEmail;
 import com.google.gerrit.server.restapi.account.DeleteActive;
+import com.google.gerrit.server.restapi.account.DeleteDraftComments;
 import com.google.gerrit.server.restapi.account.DeleteEmail;
 import com.google.gerrit.server.restapi.account.DeleteExternalIds;
 import com.google.gerrit.server.restapi.account.DeleteSshKey;
@@ -71,6 +75,7 @@ import com.google.gerrit.server.restapi.account.Index;
 import com.google.gerrit.server.restapi.account.PostWatchedProjects;
 import com.google.gerrit.server.restapi.account.PutActive;
 import com.google.gerrit.server.restapi.account.PutAgreement;
+import com.google.gerrit.server.restapi.account.PutName;
 import com.google.gerrit.server.restapi.account.PutStatus;
 import com.google.gerrit.server.restapi.account.SetDiffPreferences;
 import com.google.gerrit.server.restapi.account.SetEditPreferences;
@@ -125,9 +130,11 @@ public class AccountApiImpl implements AccountApi {
   private final Index index;
   private final GetExternalIds getExternalIds;
   private final DeleteExternalIds deleteExternalIds;
+  private final DeleteDraftComments deleteDraftComments;
   private final PutStatus putStatus;
   private final GetGroups getGroups;
   private final EmailApiImpl.Factory emailApi;
+  private final PutName putName;
 
   @Inject
   AccountApiImpl(
@@ -165,9 +172,11 @@ public class AccountApiImpl implements AccountApi {
       Index index,
       GetExternalIds getExternalIds,
       DeleteExternalIds deleteExternalIds,
+      DeleteDraftComments deleteDraftComments,
       PutStatus putStatus,
       GetGroups getGroups,
       EmailApiImpl.Factory emailApi,
+      PutName putName,
       @Assisted AccountResource account) {
     this.account = account;
     this.accountLoaderFactory = ailf;
@@ -204,9 +213,11 @@ public class AccountApiImpl implements AccountApi {
     this.index = index;
     this.getExternalIds = getExternalIds;
     this.deleteExternalIds = deleteExternalIds;
+    this.deleteDraftComments = deleteDraftComments;
     this.putStatus = putStatus;
     this.getGroups = getGroups;
     this.emailApi = emailApi;
+    this.putName = putName;
   }
 
   @Override
@@ -559,6 +570,27 @@ public class AccountApiImpl implements AccountApi {
       deleteExternalIds.apply(account, externalIds);
     } catch (Exception e) {
       throw asRestApiException("Cannot delete external IDs", e);
+    }
+  }
+
+  @Override
+  public List<DeletedDraftCommentInfo> deleteDraftComments(DeleteDraftCommentsInput input)
+      throws RestApiException {
+    try {
+      return deleteDraftComments.apply(account, input);
+    } catch (Exception e) {
+      throw asRestApiException("Cannot delete draft comments", e);
+    }
+  }
+
+  @Override
+  public void setName(String name) throws RestApiException {
+    NameInput input = new NameInput();
+    input.name = name;
+    try {
+      putName.apply(account, input);
+    } catch (Exception e) {
+      throw asRestApiException("Cannot set account name", e);
     }
   }
 }

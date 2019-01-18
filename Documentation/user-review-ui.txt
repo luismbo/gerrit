@@ -307,7 +307,7 @@ image::images/user-review-ui-change-screen-file-list-mark-as-reviewed.png[width=
 The type of a file modification is indicated by the character in front
 of the file name:
 
-- 'no character' (Modified):
+- `M` or 'no character' (Modified):
 +
 The file existed before this change and is modified.
 
@@ -326,6 +326,13 @@ The file is renamed.
 - `C` (Copied):
 +
 The file is new and is copied from an existing file.
+
+- `U` (Unchanged):
++
+The file is unchanged and has the same content. Unchanged files only
+appear in the file list if 2 patch sets are compared and the file has
+comments on at least one of the sides. Otherwise unchanged files are
+filtered out.
 
 image::images/user-review-ui-change-screen-file-list-modification-type.png[width=800, link="images/user-review-ui-change-screen-file-list-modification-type.png"]
 
@@ -424,7 +431,7 @@ image::images/user-review-ui-change-screen-download-commands.png[width=800, link
 
 The available download commands depend on the installed Gerrit plugins.
 The most popular plugin for download commands, the
-link:https://gerrit-review.googlesource.com/#/admin/projects/plugins/download-commands[
+link:https://gerrit-review.googlesource.com/admin/repos/plugins/download-commands[
 download-commands] plugin, provides commands to checkout, pull and
 cherry-pick a patch set.
 

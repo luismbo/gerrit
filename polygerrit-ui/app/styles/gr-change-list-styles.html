@@ -64,7 +64,7 @@ limitations under the License.
       }
       .topHeader,
       .groupHeader {
-        font-family: var(--font-family-bold);
+        font-weight: var(--font-weight-bold);
       }
       .topHeader th {
         background-color: var(--table-header-background-color);
@@ -206,6 +206,10 @@ limitations under the License.
         .owner,
         .size {
           max-width: none;
+        }
+        .noChanges .cell {
+          display: block;
+          height: auto;
         }
       }
       @media only screen and (min-width: 1450px) {

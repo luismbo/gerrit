@@ -14,20 +14,19 @@
 
 package com.google.gerrit.acceptance.server.change;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.TruthJUnit.assume;
 import static com.google.gerrit.extensions.common.ProblemInfo.Status.FIXED;
 import static com.google.gerrit.extensions.common.ProblemInfo.Status.FIX_FAILED;
 import static com.google.gerrit.testing.TestChanges.newPatchSet;
 import static java.util.Collections.singleton;
+import static java.util.Objects.requireNonNull;
 
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.NoHttpd;
 import com.google.gerrit.acceptance.TestAccount;
 import com.google.gerrit.common.FooterConstants;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.extensions.api.changes.FixInput;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.client.ChangeStatus;
@@ -52,6 +51,7 @@ import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.server.update.BatchUpdateOp;
 import com.google.gerrit.server.update.ChangeContext;
 import com.google.gerrit.server.update.RepoContext;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gerrit.testing.InMemoryRepositoryManager;
 import com.google.gerrit.testing.NoteDbMode;
 import com.google.gerrit.testing.TestChanges;
@@ -953,8 +953,8 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
 
   private static ProblemInfo problem(String message, ProblemInfo.Status status, String outcome) {
     ProblemInfo p = problem(message);
-    p.status = checkNotNull(status);
-    p.outcome = checkNotNull(outcome);
+    p.status = requireNonNull(status);
+    p.outcome = requireNonNull(outcome);
     return p;
   }
 

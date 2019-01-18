@@ -15,9 +15,9 @@
 package com.google.gerrit.server.update;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableMultiset.toImmutableMultiset;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
@@ -128,7 +128,7 @@ public abstract class BatchUpdate implements AutoCloseable {
     public void execute(
         Collection<BatchUpdate> updates, BatchUpdateListener listener, boolean dryRun)
         throws UpdateException, RestApiException {
-      checkNotNull(listener);
+      requireNonNull(listener);
       checkDifferentProject(updates);
       // It's safe to downcast all members of the input collection in this case, because the only
       // way a caller could have gotten any BatchUpdates in the first place is to call the create
@@ -340,7 +340,7 @@ public abstract class BatchUpdate implements AutoCloseable {
 
   public BatchUpdate addOp(Change.Id id, BatchUpdateOp op) {
     checkArgument(!(op instanceof InsertChangeOp), "use insertChange");
-    checkNotNull(op);
+    requireNonNull(op);
     ops.put(id, op);
     return this;
   }
@@ -394,6 +394,16 @@ public abstract class BatchUpdate implements AutoCloseable {
     // noisy.
     if (RequestId.isSet()) {
       logger.atFine().log(msg, arg1, arg2);
+    }
+  }
+
+  protected static void logDebug(
+      String msg, @Nullable Object arg1, @Nullable Object arg2, @Nullable Object arg3) {
+    // Only log if there is a requestId assigned, since those are the
+    // expensive/complicated requests like MergeOp. Doing it every time would be
+    // noisy.
+    if (RequestId.isSet()) {
+      logger.atFine().log(msg, arg1, arg2, arg3);
     }
   }
 }

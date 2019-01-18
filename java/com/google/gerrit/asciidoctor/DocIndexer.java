@@ -33,8 +33,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import org.apache.lucene.analysis.CharArraySet;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
-import org.apache.lucene.analysis.util.CharArraySet;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StringField;
@@ -48,6 +48,7 @@ import org.kohsuke.args4j.Argument;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
 import org.kohsuke.args4j.Option;
+import org.kohsuke.args4j.ParserProperties;
 
 public class DocIndexer {
   private static final Pattern SECTION_HEADER = Pattern.compile("^=+ (.*)");
@@ -68,7 +69,7 @@ public class DocIndexer {
   private List<String> inputFiles = new ArrayList<>();
 
   private void invoke(String... parameters) throws IOException {
-    CmdLineParser parser = new CmdLineParser(this);
+    CmdLineParser parser = new CmdLineParser(this, ParserProperties.defaults().withAtSyntax(false));
     try {
       parser.parseArgument(parameters);
       if (inputFiles.isEmpty()) {

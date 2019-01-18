@@ -84,7 +84,6 @@ import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.AnonymousUser;
-import com.google.gerrit.server.ChangeFinder;
 import com.google.gerrit.server.GerritPersonIdent;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.OutputFormat;
@@ -95,6 +94,7 @@ import com.google.gerrit.server.account.Accounts;
 import com.google.gerrit.server.account.GroupBackend;
 import com.google.gerrit.server.account.GroupCache;
 import com.google.gerrit.server.change.BatchAbandon;
+import com.google.gerrit.server.change.ChangeFinder;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.change.FileContentUtil;
 import com.google.gerrit.server.change.RevisionResource;
@@ -128,6 +128,7 @@ import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.testing.ConfigSuite;
 import com.google.gerrit.testing.FakeEmailSender;
 import com.google.gerrit.testing.FakeEmailSender.Message;
+import com.google.gerrit.testing.FakeGroupAuditService;
 import com.google.gerrit.testing.NoteDbMode;
 import com.google.gerrit.testing.SshMode;
 import com.google.gerrit.testing.TempFileUtil;
@@ -244,6 +245,7 @@ public abstract class AbstractDaemonTest {
   @Inject protected ChangeNoteUtil changeNoteUtil;
   @Inject protected ChangeResource.Factory changeResourceFactory;
   @Inject protected FakeEmailSender sender;
+  @Inject protected FakeGroupAuditService auditService;
   @Inject protected GerritApi gApi;
   @Inject protected GitRepositoryManager repoManager;
   @Inject protected GroupBackend groupBackend;
@@ -502,6 +504,8 @@ public abstract class AbstractDaemonTest {
       in.useSignedOffBy = ann.useSignedOffBy();
       in.useContentMerge = ann.useContentMerge();
       in.rejectEmptyCommit = ann.rejectEmptyCommit();
+      in.enableSignedPush = ann.enableSignedPush();
+      in.requireSignedPush = ann.requireSignedPush();
     } else {
       // Defaults should match TestProjectConfig, omitting nullable values.
       in.createEmptyCommit = true;
@@ -714,7 +718,7 @@ public abstract class AbstractDaemonTest {
       throws Exception {
     assertThat(topic).isNotEmpty();
     return createCommitAndPush(
-        repo, "refs/for/master/" + name(topic), commitMsg, fileName, content);
+        repo, "refs/for/master%topic=" + name(topic), commitMsg, fileName, content);
   }
 
   protected PushOneCommit.Result createChange(String subject, String fileName, String content)
@@ -733,7 +737,7 @@ public abstract class AbstractDaemonTest {
       String topic)
       throws Exception {
     PushOneCommit push = pushFactory.create(db, admin.getIdent(), repo, subject, fileName, content);
-    return push.to("refs/for/" + branch + "/" + name(topic));
+    return push.to("refs/for/" + branch + "%topic=" + name(topic));
   }
 
   protected BranchApi createBranch(Branch.NameKey branch) throws Exception {
@@ -1487,12 +1491,7 @@ public abstract class AbstractDaemonTest {
     assertNotifyTo(expected.email, expected.fullName);
   }
 
-  protected void assertNotifyTo(
-      com.google.gerrit.acceptance.testsuite.account.TestAccount expected) {
-    assertNotifyTo(expected.preferredEmail().orElse(null), expected.fullname().orElse(null));
-  }
-
-  private void assertNotifyTo(String expectedEmail, String expectedFullname) {
+  protected void assertNotifyTo(String expectedEmail, String expectedFullname) {
     Address expectedAddress = new Address(expectedFullname, expectedEmail);
     assertThat(sender.getMessages()).hasSize(1);
     Message m = sender.getMessages().get(0);
@@ -1504,11 +1503,6 @@ public abstract class AbstractDaemonTest {
 
   protected void assertNotifyCc(TestAccount expected) {
     assertNotifyCc(expected.emailAddress);
-  }
-
-  protected void assertNotifyCc(
-      com.google.gerrit.acceptance.testsuite.account.TestAccount expected) {
-    assertNotifyCc(expected.preferredEmail().orElse(null), expected.fullname().orElse(null));
   }
 
   protected void assertNotifyCc(String expectedEmail, String expectedFullname) {
@@ -1533,13 +1527,10 @@ public abstract class AbstractDaemonTest {
     assertThat(m.headers().get("Cc").isEmpty()).isTrue();
   }
 
-  protected void assertNotifyBcc(
-      com.google.gerrit.acceptance.testsuite.account.TestAccount expected) {
+  protected void assertNotifyBcc(String expectedEmail, String expectedFullName) {
     assertThat(sender.getMessages()).hasSize(1);
     Message m = sender.getMessages().get(0);
-    assertThat(m.rcpt())
-        .containsExactly(
-            new Address(expected.fullname().orElse(null), expected.preferredEmail().orElse(null)));
+    assertThat(m.rcpt()).containsExactly(new Address(expectedFullName, expectedEmail));
     assertThat(m.headers().get("To").isEmpty()).isTrue();
     assertThat(m.headers().get("Cc").isEmpty()).isTrue();
   }

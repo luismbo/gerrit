@@ -16,12 +16,14 @@ package com.google.gerrit.extensions.api.changes;
 
 import com.google.gerrit.extensions.client.SubmitType;
 import com.google.gerrit.extensions.common.ActionInfo;
+import com.google.gerrit.extensions.common.CherryPickChangeInfo;
 import com.google.gerrit.extensions.common.CommentInfo;
 import com.google.gerrit.extensions.common.CommitInfo;
 import com.google.gerrit.extensions.common.EditInfo;
 import com.google.gerrit.extensions.common.FileInfo;
 import com.google.gerrit.extensions.common.MergeableInfo;
 import com.google.gerrit.extensions.common.RobotCommentInfo;
+import com.google.gerrit.extensions.common.TestSubmitRuleInfo;
 import com.google.gerrit.extensions.common.TestSubmitRuleInput;
 import com.google.gerrit.extensions.restapi.BinaryResult;
 import com.google.gerrit.extensions.restapi.NotImplementedException;
@@ -52,6 +54,8 @@ public interface RevisionApi {
   void publish() throws RestApiException;
 
   ChangeApi cherryPick(CherryPickInput in) throws RestApiException;
+
+  CherryPickChangeInfo cherryPickAsInfo(CherryPickInput in) throws RestApiException;
 
   ChangeApi rebase() throws RestApiException;
 
@@ -125,6 +129,8 @@ public interface RevisionApi {
 
   SubmitType testSubmitType(TestSubmitRuleInput in) throws RestApiException;
 
+  List<TestSubmitRuleInfo> testSubmitRule(TestSubmitRuleInput in) throws RestApiException;
+
   MergeListRequest getMergeList() throws RestApiException;
 
   abstract class MergeListRequest {
@@ -186,6 +192,11 @@ public interface RevisionApi {
 
     @Override
     public ChangeApi cherryPick(CherryPickInput in) throws RestApiException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public CherryPickChangeInfo cherryPickAsInfo(CherryPickInput in) throws RestApiException {
       throw new NotImplementedException();
     }
 
@@ -346,6 +357,11 @@ public interface RevisionApi {
 
     @Override
     public SubmitType testSubmitType(TestSubmitRuleInput in) throws RestApiException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public List<TestSubmitRuleInfo> testSubmitRule(TestSubmitRuleInput in) throws RestApiException {
       throw new NotImplementedException();
     }
 

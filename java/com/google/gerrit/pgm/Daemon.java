@@ -14,9 +14,9 @@
 
 package com.google.gerrit.pgm;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.gerrit.server.schema.DataSourceProvider.Context.MULTI_USER;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
@@ -65,6 +65,7 @@ import com.google.gerrit.server.config.AuthConfig;
 import com.google.gerrit.server.config.AuthConfigModule;
 import com.google.gerrit.server.config.CanonicalWebUrlModule;
 import com.google.gerrit.server.config.CanonicalWebUrlProvider;
+import com.google.gerrit.server.config.DefaultUrlFormatter;
 import com.google.gerrit.server.config.DownloadConfig;
 import com.google.gerrit.server.config.GerritGlobalModule;
 import com.google.gerrit.server.config.GerritInstanceNameModule;
@@ -80,6 +81,7 @@ import com.google.gerrit.server.git.WorkQueue;
 import com.google.gerrit.server.group.PeriodicGroupIndexer;
 import com.google.gerrit.server.index.IndexModule;
 import com.google.gerrit.server.index.IndexModule.IndexType;
+import com.google.gerrit.server.index.OnlineUpgrader;
 import com.google.gerrit.server.index.VersionManager;
 import com.google.gerrit.server.mail.SignedTokenEmailTokenVerifier;
 import com.google.gerrit.server.mail.receive.MailReceiver;
@@ -198,6 +200,7 @@ public class Daemon extends SiteProgram {
   private AbstractModule luceneModule;
   private Module emailModule;
   private Module testSysModule;
+  private Module auditEventModule;
 
   private Runnable serverStarted;
   private IndexType indexType;
@@ -319,6 +322,11 @@ public class Daemon extends SiteProgram {
   }
 
   @VisibleForTesting
+  public void setAuditEventModuleForTesting(Module module) {
+    auditEventModule = module;
+  }
+
+  @VisibleForTesting
   public void setLuceneModule(LuceneIndexModule m) {
     luceneModule = m;
     inMemoryTest = true;
@@ -394,19 +402,6 @@ public class Daemon extends SiteProgram {
     modules.add(new DropWizardMetricMaker.RestModule());
     modules.add(new LogFileCompressor.Module());
 
-    // Plugin module needs to be inserted *before* the index module.
-    // There is the concept of LifecycleModule, in Gerrit's own extension
-    // to Guice, which has these:
-    //  listener().to(SomeClassImplementingLifecycleListener.class);
-    // and the start() methods of each such listener are executed in the
-    // order they are declared.
-    // Makes sure that PluginLoader.start() is executed before the
-    // LuceneIndexModule.start() so that plugins get loaded and the respective
-    // Guice modules installed so that the on-line reindexing will happen
-    // with the proper classes (e.g. group backends, custom Prolog
-    // predicates) and the associated rules ready to be evaluated.
-    modules.add(new PluginModule());
-
     // Index module shutdown must happen before work queue shutdown, otherwise
     // work queue can get stuck waiting on index futures that will never return.
     modules.add(createIndexModule());
@@ -424,7 +419,6 @@ public class Daemon extends SiteProgram {
     modules.add(cfgInjector.getInstance(GerritGlobalModule.class));
     modules.add(new GerritApiModule());
     modules.add(new PluginApiModule());
-    modules.add(new AuditModule());
 
     modules.add(new SearchingChangeCacheImpl.Module(slave));
     modules.add(new InternalAccountDirectory.Module());
@@ -437,7 +431,18 @@ public class Daemon extends SiteProgram {
     } else {
       modules.add(new SmtpEmailSender.Module());
     }
+    if (auditEventModule != null) {
+      modules.add(auditEventModule);
+    } else {
+      modules.add(new AuditModule());
+    }
     modules.add(new SignedTokenEmailTokenVerifier.Module());
+    modules.add(new PluginModule());
+    if (VersionManager.getOnlineUpgrade(config)
+        // Schema upgrade is handled by OnlineNoteDbMigrator in this case.
+        && !migrateToNoteDb()) {
+      modules.add(new OnlineUpgrader.Module());
+    }
     modules.add(new RestApiModule());
     modules.add(new GpgModule(config));
     modules.add(new StartupChecks.Module());
@@ -459,6 +464,7 @@ public class Daemon extends SiteProgram {
             }
           });
     }
+    modules.add(new DefaultUrlFormatter.Module());
     if (sshd) {
       modules.add(SshKeyCacheImpl.module());
     } else {
@@ -498,26 +504,18 @@ public class Daemon extends SiteProgram {
   }
 
   private boolean migrateToNoteDb() {
-    return migrateToNoteDb || NoteDbMigrator.getAutoMigrate(checkNotNull(config));
+    return migrateToNoteDb || NoteDbMigrator.getAutoMigrate(requireNonNull(config));
   }
 
   private Module createIndexModule() {
     if (luceneModule != null) {
       return luceneModule;
     }
-    boolean onlineUpgrade =
-        VersionManager.getOnlineUpgrade(config)
-            // Schema upgrade is handled by OnlineNoteDbMigrator in this case.
-            && !migrateToNoteDb();
     switch (indexType) {
       case LUCENE:
-        return onlineUpgrade
-            ? LuceneIndexModule.latestVersionWithOnlineUpgrade(slave)
-            : LuceneIndexModule.latestVersionWithoutOnlineUpgrade(slave);
+        return LuceneIndexModule.latestVersion(slave);
       case ELASTICSEARCH:
-        return onlineUpgrade
-            ? ElasticIndexModule.latestVersionWithOnlineUpgrade(slave)
-            : ElasticIndexModule.latestVersionWithoutOnlineUpgrade(slave);
+        return ElasticIndexModule.latestVersion(slave);
       default:
         throw new IllegalStateException("unsupported index.type = " + indexType);
     }
@@ -600,7 +598,10 @@ public class Daemon extends SiteProgram {
     modules.add(sysInjector.getInstance(GetUserFilter.Module.class));
 
     // StaticModule contains a "/*" wildcard, place it last.
-    modules.add(sysInjector.getInstance(StaticModule.class));
+    GerritOptions opts = sysInjector.getInstance(GerritOptions.class);
+    if (opts.enableMasterFeatures()) {
+      modules.add(sysInjector.getInstance(StaticModule.class));
+    }
 
     return sysInjector.createChildInjector(modules);
   }

@@ -30,10 +30,11 @@ acceptance_tests(
 
 java_library(
     name = "submit_util",
-    testonly = 1,
+    testonly = True,
     srcs = SUBMIT_UTIL_SRCS,
     deps = [
         "//java/com/google/gerrit/acceptance:lib",
         "//java/com/google/gerrit/server/restapi",
+        "//java/com/google/gerrit/server/util/time",
     ],
 )

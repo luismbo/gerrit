@@ -68,9 +68,7 @@ import com.google.gerrit.acceptance.NoHttpd;
 import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.TestProjectInput;
 import com.google.gerrit.acceptance.testsuite.account.AccountOperations;
-import com.google.gerrit.acceptance.testsuite.account.TestAccount;
 import com.google.gerrit.common.FooterConstants;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.common.data.LabelFunction;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.Permission;
@@ -147,6 +145,7 @@ import com.google.gerrit.server.restapi.change.PostReview;
 import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.server.update.BatchUpdateOp;
 import com.google.gerrit.server.update.ChangeContext;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gerrit.testing.FakeEmailSender.Message;
 import com.google.gerrit.testing.TestTimeUtil;
 import com.google.inject.Inject;
@@ -410,7 +409,7 @@ public class ChangeIT extends AbstractDaemonTest {
 
     setApiUser(user);
     exception.expect(AuthException.class);
-    exception.expectMessage("not allowed to set work in progress");
+    exception.expectMessage("not allowed to toggle work in progress");
     gApi.changes().id(changeId).setWorkInProgress();
   }
 
@@ -456,7 +455,7 @@ public class ChangeIT extends AbstractDaemonTest {
 
     setApiUser(user);
     exception.expect(AuthException.class);
-    exception.expectMessage("not allowed to set ready for review");
+    exception.expectMessage("not allowed to toggle work in progress");
     gApi.changes().id(changeId).setReadyForReview();
   }
 
@@ -651,7 +650,6 @@ public class ChangeIT extends AbstractDaemonTest {
   @Test
   public void reviewAndMoveToWorkInProgress() throws Exception {
     PushOneCommit.Result r = createChange();
-    r.assertOkStatus();
     assertThat(r.getChange().change().isWorkInProgress()).isFalse();
 
     ReviewInput in = ReviewInput.noScore().setWorkInProgress(true);
@@ -665,7 +663,6 @@ public class ChangeIT extends AbstractDaemonTest {
   @Test
   public void reviewAndSetWorkInProgressAndAddReviewerAndVote() throws Exception {
     PushOneCommit.Result r = createChange();
-    r.assertOkStatus();
     assertThat(r.getChange().change().isWorkInProgress()).isFalse();
 
     ReviewInput in =
@@ -682,7 +679,6 @@ public class ChangeIT extends AbstractDaemonTest {
   @Test
   public void reviewWithWorkInProgressAndReadyReturnsError() throws Exception {
     PushOneCommit.Result r = createChange();
-    r.assertOkStatus();
     ReviewInput in = ReviewInput.noScore();
     in.ready = true;
     in.workInProgress = true;
@@ -691,13 +687,53 @@ public class ChangeIT extends AbstractDaemonTest {
   }
 
   @Test
+  @TestProjectInput(cloneAs = "user")
+  public void reviewWithWorkInProgressChangeOwner() throws Exception {
+    PushOneCommit push = pushFactory.create(db, user.getIdent(), testRepo);
+    PushOneCommit.Result r = push.to("refs/for/master");
+    r.assertOkStatus();
+    assertThat(r.getChange().change().getOwner()).isEqualTo(user.id);
+
+    setApiUser(user);
+    ReviewInput in = ReviewInput.noScore().setWorkInProgress(true);
+    gApi.changes().id(r.getChangeId()).current().review(in);
+    ChangeInfo info = gApi.changes().id(r.getChangeId()).get();
+    assertThat(info.workInProgress).isTrue();
+  }
+
+  @Test
+  @TestProjectInput(cloneAs = "user")
+  public void reviewWithWithWorkInProgressAdmin() throws Exception {
+    PushOneCommit push = pushFactory.create(db, user.getIdent(), testRepo);
+    PushOneCommit.Result r = push.to("refs/for/master");
+    r.assertOkStatus();
+    assertThat(r.getChange().change().getOwner()).isEqualTo(user.id);
+
+    setApiUser(admin);
+    ReviewInput in = ReviewInput.noScore().setWorkInProgress(true);
+    gApi.changes().id(r.getChangeId()).current().review(in);
+    ChangeInfo info = gApi.changes().id(r.getChangeId()).get();
+    assertThat(info.workInProgress).isTrue();
+  }
+
+  @Test
   public void reviewWithWorkInProgressByNonOwnerReturnsError() throws Exception {
     PushOneCommit.Result r = createChange();
-    r.assertOkStatus();
     ReviewInput in = ReviewInput.noScore().setWorkInProgress(true);
     setApiUser(user);
-    ReviewResult result = gApi.changes().id(r.getChangeId()).revision("current").review(in);
-    assertThat(result.error).isEqualTo(PostReview.ERROR_ONLY_OWNER_CAN_MODIFY_WORK_IN_PROGRESS);
+    exception.expect(AuthException.class);
+    exception.expectMessage("not allowed to toggle work in progress");
+    gApi.changes().id(r.getChangeId()).current().review(in);
+  }
+
+  @Test
+  public void reviewWithReadyByNonOwnerReturnsError() throws Exception {
+    PushOneCommit.Result r = createChange();
+    ReviewInput in = ReviewInput.noScore().setReady(true);
+    setApiUser(user);
+    exception.expect(AuthException.class);
+    exception.expectMessage("not allowed to toggle work in progress");
+    gApi.changes().id(r.getChangeId()).current().review(in);
   }
 
   @Test
@@ -1090,6 +1126,7 @@ public class ChangeIT extends AbstractDaemonTest {
 
       String ref = new Change.Id(id).toRefPrefix() + "1";
       eventRecorder.assertRefUpdatedEvents(projectName.get(), ref, null, commit, commit, null);
+      eventRecorder.assertChangeDeletedEvents(changeId, deleteAs.email);
     } finally {
       removePermission(project, "refs/*", Permission.DELETE_OWN_CHANGES);
       removePermission(project, "refs/*", Permission.DELETE_CHANGES);
@@ -1399,8 +1436,9 @@ public class ChangeIT extends AbstractDaemonTest {
     List<Message> messages = sender.getMessages();
     assertThat(messages).hasSize(1);
     Message m = messages.get(0);
+    assertThat(m.from().getName()).isEqualTo("Administrator (Code Review)");
     assertThat(m.rcpt()).containsExactly(user.emailAddress);
-    assertThat(m.body()).contains(admin.fullName + " has uploaded this change for review");
+    assertThat(m.body()).contains("I'd like you to do a code review");
     assertThat(m.body()).contains("Change subject: " + PushOneCommit.SUBJECT + "\n");
     assertMailReplyTo(m, admin.email);
   }
@@ -1644,6 +1682,29 @@ public class ChangeIT extends AbstractDaemonTest {
   }
 
   @Test
+  public void listReviewers() throws Exception {
+    PushOneCommit.Result r = createChange();
+    AddReviewerInput in = new AddReviewerInput();
+    in.reviewer = user.email;
+    gApi.changes().id(r.getChangeId()).addReviewer(in);
+    assertThat(gApi.changes().id(r.getChangeId()).reviewers()).hasSize(1);
+
+    String username1 = name("user1");
+    String email1 = username1 + "@example.com";
+    accountOperations
+        .newAccount()
+        .username(username1)
+        .preferredEmail(email1)
+        .fullname("User 1")
+        .create();
+    in.reviewer = email1;
+    in.state = ReviewerState.CC;
+    gApi.changes().id(r.getChangeId()).addReviewer(in);
+    assertThat(gApi.changes().id(r.getChangeId()).reviewers().stream().map(a -> a.username))
+        .containsExactly(user.username, username1);
+  }
+
+  @Test
   public void notificationsForAddedWorkInProgressReviewers() throws Exception {
     AddReviewerInput in = new AddReviewerInput();
     in.reviewer = user.email;
@@ -1688,7 +1749,7 @@ public class ChangeIT extends AbstractDaemonTest {
     // create a group named "ab" with one user: testUser
     String email = "abcd@test.com";
     String fullname = "abcd";
-    TestAccount testUser =
+    Account.Id accountIdOfTestUser =
         accountOperations
             .newAccount()
             .username("abcd")
@@ -1721,7 +1782,7 @@ public class ChangeIT extends AbstractDaemonTest {
     Collection<AccountInfo> reviewers = c.reviewers.get(REVIEWER);
     assertThat(reviewers).isNotNull();
     assertThat(reviewers).hasSize(1);
-    assertThat(reviewers.iterator().next()._accountId).isEqualTo(testUser.accountId().get());
+    assertThat(reviewers.iterator().next()._accountId).isEqualTo(accountIdOfTestUser.get());
 
     // Ensure ETag and lastUpdatedOn are updated.
     rsrc = parseResource(r);
@@ -1748,7 +1809,7 @@ public class ChangeIT extends AbstractDaemonTest {
 
     String myGroupUserEmail = "lee@test.com";
     String myGroupUserFullname = "lee";
-    TestAccount myGroupUser =
+    Account.Id accountIdOfGroupUser =
         accountOperations
             .newAccount()
             .username("lee")
@@ -1785,7 +1846,7 @@ public class ChangeIT extends AbstractDaemonTest {
     Collection<AccountInfo> reviewers = c.reviewers.get(REVIEWER);
     assertThat(reviewers).isNotNull();
     assertThat(reviewers).hasSize(1);
-    assertThat(reviewers.iterator().next()._accountId).isEqualTo(myGroupUser.accountId().get());
+    assertThat(reviewers.iterator().next()._accountId).isEqualTo(accountIdOfGroupUser.get());
 
     // Ensure ETag and lastUpdatedOn are updated.
     rsrc = parseResource(r);
@@ -2153,6 +2214,58 @@ public class ChangeIT extends AbstractDaemonTest {
   }
 
   @Test
+  public void removeReviewerSelfFromMergedChangeNotPermitted() throws Exception {
+    PushOneCommit.Result r = createChange();
+    String changeId = r.getChangeId();
+
+    setApiUser(user);
+    recommend(changeId);
+
+    setApiUser(admin);
+    approve(changeId);
+    gApi.changes().id(changeId).revision(r.getCommit().name()).submit();
+
+    setApiUser(user);
+    exception.expect(AuthException.class);
+    exception.expectMessage("remove reviewer not permitted");
+    gApi.changes().id(r.getChangeId()).reviewer("self").remove();
+  }
+
+  @Test
+  public void removeReviewerSelfFromAbandonedChangePermitted() throws Exception {
+    PushOneCommit.Result r = createChange();
+    String changeId = r.getChangeId();
+
+    setApiUser(user);
+    recommend(changeId);
+
+    setApiUser(admin);
+    gApi.changes().id(changeId).abandon();
+
+    setApiUser(user);
+    gApi.changes().id(r.getChangeId()).reviewer("self").remove();
+    eventRecorder.assertReviewerDeletedEvents(changeId, user.email);
+  }
+
+  @Test
+  public void removeOtherReviewerFromAbandonedChangeNotPermitted() throws Exception {
+    PushOneCommit.Result r = createChange();
+    String changeId = r.getChangeId();
+
+    setApiUser(user);
+    recommend(changeId);
+
+    setApiUser(admin);
+    approve(changeId);
+    gApi.changes().id(changeId).abandon();
+
+    setApiUser(user);
+    exception.expect(AuthException.class);
+    exception.expectMessage("remove reviewer not permitted");
+    gApi.changes().id(r.getChangeId()).reviewer(admin.getId().toString()).remove();
+  }
+
+  @Test
   public void deleteVote() throws Exception {
     PushOneCommit.Result r = createChange();
     gApi.changes().id(r.getChangeId()).revision(r.getCommit().name()).review(ReviewInput.approve());
@@ -2215,13 +2328,12 @@ public class ChangeIT extends AbstractDaemonTest {
 
     // notify unrelated account as TO
     String email = "user2@example.com";
-    TestAccount user2 =
-        accountOperations
-            .newAccount()
-            .username("user2")
-            .preferredEmail(email)
-            .fullname("User2")
-            .create();
+    accountOperations
+        .newAccount()
+        .username("user2")
+        .preferredEmail(email)
+        .fullname("User2")
+        .create();
     setApiUser(user);
     recommend(r.getChangeId());
     setApiUser(admin);
@@ -2229,7 +2341,7 @@ public class ChangeIT extends AbstractDaemonTest {
     in.notifyDetails = new HashMap<>();
     in.notifyDetails.put(RecipientType.TO, new NotifyInfo(ImmutableList.of(email)));
     gApi.changes().id(r.getChangeId()).reviewer(user.getId().toString()).deleteVote(in);
-    assertNotifyTo(user2);
+    assertNotifyTo(email, "User2");
 
     // notify unrelated account as CC
     setApiUser(user);
@@ -2239,7 +2351,7 @@ public class ChangeIT extends AbstractDaemonTest {
     in.notifyDetails = new HashMap<>();
     in.notifyDetails.put(RecipientType.CC, new NotifyInfo(ImmutableList.of(email)));
     gApi.changes().id(r.getChangeId()).reviewer(user.getId().toString()).deleteVote(in);
-    assertNotifyCc(user2);
+    assertNotifyCc(email, "User2");
 
     // notify unrelated account as BCC
     setApiUser(user);
@@ -2249,7 +2361,7 @@ public class ChangeIT extends AbstractDaemonTest {
     in.notifyDetails = new HashMap<>();
     in.notifyDetails.put(RecipientType.BCC, new NotifyInfo(ImmutableList.of(email)));
     gApi.changes().id(r.getChangeId()).reviewer(user.getId().toString()).deleteVote(in);
-    assertNotifyBcc(user2);
+    assertNotifyBcc(email, "User2");
   }
 
   @Test
@@ -2586,7 +2698,7 @@ public class ChangeIT extends AbstractDaemonTest {
     List<String> expectedFooters =
         Arrays.asList(
             "Change-Id: " + r2.getChangeId(),
-            "Reviewed-on: " + canonicalWebUrl.get() + r2.getChange().getId(),
+            "Reviewed-on: " + canonicalWebUrl.get() + "c/" + r2.getChange().getId(),
             "Reviewed-by: Administrator <admin@example.com>",
             "Custom2: Administrator <admin@example.com>",
             "Tested-by: Administrator <admin@example.com>");
@@ -2628,7 +2740,7 @@ public class ChangeIT extends AbstractDaemonTest {
     List<String> expectedFooters =
         Arrays.asList(
             "Change-Id: " + change.getChangeId(),
-            "Reviewed-on: " + canonicalWebUrl.get() + change.getChange().getId(),
+            "Reviewed-on: " + canonicalWebUrl.get() + "c/" + change.getChange().getId(),
             "Custom: refs/heads/master");
     assertThat(footers).containsExactlyElementsIn(expectedFooters);
   }

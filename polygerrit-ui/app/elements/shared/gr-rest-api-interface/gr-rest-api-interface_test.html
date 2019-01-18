@@ -38,11 +38,15 @@ limitations under the License.
   suite('gr-rest-api-interface tests', () => {
     let element;
     let sandbox;
+    let ctr = 0;
 
     setup(() => {
+      // Modify CANONICAL_PATH to effectively reset cache.
+      ctr += 1;
+      window.CANONICAL_PATH = `test${ctr}`;
+
       sandbox = sinon.sandbox.create();
       element = fixture('basic');
-      element._cache = {};
       element._projectLookup = {};
       const testJSON = ')]}\'\n{"hello": "bonjour"}';
       sandbox.stub(window, 'fetch').returns(Promise.resolve({
@@ -85,11 +89,23 @@ limitations under the License.
 
     test('cached promise', done => {
       const promise = Promise.reject('foo');
-      element._cache['/foo'] = promise;
+      element._cache.set('/foo', promise);
       element._fetchSharedCacheURL({url: '/foo'}).catch(p => {
         assert.equal(p, 'foo');
         done();
       });
+    });
+
+    test('cache invalidation', () => {
+      element._cache.set('/foo/bar', 1);
+      element._cache.set('/bar', 2);
+      element._sharedFetchPromises['/foo/bar'] = 3;
+      element._sharedFetchPromises['/bar'] = 4;
+      element._invalidateSharedFetchPromisesPrefix('/foo/');
+      assert.isFalse(element._cache.has('/foo/bar'));
+      assert.isTrue(element._cache.has('/bar'));
+      assert.isUndefined(element._sharedFetchPromises['/foo/bar']);
+      assert.strictEqual(4, element._sharedFetchPromises['/bar']);
     });
 
     test('params are properly encoded', () => {
@@ -98,19 +114,20 @@ limitations under the License.
         gr: 'guten tag',
         noval: null,
       });
-      assert.equal(url, '/path/?sp=hola&gr=guten%20tag&noval');
+      assert.equal(url,
+          window.CANONICAL_PATH + '/path/?sp=hola&gr=guten%20tag&noval');
 
       url = element._urlWithParams('/path/', {
         sp: 'hola',
         en: ['hey', 'hi'],
       });
-      assert.equal(url, '/path/?sp=hola&en=hey&en=hi');
+      assert.equal(url, window.CANONICAL_PATH + '/path/?sp=hola&en=hey&en=hi');
 
       // Order must be maintained with array params.
       url = element._urlWithParams('/path/', {
         l: ['c', 'b', 'a'],
       });
-      assert.equal(url, '/path/?l=c&l=b&l=a');
+      assert.equal(url, window.CANONICAL_PATH + '/path/?l=c&l=b&l=a');
     });
 
     test('request callbacks can be canceled', done => {
@@ -441,7 +458,7 @@ limitations under the License.
           Promise.reject({message: 'Failed to fetch'}));
       window.fetch.onSecondCall().returns(Promise.resolve(fakeAuthResponse));
       // Emulate logged in.
-      element._cache['/accounts/self/detail'] = {};
+      element._cache.set('/accounts/self/detail', {});
       const serverErrorStub = sandbox.stub();
       element.addEventListener('server-error', serverErrorStub);
       const authErrorStub = sandbox.stub();
@@ -450,7 +467,7 @@ limitations under the License.
         flush(() => {
           assert.isTrue(authErrorStub.called);
           assert.isFalse(serverErrorStub.called);
-          assert.isNull(element._cache['/accounts/self/detail']);
+          assert.isFalse(element._cache.has('/accounts/self/detail'));
           done();
         });
       });
@@ -471,7 +488,7 @@ limitations under the License.
       ];
       window.fetch.restore();
       sandbox.stub(window, 'fetch', url => {
-        if (url === '/accounts/self/detail') {
+        if (url === window.CANONICAL_PATH + '/accounts/self/detail') {
           return Promise.resolve(responses.shift());
         }
       });
@@ -487,7 +504,7 @@ limitations under the License.
 
     test('checkCredentials promise rejection', () => {
       window.fetch.restore();
-      element._cache['/accounts/self/detail'] = true;
+      element._cache.set('/accounts/self/detail', true);
       sandbox.spy(element, 'checkCredentials');
       sandbox.stub(window, 'fetch', url => {
         return Promise.reject({message: 'Failed to fetch'});
@@ -515,10 +532,10 @@ limitations under the License.
     test('saveDiffPreferences invalidates cache line', () => {
       const cacheKey = '/accounts/self/preferences.diff';
       sandbox.stub(element, '_send');
-      element._cache[cacheKey] = {tab_size: 4};
+      element._cache.set(cacheKey, {tab_size: 4});
       element.saveDiffPreferences({tab_size: 8});
       assert.isTrue(element._send.called);
-      assert.notOk(element._cache[cacheKey]);
+      assert.isFalse(element._cache.has(cacheKey));
     });
 
     test('getAccount when resp is null does not add anything to the cache',
@@ -529,11 +546,11 @@ limitations under the License.
 
           element.getAccount().then(() => {
             assert.isTrue(element._fetchSharedCacheURL.called);
-            assert.isNull(element._cache[cacheKey]);
+            assert.isFalse(element._cache.has(cacheKey));
             done();
           });
 
-          element._cache[cacheKey] = 'fake cache';
+          element._cache.set(cacheKey, 'fake cache');
           stub.lastCall.args[0].errFn();
         });
 
@@ -545,10 +562,10 @@ limitations under the License.
 
           element.getAccount().then(() => {
             assert.isTrue(element._fetchSharedCacheURL.called);
-            assert.isNull(element._cache[cacheKey]);
+            assert.isFalse(element._cache.has(cacheKey));
             done();
           });
-          element._cache[cacheKey] = 'fake cache';
+          element._cache.set(cacheKey, 'fake cache');
           stub.lastCall.args[0].errFn({status: 403});
         });
 
@@ -559,10 +576,10 @@ limitations under the License.
 
       element.getAccount().then(response => {
         assert.isTrue(element._fetchSharedCacheURL.called);
-        assert.equal(element._cache[cacheKey], 'fake cache');
+        assert.equal(element._cache.get(cacheKey), 'fake cache');
         done();
       });
-      element._cache[cacheKey] = 'fake cache';
+      element._cache.set(cacheKey, 'fake cache');
 
       stub.lastCall.args[0].errFn({});
     });
@@ -717,18 +734,9 @@ limitations under the License.
       assert.deepEqual(element._send.lastCall.args[0].body, {token: 'foo'});
     });
 
-    test('GrReviewerUpdatesParser.parse is used', () => {
-      sandbox.stub(GrReviewerUpdatesParser, 'parse').returns(
-          Promise.resolve('foo'));
-      return element.getChangeDetail(42).then(result => {
-        assert.isTrue(GrReviewerUpdatesParser.parse.calledOnce);
-        assert.equal(result, 'foo');
-      });
-    });
-
     test('setAccountStatus', () => {
       sandbox.stub(element, '_send').returns(Promise.resolve('OOO'));
-      element._cache['/accounts/self/detail'] = {};
+      element._cache.set('/accounts/self/detail', {});
       return element.setAccountStatus('OOO').then(() => {
         assert.isTrue(element._send.calledOnce);
         assert.equal(element._send.lastCall.args[0].method, 'PUT');
@@ -736,7 +744,7 @@ limitations under the License.
             '/accounts/self/status');
         assert.deepEqual(element._send.lastCall.args[0].body,
             {status: 'OOO'});
-        assert.deepEqual(element._cache['/accounts/self/detail'],
+        assert.deepEqual(element._cache.get('/accounts/self/detail'),
             {status: 'OOO'});
       });
     });
@@ -830,7 +838,7 @@ limitations under the License.
           Promise.resolve([change_num, file_name, file_contents]));
       sandbox.stub(element, 'getResponseObject')
           .returns(Promise.resolve([change_num, file_name, file_contents]));
-      element._cache['/changes/' + change_num + '/edit/' + file_name] = {};
+      element._cache.set('/changes/' + change_num + '/edit/' + file_name, {});
       return element.saveChangeEdit(change_num, file_name, file_contents)
           .then(() => {
             assert.isTrue(element._send.calledOnce);
@@ -849,7 +857,7 @@ limitations under the License.
           Promise.resolve([change_num, message]));
       sandbox.stub(element, 'getResponseObject')
           .returns(Promise.resolve([change_num, message]));
-      element._cache['/changes/' + change_num + '/message'] = {};
+      element._cache.set('/changes/' + change_num + '/message', {});
       return element.putChangeCommitMessage(change_num, message).then(() => {
         assert.isTrue(element._send.calledOnce);
         assert.equal(element._send.lastCall.args[0].method, 'PUT');
@@ -930,6 +938,31 @@ limitations under the License.
       });
     });
 
+    test('normal use', () => {
+      const defaultQuery = 'state%3Aactive%20OR%20state%3Aread-only';
+
+      assert.equal(element._getReposUrl('test', 25),
+          '/projects/?n=26&S=0&query=test');
+
+      assert.equal(element._getReposUrl(null, 25),
+          `/projects/?n=26&S=0&query=${defaultQuery}`);
+
+      assert.equal(element._getReposUrl('test', 25, 25),
+          '/projects/?n=26&S=25&query=test');
+    });
+
+    test('invalidateReposCache', () => {
+      const url = '/projects/?n=26&S=0&query=test';
+
+      element._cache.set(url, {});
+
+      element.invalidateReposCache('test', 25);
+
+      assert.isUndefined(element._sharedFetchPromises[url]);
+
+      assert.isFalse(element._cache.has(url));
+    });
+
     suite('getRepos', () => {
       const defaultQuery = 'state%3Aactive%20OR%20state%3Aread-only';
 
@@ -994,11 +1027,57 @@ limitations under the License.
       });
     });
 
-    test('getGroups filter regex', () => {
-      sandbox.stub(element, '_fetchSharedCacheURL');
-      element.getGroups('^test.*', 25);
-      assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
-          '/groups/?n=26&S=0&r=%5Etest.*');
+    test('_getGroupsUrl normal use', () => {
+      assert.equal(element._getGroupsUrl('test', 25),
+          '/groups/?n=26&S=0&m=test');
+
+      assert.equal(element._getGroupsUrl(null, 25),
+          '/groups/?n=26&S=0');
+
+      assert.equal(element._getGroupsUrl('test', 25, 25),
+          '/groups/?n=26&S=25&m=test');
+    });
+
+    test('invalidateGroupsCache', () => {
+      const url = '/groups/?n=26&S=0&m=test';
+
+      element._cache.set(url, {});
+
+      element.invalidateGroupsCache('test', 25);
+
+      assert.isUndefined(element._sharedFetchPromises[url]);
+
+      assert.isFalse(element._cache.has(url));
+    });
+
+    suite('getGroups', () => {
+      setup(() => {
+        sandbox.stub(element, '_fetchSharedCacheURL');
+      });
+
+      test('normal use', () => {
+        element.getGroups('test', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/groups/?n=26&S=0&m=test');
+
+        element.getGroups(null, 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/groups/?n=26&S=0');
+
+        element.getGroups('test', 25, 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/groups/?n=26&S=25&m=test');
+      });
+
+      test('regex', () => {
+        element.getGroups('^test.*', 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/groups/?n=26&S=0&r=%5Etest.*');
+
+        element.getGroups('^test.*', 25, 25);
+        assert.equal(element._fetchSharedCacheURL.lastCall.args[0].url,
+            '/groups/?n=26&S=25&r=%5Etest.*');
+      });
     });
 
     test('gerrit auth is used', () => {
@@ -1026,12 +1105,55 @@ limitations under the License.
       });
     });
 
-    suite('_getChangeDetail', () => {
+    suite('getChangeDetail', () => {
+      suite('change detail options', () => {
+        let toHexStub;
+
+        setup(() => {
+          toHexStub = sandbox.stub(element, 'listChangesOptionsToHex',
+              options => 'deadbeef');
+          sandbox.stub(element, '_getChangeDetail',
+              async (changeNum, options) => ({changeNum, options}));
+        });
+
+        test('signed pushes disabled', async () => {
+          const {PUSH_CERTIFICATES} = element.ListChangesOption;
+          sandbox.stub(element, 'getConfig', async () => ({}));
+          const {changeNum, options} = await element.getChangeDetail(123);
+          assert.strictEqual(123, changeNum);
+          assert.strictEqual('deadbeef', options);
+          assert.isTrue(toHexStub.calledOnce);
+          assert.isFalse(toHexStub.lastCall.args.includes(PUSH_CERTIFICATES));
+        });
+
+        test('signed pushes enabled', async () => {
+          const {PUSH_CERTIFICATES} = element.ListChangesOption;
+          sandbox.stub(element, 'getConfig', async () => {
+            return {receive: {enable_signed_push: true}};
+          });
+          const {changeNum, options} = await element.getChangeDetail(123);
+          assert.strictEqual(123, changeNum);
+          assert.strictEqual('deadbeef', options);
+          assert.isTrue(toHexStub.calledOnce);
+          assert.isTrue(toHexStub.lastCall.args.includes(PUSH_CERTIFICATES));
+        });
+      });
+
+      test('GrReviewerUpdatesParser.parse is used', () => {
+        sandbox.stub(GrReviewerUpdatesParser, 'parse').returns(
+            Promise.resolve('foo'));
+        return element.getChangeDetail(42).then(result => {
+          assert.isTrue(GrReviewerUpdatesParser.parse.calledOnce);
+          assert.equal(result, 'foo');
+        });
+      });
+
       test('_getChangeDetail passes params to ETags decorator', () => {
         const changeNum = 4321;
         element._projectLookup[changeNum] = 'test';
         const params = {foo: 'bar'};
-        const expectedUrl = '/changes/test~4321/detail?foo=bar';
+        const expectedUrl =
+            window.CANONICAL_PATH + '/changes/test~4321/detail?foo=bar';
         sandbox.stub(element._etags, 'getOptions');
         sandbox.stub(element._etags, 'collect');
         return element._getChangeDetail(changeNum, params).then(() => {
@@ -1439,6 +1561,29 @@ limitations under the License.
       element._logCall({url: 'url', anonymizedUrl: 'not url'}, 100, 200);
       flushAsynchronousOperations();
       assert.isTrue(handler.calledOnce);
+    });
+
+    test('saveChangeStarred', async () => {
+      sandbox.stub(element, 'getFromProjectLookup')
+          .returns(Promise.resolve('test'));
+      const sendStub =
+          sandbox.stub(element, '_send').returns(Promise.resolve());
+
+      await element.saveChangeStarred(123, true);
+      assert.isTrue(sendStub.calledOnce);
+      assert.deepEqual(sendStub.lastCall.args[0], {
+        method: 'PUT',
+        url: '/accounts/self/starred.changes/test~123',
+        anonymizedUrl: '/accounts/self/starred.changes/*',
+      });
+
+      await element.saveChangeStarred(456, false);
+      assert.isTrue(sendStub.calledTwice);
+      assert.deepEqual(sendStub.lastCall.args[0], {
+        method: 'DELETE',
+        url: '/accounts/self/starred.changes/test~456',
+        anonymizedUrl: '/accounts/self/starred.changes/*',
+      });
     });
   });
 </script>

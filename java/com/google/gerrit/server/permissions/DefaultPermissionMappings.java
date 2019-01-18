@@ -14,8 +14,8 @@
 
 package com.google.gerrit.server.permissions;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableMap;
@@ -50,6 +50,7 @@ public class DefaultPermissionMappings {
           .put(GlobalPermission.KILL_TASK, GlobalCapability.KILL_TASK)
           .put(GlobalPermission.MAINTAIN_SERVER, GlobalCapability.MAINTAIN_SERVER)
           .put(GlobalPermission.MODIFY_ACCOUNT, GlobalCapability.MODIFY_ACCOUNT)
+          .put(GlobalPermission.READ_AS, GlobalCapability.READ_AS)
           .put(GlobalPermission.RUN_AS, GlobalCapability.RUN_AS)
           .put(GlobalPermission.RUN_GC, GlobalCapability.RUN_GC)
           .put(GlobalPermission.STREAM_EVENTS, GlobalCapability.STREAM_EVENTS)
@@ -109,7 +110,7 @@ public class DefaultPermissionMappings {
   }
 
   public static String globalPermissionName(GlobalPermission globalPermission) {
-    return checkNotNull(CAPABILITIES.get(globalPermission));
+    return requireNonNull(CAPABILITIES.get(globalPermission));
   }
 
   public static Optional<GlobalPermission> globalPermission(String capabilityName) {

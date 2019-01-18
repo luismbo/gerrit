@@ -14,7 +14,7 @@
 
 package com.google.gerrit.reviewdb.server;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.AccountGroup;
@@ -49,7 +49,7 @@ public class ReviewDbWrapper implements ReviewDb {
   private boolean inTransaction;
 
   protected ReviewDbWrapper(ReviewDb delegate) {
-    this.delegate = checkNotNull(delegate);
+    this.delegate = requireNonNull(delegate);
   }
 
   public ReviewDb unsafeGetDelegate() {
@@ -110,11 +110,6 @@ public class ReviewDbWrapper implements ReviewDb {
   }
 
   @Override
-  public SystemConfigAccess systemConfig() {
-    return delegate.systemConfig();
-  }
-
-  @Override
   public ChangeAccess changes() {
     return delegate.changes();
   }
@@ -161,7 +156,7 @@ public class ReviewDbWrapper implements ReviewDb {
     protected final ChangeAccess delegate;
 
     protected ChangeAccessWrapper(ChangeAccess delegate) {
-      this.delegate = checkNotNull(delegate);
+      this.delegate = requireNonNull(delegate);
     }
 
     @Override
@@ -687,7 +682,7 @@ public class ReviewDbWrapper implements ReviewDb {
     protected final AccountGroupAccess delegate;
 
     protected AccountGroupAccessWrapper(AccountGroupAccess delegate) {
-      this.delegate = checkNotNull(delegate);
+      this.delegate = requireNonNull(delegate);
     }
 
     @Override
@@ -783,7 +778,7 @@ public class ReviewDbWrapper implements ReviewDb {
     protected final AccountGroupNameAccess delegate;
 
     protected AccountGroupNameAccessWrapper(AccountGroupNameAccess delegate) {
-      this.delegate = checkNotNull(delegate);
+      this.delegate = requireNonNull(delegate);
     }
 
     @Override
@@ -875,7 +870,7 @@ public class ReviewDbWrapper implements ReviewDb {
     protected final AccountGroupMemberAccess delegate;
 
     protected AccountGroupMemberAccessWrapper(AccountGroupMemberAccess delegate) {
-      this.delegate = checkNotNull(delegate);
+      this.delegate = requireNonNull(delegate);
     }
 
     @Override
@@ -973,7 +968,7 @@ public class ReviewDbWrapper implements ReviewDb {
     protected final AccountGroupMemberAuditAccess delegate;
 
     protected AccountGroupMemberAuditAccessWrapper(AccountGroupMemberAuditAccess delegate) {
-      this.delegate = checkNotNull(delegate);
+      this.delegate = requireNonNull(delegate);
     }
 
     @Override
@@ -1073,7 +1068,7 @@ public class ReviewDbWrapper implements ReviewDb {
     protected final AccountGroupByIdAccess delegate;
 
     protected AccountGroupByIdAccessWrapper(AccountGroupByIdAccess delegate) {
-      this.delegate = checkNotNull(delegate);
+      this.delegate = requireNonNull(delegate);
     }
 
     @Override
@@ -1175,7 +1170,7 @@ public class ReviewDbWrapper implements ReviewDb {
     protected final AccountGroupByIdAudAccess delegate;
 
     protected AccountGroupByIdAudAccessWrapper(AccountGroupByIdAudAccess delegate) {
-      this.delegate = checkNotNull(delegate);
+      this.delegate = requireNonNull(delegate);
     }
 
     @Override

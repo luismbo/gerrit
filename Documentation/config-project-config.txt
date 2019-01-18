@@ -148,8 +148,10 @@ The project specific setting in `project.config` may not set a value higher
 than the global limit (if configured). In other words, it is only honored when
 it further reduces the global limit.
 +
-The setting is not inherited from the parent project; it must be explicitly
-set per project.
+When link:config-gerrit.html#receive.inheritProjectMaxObjectSizeLimit[
+`receive.inheritProjectmaxObjectSizeLimit`] is enabled in the global config,
+the value is inherited from the parent project. Otherwise, it is not inherited
+and must be explicitly set per project.
 +
 Default is zero.
 +
@@ -184,9 +186,10 @@ the parent project.
 +
 Controls whether server-side signed push validation is required on the
 project. Only has an effect if signed push validation is enabled on the
-server, and link:#receive.enableSignedPush is set on the project. See
-the link:config-gerrit.html#receive.enableSignedPush[global
-configuration] for details.
+server, and link:#receive.enableSignedPush[`receive.enableSignedPush`] is
+set on the project. See the
+link:config-gerrit.html#receive.enableSignedPush[global configuration]
+for details.
 +
 Default is `INHERIT`, which means that this property is inherited from
 the parent project.

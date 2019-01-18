@@ -14,15 +14,24 @@
 
 package com.google.gerrit.server.git.receive;
 
-import com.google.common.collect.SetMultimap;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.Capable;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
-import com.google.gerrit.reviewdb.client.Account;
+import com.google.gerrit.metrics.Counter0;
+import com.google.gerrit.metrics.Description;
+import com.google.gerrit.metrics.Description.Units;
+import com.google.gerrit.metrics.Field;
+import com.google.gerrit.metrics.Histogram1;
+import com.google.gerrit.metrics.MetricMaker;
+import com.google.gerrit.metrics.Timer1;
+import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.server.IdentifiedUser;
+import com.google.gerrit.server.UsedAt;
 import com.google.gerrit.server.config.ConfigUtil;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.config.ReceiveCommitsExecutor;
@@ -30,7 +39,6 @@ import com.google.gerrit.server.git.DefaultAdvertiseRefsHook;
 import com.google.gerrit.server.git.MultiProgressMonitor;
 import com.google.gerrit.server.git.ProjectRunnable;
 import com.google.gerrit.server.git.TransferConfig;
-import com.google.gerrit.server.notedb.ReviewerStateInternal;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackend.RefFilterOptions;
 import com.google.gerrit.server.permissions.PermissionBackendException;
@@ -82,8 +90,7 @@ public class AsyncReceiveCommits implements PreReceiveHook {
         ProjectState projectState,
         IdentifiedUser user,
         Repository repository,
-        @Nullable MessageSender messageSender,
-        SetMultimap<ReviewerStateInternal, Account.Id> extraReviewers);
+        @Nullable MessageSender messageSender);
   }
 
   public static class Module extends PrivateModule {
@@ -94,6 +101,7 @@ public class AsyncReceiveCommits implements PreReceiveHook {
       // Don't expose the binding for ReceiveCommits.Factory. All callers should
       // be using AsyncReceiveCommits.Factory instead.
       install(new FactoryModuleBuilder().build(ReceiveCommits.Factory.class));
+      install(new FactoryModuleBuilder().build(BranchCommitValidator.Factory.class));
     }
 
     @Provides
@@ -109,14 +117,9 @@ public class AsyncReceiveCommits implements PreReceiveHook {
     final MultiProgressMonitor progress;
 
     private final Collection<ReceiveCommand> commands;
-    private final ReceiveCommits receiveCommits;
 
     private Worker(Collection<ReceiveCommand> commands) {
       this.commands = commands;
-      receiveCommits =
-          factory.create(
-              projectState, user, receivePack, allRefsWatcher, extraReviewers, messageSender);
-      receiveCommits.init();
       progress = new MultiProgressMonitor(new MessageSenderOutputStream(), "Processing changes");
     }
 
@@ -172,7 +175,39 @@ public class AsyncReceiveCommits implements PreReceiveHook {
     }
   }
 
-  private final ReceiveCommits.Factory factory;
+  @Singleton
+  private static class Metrics {
+    private final Histogram1<ResultChangeIds.Key> changes;
+    private final Timer1<String> latencyPerChange;
+    private final Counter0 timeouts;
+
+    @Inject
+    Metrics(MetricMaker metricMaker) {
+      changes =
+          metricMaker.newHistogram(
+              "receivecommits/changes",
+              new Description("number of changes uploaded in a single push.").setCumulative(),
+              Field.ofEnum(
+                  ResultChangeIds.Key.class,
+                  "type",
+                  "type of update (replace, create, autoclose)"));
+      latencyPerChange =
+          metricMaker.newTimer(
+              "receivecommits/latency",
+              new Description("average delay per updated change")
+                  .setUnit(Units.MILLISECONDS)
+                  .setCumulative(),
+              Field.ofString("type", "type of update (create/replace, autoclose)"));
+
+      timeouts =
+          metricMaker.newCounter(
+              "receivecommits/timeout", new Description("rate of push timeouts").setRate());
+    }
+  }
+
+  private final Metrics metrics;
+  private final ReceiveCommits receiveCommits;
+  private final ResultChangeIds resultChangeIds;
   private final PermissionBackend.ForProject perm;
   private final ReceivePack receivePack;
   private final ExecutorService executor;
@@ -183,8 +218,6 @@ public class AsyncReceiveCommits implements PreReceiveHook {
   private final ProjectState projectState;
   private final IdentifiedUser user;
   private final Repository repo;
-  private final MessageSender messageSender;
-  private final SetMultimap<ReviewerStateInternal, Account.Id> extraReviewers;
   private final AllRefsWatcher allRefsWatcher;
 
   @Inject
@@ -198,14 +231,13 @@ public class AsyncReceiveCommits implements PreReceiveHook {
       TransferConfig transferConfig,
       Provider<LazyPostReceiveHookChain> lazyPostReceive,
       ContributorAgreementsChecker contributorAgreements,
+      Metrics metrics,
       @Named(TIMEOUT_NAME) long timeoutMillis,
       @Assisted ProjectState projectState,
       @Assisted IdentifiedUser user,
       @Assisted Repository repo,
-      @Assisted @Nullable MessageSender messageSender,
-      @Assisted SetMultimap<ReviewerStateInternal, Account.Id> extraReviewers)
+      @Assisted @Nullable MessageSender messageSender)
       throws PermissionBackendException {
-    this.factory = factory;
     this.executor = executor;
     this.scopePropagator = scopePropagator;
     this.receiveConfig = receiveConfig;
@@ -214,8 +246,7 @@ public class AsyncReceiveCommits implements PreReceiveHook {
     this.projectState = projectState;
     this.user = user;
     this.repo = repo;
-    this.messageSender = messageSender;
-    this.extraReviewers = extraReviewers;
+    this.metrics = metrics;
 
     Project.NameKey projectName = projectState.getNameKey();
     receivePack = new ReceivePack(repo);
@@ -224,7 +255,7 @@ public class AsyncReceiveCommits implements PreReceiveHook {
     receivePack.setAllowNonFastForwards(true);
     receivePack.setRefLogIdent(user.newRefLogIdent());
     receivePack.setTimeout(transferConfig.getTimeout());
-    receivePack.setMaxObjectSizeLimit(projectState.getEffectiveMaxObjectSizeLimit());
+    receivePack.setMaxObjectSizeLimit(projectState.getEffectiveMaxObjectSizeLimit().value);
     receivePack.setCheckReceivedObjects(projectState.getConfig().getCheckReceivedObjects());
     receivePack.setRefFilter(new ReceiveRefFilter());
     receivePack.setAllowPushOptions(true);
@@ -250,6 +281,12 @@ public class AsyncReceiveCommits implements PreReceiveHook {
     advHooks.add(new ReceiveCommitsAdvertiseRefsHook(queryProvider, projectName));
     advHooks.add(new HackPushNegotiateHook());
     receivePack.setAdvertiseRefsHook(AdvertiseRefsHookChain.newChain(advHooks));
+
+    resultChangeIds = new ResultChangeIds();
+    receiveCommits =
+        factory.create(
+            projectState, user, receivePack, allRefsWatcher, messageSender, resultChangeIds);
+    receiveCommits.init();
   }
 
   /** Determine if the user can upload commits. */
@@ -274,11 +311,19 @@ public class AsyncReceiveCommits implements PreReceiveHook {
 
   @Override
   public void onPreReceive(ReceivePack rp, Collection<ReceiveCommand> commands) {
+    if (commands.stream().anyMatch(c -> c.getResult() != Result.NOT_ATTEMPTED)) {
+      // Stop processing when command was already processed by previously invoked
+      // pre-receive hooks
+      return;
+    }
+
+    long startNanos = System.nanoTime();
     Worker w = new Worker(commands);
     try {
       w.progress.waitFor(
           executor.submit(scopePropagator.wrap(w)), timeoutMillis, TimeUnit.MILLISECONDS);
     } catch (ExecutionException e) {
+      metrics.timeouts.increment();
       logger.atWarning().withCause(e).log(
           "Error in ReceiveCommits while processing changes for project %s",
           projectState.getName());
@@ -293,6 +338,29 @@ public class AsyncReceiveCommits implements PreReceiveHook {
     } finally {
       w.sendMessages();
     }
+
+    long deltaNanos = System.nanoTime() - startNanos;
+    int totalChanges = 0;
+    for (ResultChangeIds.Key key : ResultChangeIds.Key.values()) {
+      List<Change.Id> ids = resultChangeIds.get(key);
+      metrics.changes.record(key, ids.size());
+      totalChanges += ids.size();
+    }
+
+    if (totalChanges > 0) {
+      metrics.latencyPerChange.record(
+          resultChangeIds.get(ResultChangeIds.Key.AUTOCLOSED).isEmpty()
+              ? "CREATE_REPLACE"
+              : ResultChangeIds.Key.AUTOCLOSED.name(),
+          deltaNanos / totalChanges,
+          NANOSECONDS);
+    }
+  }
+
+  /** Returns the Change.Ids that were processed in onPreReceive */
+  @UsedAt(UsedAt.Project.GOOGLE)
+  public ResultChangeIds getResultChangeIds() {
+    return resultChangeIds;
   }
 
   public ReceivePack getReceivePack() {

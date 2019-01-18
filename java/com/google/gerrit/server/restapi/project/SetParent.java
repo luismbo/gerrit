@@ -14,11 +14,12 @@
 
 package com.google.gerrit.server.restapi.project;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Strings;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Multimap;
 import com.google.gerrit.extensions.api.projects.ParentInput;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
@@ -30,6 +31,11 @@ import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.config.AllProjectsName;
 import com.google.gerrit.server.config.AllUsersName;
+import com.google.gerrit.server.config.ConfigKey;
+import com.google.gerrit.server.config.ConfigUpdatedEvent;
+import com.google.gerrit.server.config.ConfigUpdatedEvent.ConfigUpdateEntry;
+import com.google.gerrit.server.config.ConfigUpdatedEvent.UpdateResult;
+import com.google.gerrit.server.config.GerritConfigListener;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.git.meta.MetaDataUpdate;
 import com.google.gerrit.server.permissions.GlobalPermission;
@@ -48,13 +54,14 @@ import org.eclipse.jgit.errors.RepositoryNotFoundException;
 import org.eclipse.jgit.lib.Config;
 
 @Singleton
-public class SetParent implements RestModifyView<ProjectResource, ParentInput> {
+public class SetParent
+    implements RestModifyView<ProjectResource, ParentInput>, GerritConfigListener {
   private final ProjectCache cache;
   private final PermissionBackend permissionBackend;
   private final MetaDataUpdate.Server updateFactory;
   private final AllProjectsName allProjects;
   private final AllUsersName allUsers;
-  private final boolean allowProjectOwnersToChangeParent;
+  private volatile boolean allowProjectOwnersToChangeParent;
 
   @Inject
   SetParent(
@@ -106,7 +113,7 @@ public class SetParent implements RestModifyView<ProjectResource, ParentInput> {
       cache.evict(rsrc.getProjectState().getProject());
 
       Project.NameKey parent = project.getParent(allProjects);
-      checkNotNull(parent);
+      requireNonNull(parent);
       return parent.get();
     } catch (RepositoryNotFoundException notFound) {
       throw new ResourceNotFoundException(rsrc.getName());
@@ -163,5 +170,21 @@ public class SetParent implements RestModifyView<ProjectResource, ParentInput> {
             "cycle exists between " + project.get() + " and " + parent.getName());
       }
     }
+  }
+
+  @Override
+  public Multimap<UpdateResult, ConfigUpdateEntry> configUpdated(ConfigUpdatedEvent event) {
+    ConfigKey receiveSetParent = ConfigKey.create("receive", "allowProjectOwnersToChangeParent");
+    if (!event.isValueUpdated(receiveSetParent)) {
+      return ConfigUpdatedEvent.NO_UPDATES;
+    }
+    try {
+      boolean enabled =
+          event.getNewConfig().getBoolean("receive", "allowProjectOwnersToChangeParent", false);
+      this.allowProjectOwnersToChangeParent = enabled;
+    } catch (IllegalArgumentException iae) {
+      return event.reject(receiveSetParent);
+    }
+    return event.accept(receiveSetParent);
   }
 }

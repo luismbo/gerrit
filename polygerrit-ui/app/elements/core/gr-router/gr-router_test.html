@@ -44,6 +44,23 @@ limitations under the License.
 
     teardown(() => { sandbox.restore(); });
 
+    test('_getChangeWeblinks', () => {
+      sandbox.stub(element, '_isDirectCommit').returns(false);
+      sandbox.stub(element, 'getBaseUrl').returns('base');
+      const link = {name: 'test', url: 'test/url'};
+      const mapLinksToConfig = weblink => ({options: {weblinks: [weblink]}});
+      assert.deepEqual(element._getChangeWeblinks(mapLinksToConfig(link))[0],
+          {name: 'test', url: 'base/test/url'});
+
+      link.url = '/' + link.url;
+      assert.deepEqual(element._getChangeWeblinks(mapLinksToConfig(link))[0],
+          {name: 'test', url: 'base/test/url'});
+
+      link.url = 'https:/' + link.url;
+      assert.deepEqual(element._getChangeWeblinks(mapLinksToConfig(link))[0],
+          {name: 'test', url: 'https://test/url'});
+    });
+
     test('_getHashFromCanonicalPath', () => {
       let url = '/foo/bar';
       let hash = element._getHashFromCanonicalPath(url);
@@ -157,6 +174,9 @@ limitations under the License.
         '_handleDefaultRoute',
         '_handleChangeLegacyRoute',
         '_handleDiffLegacyRoute',
+        '_handleDocumentationRedirectRoute',
+        '_handleDocumentationSearchRoute',
+        '_handleDocumentationSearchRedirectRoute',
         '_handleLegacyLinenum',
         '_handleImproperlyEncodedPlusRoute',
         '_handlePassThroughRoute',
@@ -283,6 +303,16 @@ limitations under the License.
             '/c/test/+/1234/5..10?revert&foo=bar');
       });
 
+      test('change with repo name encoding', () => {
+        const params = {
+          view: Gerrit.Nav.View.CHANGE,
+          changeNum: '1234',
+          project: 'x+/y+/z+/w',
+        };
+        assert.equal(element._generateUrl(params),
+            '/c/x%252B/y%252B/z%252B/w/+/1234');
+      });
+
       test('diff', () => {
         const params = {
           view: Gerrit.Nav.View.DIFF,
@@ -315,6 +345,18 @@ limitations under the License.
         params.leftSide = true;
         assert.equal(element._generateUrl(params),
             '/c/test/+/42/2/file.cpp#b123');
+      });
+
+      test('diff with repo name encoding', () => {
+        const params = {
+          view: Gerrit.Nav.View.DIFF,
+          changeNum: '42',
+          path: 'x+y/path.cpp',
+          patchNum: 12,
+          project: 'x+/y',
+        };
+        assert.equal(element._generateUrl(params),
+            '/c/x%252B/y/+/42/12/x%252By/path.cpp');
       });
 
       test('edit', () => {
@@ -649,6 +691,22 @@ limitations under the License.
         element._handleQueryLegacySuffixRoute({path: '/q/foo+bar,n,z'});
         assert.isTrue(redirectStub.calledOnce);
         assert.equal(redirectStub.lastCall.args[0], '/q/foo+bar');
+      });
+
+      test('_handleQueryRoute', () => {
+        const data = {params: ['project:foo/bar/baz']};
+        assertDataToParams(data, '_handleQueryRoute', {
+          view: Gerrit.Nav.View.SEARCH,
+          query: 'project:foo/bar/baz',
+          offset: undefined,
+        });
+
+        data.params.push(',123', '123');
+        assertDataToParams(data, '_handleQueryRoute', {
+          view: Gerrit.Nav.View.SEARCH,
+          query: 'project:foo/bar/baz',
+          offset: '123',
+        });
       });
 
       suite('_handleRegisterRoute', () => {

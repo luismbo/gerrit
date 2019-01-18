@@ -161,6 +161,10 @@
         type: Object,
         computed: '_getRevisionInfo(_change)',
       },
+      _reviewedFiles: {
+        type: Object,
+        value: () => new Set(),
+      },
     },
 
     behaviors: [
@@ -177,22 +181,42 @@
     ],
 
     keyBindings: {
-      'esc': '_handleEscKey',
-      'shift+left': '_handleShiftLeftKey',
-      'shift+right': '_handleShiftRightKey',
-      'up k': '_handleUpKey',
-      'down j': '_handleDownKey',
-      'c': '_handleCKey',
-      '[': '_handleLeftBracketKey',
-      ']': '_handleRightBracketKey',
-      'n shift+n': '_handleNKey',
-      'p shift+p': '_handlePKey',
-      'a shift+a': '_handleAKey',
-      'u': '_handleUKey',
-      ',': '_handleCommaKey',
-      'm': '_handleMKey',
-      'r': '_handleRKey',
-      'shift+x': '_handleShiftXKey',
+      esc: '_handleEscKey',
+    },
+
+    keyboardShortcuts() {
+      return {
+        [this.Shortcut.LEFT_PANE]: '_handleLeftPane',
+        [this.Shortcut.RIGHT_PANE]: '_handleRightPane',
+        [this.Shortcut.NEXT_LINE]: '_handleNextLineOrFileWithComments',
+        [this.Shortcut.PREV_LINE]: '_handlePrevLineOrFileWithComments',
+        [this.Shortcut.NEXT_FILE_WITH_COMMENTS]:
+            '_handleNextLineOrFileWithComments',
+        [this.Shortcut.PREV_FILE_WITH_COMMENTS]:
+            '_handlePrevLineOrFileWithComments',
+        [this.Shortcut.NEW_COMMENT]: '_handleNewComment',
+        [this.Shortcut.SAVE_COMMENT]: null, // DOC_ONLY binding
+        [this.Shortcut.NEXT_FILE]: '_handleNextFile',
+        [this.Shortcut.PREV_FILE]: '_handlePrevFile',
+        [this.Shortcut.NEXT_CHUNK]: '_handleNextChunkOrCommentThread',
+        [this.Shortcut.NEXT_COMMENT_THREAD]: '_handleNextChunkOrCommentThread',
+        [this.Shortcut.PREV_CHUNK]: '_handlePrevChunkOrCommentThread',
+        [this.Shortcut.PREV_COMMENT_THREAD]: '_handlePrevChunkOrCommentThread',
+        [this.Shortcut.OPEN_REPLY_DIALOG]:
+            '_handleOpenReplyDialogOrToggleLeftPane',
+        [this.Shortcut.TOGGLE_LEFT_PANE]:
+            '_handleOpenReplyDialogOrToggleLeftPane',
+        [this.Shortcut.UP_TO_CHANGE]: '_handleUpToChange',
+        [this.Shortcut.OPEN_DIFF_PREFS]: '_handleCommaKey',
+        [this.Shortcut.TOGGLE_DIFF_MODE]: '_handleToggleDiffMode',
+        [this.Shortcut.TOGGLE_FILE_REVIEWED]: '_handleToggleFileReviewed',
+        [this.Shortcut.EXPAND_ALL_DIFF_CONTEXT]: '_handleExpandAllDiffContext',
+        [this.Shortcut.NEXT_UNREVIEWED_FILE]: '_handleNextUnreviewedFile',
+
+        // Final two are actually handled by gr-diff-comment-thread.
+        [this.Shortcut.EXPAND_ALL_COMMENT_THREADS]: null,
+        [this.Shortcut.COLLAPSE_ALL_COMMENT_THREADS]: null,
+      };
     },
 
     attached() {
@@ -263,7 +287,7 @@
           this._patchRange.patchNum, this._path, reviewed);
     },
 
-    _handleRKey(e) {
+    _handleToggleFileReviewed(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -279,21 +303,21 @@
       this.$.diffHost.displayLine = false;
     },
 
-    _handleShiftLeftKey(e) {
+    _handleLeftPane(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
 
       e.preventDefault();
       this.$.cursor.moveLeft();
     },
 
-    _handleShiftRightKey(e) {
+    _handleRightPane(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
 
       e.preventDefault();
       this.$.cursor.moveRight();
     },
 
-    _handleUpKey(e) {
+    _handlePrevLineOrFileWithComments(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
       if (e.detail.keyboardEvent.shiftKey &&
           e.detail.keyboardEvent.keyCode === 75) { // 'K'
@@ -307,7 +331,7 @@
       this.$.cursor.moveUp();
     },
 
-    _handleDownKey(e) {
+    _handleNextLineOrFileWithComments(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
       if (e.detail.keyboardEvent.shiftKey &&
           e.detail.keyboardEvent.keyCode === 74) { // 'J'
@@ -348,7 +372,7 @@
           this._patchRange.patchNum, this._patchRange.basePatchNum);
     },
 
-    _handleCKey(e) {
+    _handleNewComment(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
       if (this.$.diffHost.isRangeSelected()) { return; }
       if (this.modifierPressed(e)) { return; }
@@ -360,7 +384,7 @@
       }
     },
 
-    _handleLeftBracketKey(e) {
+    _handlePrevFile(e) {
       // Check for meta key to avoid overriding native chrome shortcut.
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.getKeyboardEvent(e).metaKey) { return; }
@@ -369,7 +393,7 @@
       this._navToFile(this._path, this._fileList, -1);
     },
 
-    _handleRightBracketKey(e) {
+    _handleNextFile(e) {
       // Check for meta key to avoid overriding native chrome shortcut.
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.getKeyboardEvent(e).metaKey) { return; }
@@ -378,7 +402,7 @@
       this._navToFile(this._path, this._fileList, 1);
     },
 
-    _handleNKey(e) {
+    _handleNextChunkOrCommentThread(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
 
       e.preventDefault();
@@ -390,7 +414,7 @@
       }
     },
 
-    _handlePKey(e) {
+    _handlePrevChunkOrCommentThread(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
 
       e.preventDefault();
@@ -402,7 +426,7 @@
       }
     },
 
-    _handleAKey(e) {
+    _handleOpenReplyDialogOrToggleLeftPane(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
 
       if (e.detail.keyboardEvent.shiftKey) { // Hide left diff.
@@ -420,7 +444,7 @@
       this._navToChangeView();
     },
 
-    _handleUKey(e) {
+    _handleUpToChange(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -436,7 +460,7 @@
       this.$.diffPreferences.open();
     },
 
-    _handleMKey(e) {
+    _handleToggleDiffMode(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -536,10 +560,18 @@
       return {path: fileList[idx]};
     },
 
+    _getReviewedFiles(changeNum, patchNum) {
+      return this.$.restAPI.getReviewedFiles(changeNum, patchNum)
+          .then(files => {
+            this._reviewedFiles = new Set(files);
+            return this._reviewedFiles;
+          });
+    },
+
     _getReviewedStatus(editMode, changeNum, patchNum, path) {
       if (editMode) { return Promise.resolve(false); }
-      return this.$.restAPI.getReviewedFiles(changeNum, patchNum)
-          .then(files => files.includes(path));
+      return this._getReviewedFiles(changeNum, patchNum)
+          .then(files => files.has(path));
     },
 
     _paramsChanged(value) {
@@ -864,8 +896,8 @@
       history.replaceState(null, '', url);
     },
 
-    _computeDownloadLink(changeNum, patchRange, path) {
-      let url = this.changeBaseURL(changeNum, patchRange.patchNum);
+    _computeDownloadLink(project, changeNum, patchRange, path) {
+      let url = this.changeBaseURL(project, changeNum, patchRange.patchNum);
       url += '/patch?zip&path=' + encodeURIComponent(path);
       return url;
     },
@@ -989,9 +1021,20 @@
       return '';
     },
 
-    _handleShiftXKey(e) {
+    _handleExpandAllDiffContext(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
       this.$.diffHost.expandAllContext();
+    },
+
+    _handleNextUnreviewedFile(e) {
+      if (this.shouldSuppressKeyboardShortcut(e)) { return; }
+      this._setReviewed(true);
+      // Ensure that the currently viewed file always appears in unreviewedFiles
+      // so we resolve the right "next" file.
+      const unreviewedFiles = this._fileList
+          .filter(file =>
+          (file === this._path || !this._reviewedFiles.has(file)));
+      this._navToFile(this._path, unreviewedFiles, 1);
     },
   });
 })();

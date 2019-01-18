@@ -15,21 +15,25 @@
 package com.google.gerrit.server.git;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.FooterConstants;
-import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.extensions.registration.DynamicSet;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.MergeConflictException;
+import com.google.gerrit.extensions.restapi.MethodNotAllowedException;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.BooleanProjectConfig;
@@ -42,8 +46,8 @@ import com.google.gerrit.reviewdb.client.PatchSetApproval;
 import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.IdentifiedUser;
-import com.google.gerrit.server.config.CanonicalWebUrl;
 import com.google.gerrit.server.config.GerritServerConfig;
+import com.google.gerrit.server.config.UrlFormatter;
 import com.google.gerrit.server.git.CodeReviewCommit.CodeReviewRevWalk;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.project.ProjectState;
@@ -58,14 +62,22 @@ import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
 import com.google.inject.assistedinject.AssistedInject;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import org.eclipse.jgit.diff.Sequence;
+import org.eclipse.jgit.dircache.DirCache;
+import org.eclipse.jgit.dircache.DirCacheBuilder;
+import org.eclipse.jgit.dircache.DirCacheEntry;
 import org.eclipse.jgit.errors.AmbiguousObjectException;
 import org.eclipse.jgit.errors.IncorrectObjectTypeException;
 import org.eclipse.jgit.errors.LargeObjectException;
@@ -82,6 +94,8 @@ import org.eclipse.jgit.errors.RevisionSyntaxException;
 // import org.eclipse.jgit.lib.PersonIdent;
 // import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.*;
+import org.eclipse.jgit.merge.MergeFormatter;
+import org.eclipse.jgit.merge.MergeResult;
 import org.eclipse.jgit.merge.MergeStrategy;
 import org.eclipse.jgit.merge.Merger;
 import org.eclipse.jgit.merge.ResolveMerger;
@@ -94,6 +108,7 @@ import org.eclipse.jgit.merge.ThreeWayMerger;
 // import org.eclipse.jgit.revwalk.RevSort;
 // import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.revwalk.*;
+import org.eclipse.jgit.util.TemporaryBuffer;
 
 /**
  * Utility methods used during the merge process.
@@ -116,16 +131,18 @@ public class MergeUtil {
 
     public String generate(
         RevCommit original, RevCommit mergeTip, Branch.NameKey dest, String current) {
-      checkNotNull(original.getRawBuffer());
+      requireNonNull(original.getRawBuffer());
       if (mergeTip != null) {
-        checkNotNull(mergeTip.getRawBuffer());
+        requireNonNull(mergeTip.getRawBuffer());
       }
       for (ChangeMessageModifier changeMessageModifier : changeMessageModifiers) {
         current = changeMessageModifier.onSubmit(current, original, mergeTip, dest);
-        checkNotNull(
+        requireNonNull(
             current,
-            changeMessageModifier.getClass().getName()
-                + ".OnSubmit returned null instead of new commit message");
+            () ->
+                String.format(
+                    "%s.OnSubmit returned null instead of new commit message",
+                    changeMessageModifier.getClass().getName()));
       }
       return current;
     }
@@ -176,7 +193,7 @@ public class MergeUtil {
 
   private final Provider<ReviewDb> db;
   private final IdentifiedUser.GenericFactory identifiedUserFactory;
-  private final Provider<String> urlProvider;
+  private final UrlFormatter urlFormatter;
   private final ApprovalsUtil approvalsUtil;
   private final ProjectState project;
   private final boolean useContentMerge;
@@ -189,7 +206,7 @@ public class MergeUtil {
       @GerritServerConfig Config serverConfig,
       Provider<ReviewDb> db,
       IdentifiedUser.GenericFactory identifiedUserFactory,
-      @CanonicalWebUrl @Nullable Provider<String> urlProvider,
+      UrlFormatter urlFormatter,
       ApprovalsUtil approvalsUtil,
       PluggableCommitMessageGenerator commitMessageGenerator,
       PluggableCommitModifier commitModifier,
@@ -198,7 +215,7 @@ public class MergeUtil {
         serverConfig,
         db,
         identifiedUserFactory,
-        urlProvider,
+        urlFormatter,
         approvalsUtil,
         project,
         commitMessageGenerator,
@@ -211,7 +228,7 @@ public class MergeUtil {
       @GerritServerConfig Config serverConfig,
       Provider<ReviewDb> db,
       IdentifiedUser.GenericFactory identifiedUserFactory,
-      @CanonicalWebUrl @Nullable Provider<String> urlProvider,
+      UrlFormatter urlFormatter,
       ApprovalsUtil approvalsUtil,
       @Assisted ProjectState project,
       PluggableCommitMessageGenerator commitMessageGenerator,
@@ -219,7 +236,7 @@ public class MergeUtil {
       @Assisted boolean useContentMerge) {
     this.db = db;
     this.identifiedUserFactory = identifiedUserFactory;
-    this.urlProvider = urlProvider;
+    this.urlFormatter = urlFormatter;
     this.approvalsUtil = approvalsUtil;
     this.project = project;
     this.useContentMerge = useContentMerge;
@@ -250,7 +267,7 @@ public class MergeUtil {
     List<CodeReviewCommit> result = new ArrayList<>();
     try {
       result.addAll(mergeSorter.sort(toSort));
-    } catch (IOException e) {
+    } catch (IOException | OrmException e) {
       throw new IntegrationException("Branch head sorting failed", e);
     }
     result.sort(CodeReviewCommit.ORDER);
@@ -267,33 +284,163 @@ public class MergeUtil {
       CodeReviewRevWalk rw,
       int parentIndex,
       boolean ignoreIdenticalTree,
+      boolean allowConflicts,
       boolean applyCommitModifiers)
       throws MissingObjectException, IncorrectObjectTypeException, IOException,
-          MergeIdenticalTreeException, MergeConflictException {
+          MergeIdenticalTreeException, MergeConflictException, MethodNotAllowedException {
 
-    final ThreeWayMerger m = newThreeWayMerger(inserter, repoConfig);
-
+    ThreeWayMerger m = newThreeWayMerger(inserter, repoConfig);
     m.setBase(originalCommit.getParent(parentIndex));
+
+    DirCache dc = DirCache.newInCore();
+    if (allowConflicts && m instanceof ResolveMerger) {
+      // The DirCache must be set on ResolveMerger before calling
+      // ResolveMerger#merge(AnyObjectId...) otherwise the entries in DirCache don't get populated.
+      ((ResolveMerger) m).setDirCache(dc);
+    }
+
+    ObjectId tree;
+    ImmutableSet<String> filesWithGitConflicts;
     if (m.merge(mergeTip, originalCommit)) {
-      ObjectId tree = m.getResultTreeId();
+      filesWithGitConflicts = null;
+      tree = m.getResultTreeId();
       if (tree.equals(mergeTip.getTree()) && !ignoreIdenticalTree) {
         throw new MergeIdenticalTreeException("identical tree");
+      }
+    } else {
+      if (!allowConflicts) {
+        throw new MergeConflictException("merge conflict");
+      }
+
+      if (!useContentMerge) {
+        // If content merge is disabled we don't have a ResolveMerger and hence cannot merge with
+        // conflict markers.
+        throw new MethodNotAllowedException(
+            "Cherry-pick with allow conflicts requires that content merge is enabled.");
       }
 
       if (applyCommitModifiers) {
         tree = commitModifier.process(inserter, rw, mergeTip, tree, commitMsg);
       }
 
-      CommitBuilder mergeCommit = new CommitBuilder();
-      mergeCommit.setTreeId(tree);
-      mergeCommit.setParentId(mergeTip);
-      mergeCommit.setAuthor(originalCommit.getAuthorIdent());
-      mergeCommit.setCommitter(cherryPickCommitterIdent);
-      mergeCommit.setMessage(commitMsg);
-      matchAuthorToCommitterDate(project, mergeCommit);
-      return rw.parseCommit(inserter.insert(mergeCommit));
+
+      // For merging with conflict markers we need a ResolveMerger, double-check that we have one.
+      checkState(m instanceof ResolveMerger, "allow conflicts is not supported");
+      Map<String, MergeResult<? extends Sequence>> mergeResults =
+          ((ResolveMerger) m).getMergeResults();
+
+      filesWithGitConflicts =
+          mergeResults
+              .entrySet()
+              .stream()
+              .filter(e -> e.getValue().containsConflicts())
+              .map(Map.Entry::getKey)
+              .collect(toImmutableSet());
+
+      tree =
+          mergeWithConflicts(
+              rw, inserter, dc, "HEAD", mergeTip, "CHANGE", originalCommit, mergeResults);
     }
-    throw new MergeConflictException("merge conflict");
+
+    CommitBuilder cherryPickCommit = new CommitBuilder();
+    cherryPickCommit.setTreeId(tree);
+    cherryPickCommit.setParentId(mergeTip);
+    cherryPickCommit.setAuthor(originalCommit.getAuthorIdent());
+    cherryPickCommit.setCommitter(cherryPickCommitterIdent);
+    cherryPickCommit.setMessage(commitMsg);
+    matchAuthorToCommitterDate(project, cherryPickCommit);
+    CodeReviewCommit commit = rw.parseCommit(inserter.insert(cherryPickCommit));
+    commit.setFilesWithGitConflicts(filesWithGitConflicts);
+    return commit;
+  }
+
+  public static ObjectId mergeWithConflicts(
+      RevWalk rw,
+      ObjectInserter ins,
+      DirCache dc,
+      String oursName,
+      RevCommit ours,
+      String theirsName,
+      RevCommit theirs,
+      Map<String, MergeResult<? extends Sequence>> mergeResults)
+      throws IOException {
+    rw.parseBody(ours);
+    rw.parseBody(theirs);
+    String oursMsg = ours.getShortMessage();
+    String theirsMsg = theirs.getShortMessage();
+
+    int nameLength = Math.max(oursName.length(), theirsName.length());
+    String oursNameFormatted =
+        String.format(
+            "%0$-" + nameLength + "s (%s %s)",
+            oursName,
+            ours.abbreviate(6).name(),
+            oursMsg.substring(0, Math.min(oursMsg.length(), 60)));
+    String theirsNameFormatted =
+        String.format(
+            "%0$-" + nameLength + "s (%s %s)",
+            theirsName,
+            theirs.abbreviate(6).name(),
+            theirsMsg.substring(0, Math.min(theirsMsg.length(), 60)));
+
+    MergeFormatter fmt = new MergeFormatter();
+    Map<String, ObjectId> resolved = new HashMap<>();
+    for (Map.Entry<String, MergeResult<? extends Sequence>> entry : mergeResults.entrySet()) {
+      MergeResult<? extends Sequence> p = entry.getValue();
+      try (TemporaryBuffer buf = new TemporaryBuffer.LocalFile(null, 10 * 1024 * 1024)) {
+        fmt.formatMerge(buf, p, "BASE", oursNameFormatted, theirsNameFormatted, UTF_8.name());
+        buf.close();
+
+        try (InputStream in = buf.openInputStream()) {
+          resolved.put(entry.getKey(), ins.insert(Constants.OBJ_BLOB, buf.length(), in));
+        }
+      }
+    }
+
+    DirCacheBuilder builder = dc.builder();
+    int cnt = dc.getEntryCount();
+    for (int i = 0; i < cnt; ) {
+      DirCacheEntry entry = dc.getEntry(i);
+      if (entry.getStage() == 0) {
+        builder.add(entry);
+        i++;
+        continue;
+      }
+
+      int next = dc.nextEntry(i);
+      String path = entry.getPathString();
+      DirCacheEntry res = new DirCacheEntry(path);
+      if (resolved.containsKey(path)) {
+        // For a file with content merge conflict that we produced a result
+        // above on, collapse the file down to a single stage 0 with just
+        // the blob content, and a randomly selected mode (the lowest stage,
+        // which should be the merge base, or ours).
+        res.setFileMode(entry.getFileMode());
+        res.setObjectId(resolved.get(path));
+
+      } else if (next == i + 1) {
+        // If there is exactly one stage present, shouldn't be a conflict...
+        res.setFileMode(entry.getFileMode());
+        res.setObjectId(entry.getObjectId());
+
+      } else if (next == i + 2) {
+        // Two stages suggests a delete/modify conflict. Pick the higher
+        // stage as the automatic result.
+        entry = dc.getEntry(i + 1);
+        res.setFileMode(entry.getFileMode());
+        res.setObjectId(entry.getObjectId());
+
+      } else {
+        // 3 stage conflict, no resolve above
+        // Punt on the 3-stage conflict and show the base, for now.
+        res.setFileMode(entry.getFileMode());
+        res.setObjectId(entry.getObjectId());
+      }
+      builder.add(res);
+      i = next;
+    }
+    builder.finish();
+    return dc.writeTree(ins);
   }
 
   public static RevCommit createMergeCommit(
@@ -384,17 +531,16 @@ public class MergeUtil {
       msgbuf.append('\n');
     }
 
-    final String siteUrl = urlProvider.get();
-    if (siteUrl != null) {
-      final String url = siteUrl + c.getId().get();
-      if (!contains(footers, FooterConstants.REVIEWED_ON, url)) {
-        msgbuf.append(FooterConstants.REVIEWED_ON.getName());
-        msgbuf.append(": ");
-        msgbuf.append(url);
-        msgbuf.append('\n');
+    Optional<String> url = urlFormatter.getChangeViewUrl(null, c.getId());
+    if (url.isPresent()) {
+      if (!contains(footers, FooterConstants.REVIEWED_ON, url.get())) {
+        msgbuf
+            .append(FooterConstants.REVIEWED_ON.getName())
+            .append(": ")
+            .append(url.get())
+            .append('\n');
       }
     }
-
     PatchSetApproval submitAudit = null;
 
     for (PatchSetApproval a : safeGetApprovals(notes, psId)) {
@@ -606,7 +752,7 @@ public class MergeUtil {
       throws IntegrationException {
     try {
       return !mergeSorter.sort(Collections.singleton(toMerge)).contains(toMerge);
-    } catch (IOException e) {
+    } catch (IOException | OrmException e) {
       throw new IntegrationException("Branch head sorting failed", e);
     }
   }

@@ -14,7 +14,7 @@
 
 package com.google.gerrit.server.change;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
@@ -77,7 +77,7 @@ public class ActionJson {
     List<ActionVisitor> visitors = visitors();
     if (!visitors.isEmpty()) {
       changeInfo = changeJson().format(rsrc);
-      revisionInfo = checkNotNull(Iterables.getOnlyElement(changeInfo.revisions.values()));
+      revisionInfo = requireNonNull(Iterables.getOnlyElement(changeInfo.revisions.values()));
       changeInfo.revisions = null;
     }
     return toActionMap(rsrc, visitors, changeInfo, revisionInfo);
@@ -115,8 +115,8 @@ public class ActionJson {
     if (visitors.isEmpty()) {
       return null;
     }
-    // Include all fields from ChangeJson#toChangeInfo that are not protected by
-    // any ListChangesOptions.
+    // Include all fields from ChangeJson#toChangeInfoImpl that are not protected by any
+    // ListChangesOptions.
     ChangeInfo copy = new ChangeInfo();
     copy.project = changeInfo.project;
     copy.branch = changeInfo.branch;
@@ -128,6 +128,7 @@ public class ActionJson {
     copy.mergeable = changeInfo.mergeable;
     copy.insertions = changeInfo.insertions;
     copy.deletions = changeInfo.deletions;
+    copy.hasReviewStarted = changeInfo.hasReviewStarted;
     copy.isPrivate = changeInfo.isPrivate;
     copy.subject = changeInfo.subject;
     copy.status = changeInfo.status;
@@ -135,10 +136,13 @@ public class ActionJson {
     copy.created = changeInfo.created;
     copy.updated = changeInfo.updated;
     copy._number = changeInfo._number;
+    copy.requirements = changeInfo.requirements;
+    copy.revertOf = changeInfo.revertOf;
     copy.starred = changeInfo.starred;
     copy.stars = changeInfo.stars;
     copy.submitted = changeInfo.submitted;
     copy.submitter = changeInfo.submitter;
+    copy.unresolvedCommentCount = changeInfo.unresolvedCommentCount;
     copy.workInProgress = changeInfo.workInProgress;
     copy.id = changeInfo.id;
     return copy;
@@ -148,8 +152,8 @@ public class ActionJson {
     if (visitors.isEmpty()) {
       return null;
     }
-    // Include all fields from ChangeJson#toRevisionInfo that are not protected
-    // by any ListChangesOptions.
+    // Include all fields from RevisionJson#toRevisionInfo that are not protected by any
+    // ListChangesOptions.
     RevisionInfo copy = new RevisionInfo();
     copy.isCurrent = revisionInfo.isCurrent;
     copy._number = revisionInfo._number;

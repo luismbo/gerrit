@@ -43,6 +43,32 @@ limitations under the License.
 
 <script>
   suite('gr-diff-view tests', () => {
+    const kb = window.Gerrit.KeyboardShortcutBinder;
+    kb.bindShortcut(kb.Shortcut.LEFT_PANE, 'shift+left');
+    kb.bindShortcut(kb.Shortcut.RIGHT_PANE, 'shift+right');
+    kb.bindShortcut(kb.Shortcut.NEXT_LINE, 'j', 'down');
+    kb.bindShortcut(kb.Shortcut.PREV_LINE, 'k', 'up');
+    kb.bindShortcut(kb.Shortcut.NEXT_FILE_WITH_COMMENTS, 'shift+j');
+    kb.bindShortcut(kb.Shortcut.PREV_FILE_WITH_COMMENTS, 'shift+k');
+    kb.bindShortcut(kb.Shortcut.NEW_COMMENT, 'c');
+    kb.bindShortcut(kb.Shortcut.SAVE_COMMENT, 'ctrl+s');
+    kb.bindShortcut(kb.Shortcut.NEXT_FILE, ']');
+    kb.bindShortcut(kb.Shortcut.PREV_FILE, '[');
+    kb.bindShortcut(kb.Shortcut.NEXT_CHUNK, 'n');
+    kb.bindShortcut(kb.Shortcut.NEXT_COMMENT_THREAD, 'shift+n');
+    kb.bindShortcut(kb.Shortcut.PREV_CHUNK, 'p');
+    kb.bindShortcut(kb.Shortcut.PREV_COMMENT_THREAD, 'shift+p');
+    kb.bindShortcut(kb.Shortcut.OPEN_REPLY_DIALOG, 'a');
+    kb.bindShortcut(kb.Shortcut.TOGGLE_LEFT_PANE, 'shift+a');
+    kb.bindShortcut(kb.Shortcut.UP_TO_CHANGE, 'u');
+    kb.bindShortcut(kb.Shortcut.OPEN_DIFF_PREFS, ',');
+    kb.bindShortcut(kb.Shortcut.TOGGLE_DIFF_MODE, 'm');
+    kb.bindShortcut(kb.Shortcut.TOGGLE_FILE_REVIEWED, 'r');
+    kb.bindShortcut(kb.Shortcut.EXPAND_ALL_DIFF_CONTEXT, 'shift+x');
+    kb.bindShortcut(kb.Shortcut.EXPAND_ALL_COMMENT_THREADS, 'e');
+    kb.bindShortcut(kb.Shortcut.COLLAPSE_ALL_COMMENT_THREADS, 'shift+e');
+    kb.bindShortcut(kb.Shortcut.NEXT_UNREVIEWED_FILE, 'shift+m');
+
     let element;
     let sandbox;
 
@@ -531,6 +557,7 @@ limitations under the License.
     });
 
     test('download link', () => {
+      element._change = {project: 'test'},
       element._changeNum = '42';
       element._patchRange = {
         basePatchNum: PARENT,
@@ -541,7 +568,7 @@ limitations under the License.
       flushAsynchronousOperations();
       const link = element.$$('.downloadLink');
       assert.equal(link.getAttribute('href'),
-          '/changes/42/revisions/10/patch?zip&path=glados.txt');
+          '/changes/test~42/revisions/10/patch?zip&path=glados.txt');
       assert.isTrue(link.hasAttribute('download'));
     });
 
@@ -838,16 +865,16 @@ limitations under the License.
       assert.equal(element._getDiffViewMode(), 'SIDE_BY_SIDE');
     });
 
-    test('_handleMKey', () => {
+    test('_handleToggleDiffMode', () => {
       sandbox.stub(element, 'shouldSuppressKeyboardShortcut').returns(false);
       const e = {preventDefault: () => {}};
       // Initial state.
       assert.equal(element._getDiffViewMode(), 'SIDE_BY_SIDE');
 
-      element._handleMKey(e);
+      element._handleToggleDiffMode(e);
       assert.equal(element._getDiffViewMode(), 'UNIFIED_DIFF');
 
-      element._handleMKey(e);
+      element._handleToggleDiffMode(e);
       assert.equal(element._getDiffViewMode(), 'SIDE_BY_SIDE');
     });
 
@@ -1079,6 +1106,23 @@ limitations under the License.
       });
       assert.isTrue(setStub.calledOnce);
       assert.isTrue(setStub.calledWith(101, 'test-project'));
+    });
+
+    test('shift+m navigates to next unreviewed file', () => {
+      element._fileList = ['file1', 'file2', 'file3'];
+      element._reviewedFiles = new Set(['file1', 'file2']);
+      element._path = 'file1';
+      const reviewedStub = sandbox.stub(element, '_setReviewed');
+      const navStub = sandbox.stub(element, '_navToFile');
+      MockInteractions.pressAndReleaseKeyOn(element, 77, 'shift', 'm');
+      flushAsynchronousOperations();
+
+      assert.isTrue(reviewedStub.lastCall.args[0]);
+      assert.deepEqual(navStub.lastCall.args, [
+        'file1',
+        ['file1', 'file3'],
+        1,
+      ]);
     });
   });
 </script>

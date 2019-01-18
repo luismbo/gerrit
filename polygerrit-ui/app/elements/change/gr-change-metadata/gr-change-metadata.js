@@ -17,6 +17,17 @@
 (function() {
   'use strict';
 
+  const Defs = {};
+
+  /**
+   * @typedef {{
+   *    message: string,
+   *    icon: string,
+   *    class: string,
+   *  }}
+   */
+  Defs.PushCertificateValidation;
+
   const HASHTAG_ADD_MESSAGE = 'Add Hashtag';
 
   const SubmitTypeLabel = {
@@ -29,6 +40,24 @@
   };
 
   const NOT_CURRENT_MESSAGE = 'Not current - rebase possible';
+
+  /**
+   * @enum {string}
+   */
+  const CertificateStatus = {
+    /**
+     * This certificate status is bad.
+     */
+    BAD: 'BAD',
+    /**
+     * This certificate status is OK.
+     */
+    OK: 'OK',
+    /**
+     * This certificate status is TRUSTED.
+     */
+    TRUSTED: 'TRUSTED',
+  };
 
   Polymer({
     is: 'gr-change-metadata',
@@ -76,6 +105,13 @@
         type: Boolean,
         computed: '_computeShowReviewersByState(serverConfig)',
       },
+      /**
+       * @type {Defs.PushCertificateValidation}
+       */
+      _pushCertificateValidation: {
+        type: Object,
+        computed: '_computePushCertificateValidation(serverConfig, change)',
+      },
       _showRequirements: {
         type: Boolean,
         computed: '_computeShowRequirements(change)',
@@ -96,6 +132,18 @@
       _currentParents: {
         type: Array,
         computed: '_computeParents(change)',
+      },
+
+      /** @type {?} */
+      _CHANGE_ROLE: {
+        type: Object,
+        readOnly: true,
+        value: {
+          OWNER: 'owner',
+          UPLOADER: 'uploader',
+          AUTHOR: 'author',
+          COMMITTER: 'committer',
+        },
       },
     },
 
@@ -248,6 +296,59 @@
       return hasRequirements || hasLabels || !!change.work_in_progress;
     },
 
+    /**
+     * @return {?Defs.PushCertificateValidation} object representing data for
+     *     the push validation.
+     */
+    _computePushCertificateValidation(serverConfig, change) {
+      if (!serverConfig || !serverConfig.receive ||
+          !serverConfig.receive.enable_signed_push) {
+        return null;
+      }
+      const rev = change.revisions[change.current_revision];
+      if (!rev.push_certificate || !rev.push_certificate.key) {
+        return {
+          class: 'help',
+          icon: 'gr-icons:help',
+          message: 'This patch set was created without a push certificate',
+        };
+      }
+
+      const key = rev.push_certificate.key;
+      switch (key.status) {
+        case CertificateStatus.BAD:
+          return {
+            class: 'invalid',
+            icon: 'gr-icons:close',
+            message: this._problems('Push certificate is invalid', key),
+          };
+        case CertificateStatus.OK:
+          return {
+            class: 'notTrusted',
+            icon: 'gr-icons:info',
+            message: this._problems(
+                'Push certificate is valid, but key is not trusted', key),
+          };
+        case CertificateStatus.TRUSTED:
+          return {
+            class: 'trusted',
+            icon: 'gr-icons:check',
+            message: this._problems(
+                'Push certificate is valid and key is trusted', key),
+          };
+        default:
+          throw new Error(`unknown certificate status: ${key.status}`);
+      }
+    },
+
+    _problems(msg, key) {
+      if (!key || !key.problems || key.problems.length === 0) {
+        return msg;
+      }
+
+      return [msg + ':'].concat(key.problems).join('\n');
+    },
+
     _computeProjectURL(project) {
       return Gerrit.Nav.getUrlForProjectChanges(project);
     },
@@ -299,24 +400,45 @@
       return !!change.work_in_progress;
     },
 
-    _computeShowUploaderHide(change) {
-      return this._computeShowUploader(change) ? '' : 'hideDisplay';
+    _computeShowRoleClass(change, role) {
+      return this._getNonOwnerRole(change, role) ? '' : 'hideDisplay';
     },
 
-    _computeShowUploader(change) {
+    /**
+     * Get the user with the specified role on the change. Returns null if the
+     * user with that role is the same as the owner.
+     * @param {!Object} change
+     * @param {string} role One of the values from _CHANGE_ROLE
+     * @return {Object|null} either an accound or null.
+     */
+    _getNonOwnerRole(change, role) {
       if (!change.current_revision ||
           !change.revisions[change.current_revision]) {
         return null;
       }
 
       const rev = change.revisions[change.current_revision];
+      if (!rev) { return null; }
 
-      if (!rev || !rev.uploader ||
-        change.owner._account_id === rev.uploader._account_id) {
-        return null;
+      if (role === this._CHANGE_ROLE.UPLOADER &&
+          rev.uploader &&
+          change.owner._account_id !== rev.uploader._account_id) {
+        return rev.uploader;
       }
 
-      return rev.uploader;
+      if (role === this._CHANGE_ROLE.AUTHOR &&
+          rev.commit && rev.commit.author &&
+          change.owner.email !== rev.commit.author.email) {
+        return rev.commit.author;
+      }
+
+      if (role === this._CHANGE_ROLE.COMMITTER &&
+          rev.commit && rev.commit.committer &&
+          change.owner.email !== rev.commit.committer.email) {
+        return rev.commit.committer;
+      }
+
+      return null;
     },
 
     _computeParents(change) {
@@ -342,6 +464,13 @@
 
     _computeIsMutable(account) {
       return !!Object.keys(account).length;
+    },
+
+    editTopic() {
+      if (this._topicReadOnly || this.change.topic) { return; }
+      // Cannot use `this.$.ID` syntax because the element exists inside of a
+      // dom-if.
+      this.$$('.topicEditableLabel').open();
     },
   });
 })();

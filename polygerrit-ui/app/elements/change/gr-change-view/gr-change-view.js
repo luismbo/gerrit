@@ -102,6 +102,10 @@
         type: Object,
         value() { return document.body; },
       },
+      disableEdit: {
+        type: Boolean,
+        value: false,
+      },
       _commentThreads: Array,
       /** @type {?} */
       _serverConfig: {
@@ -132,6 +136,11 @@
       },
       /** @type {?} */
       _commitInfo: Object,
+      _currentRevision: {
+        type: Object,
+        computed: '_computeCurrentRevision(_change.current_revision, ' +
+            '_change.revisions)',
+      },
       _files: Object,
       _changeNum: String,
       _diffDrafts: {
@@ -259,16 +268,21 @@
       '_patchNumChanged(_patchRange.patchNum)',
     ],
 
-    keyBindings: {
-      'shift+r': '_handleCapitalRKey',
-      'a': '_handleAKey',
-      'd': '_handleDKey',
-      'm': '_handleMKey',
-      's': '_handleSKey',
-      'u': '_handleUKey',
-      'x': '_handleXKey',
-      'z': '_handleZKey',
-      ',': '_handleCommaKey',
+    keyboardShortcuts() {
+      return {
+        [this.Shortcut.SEND_REPLY]: null, // DOC_ONLY binding
+        [this.Shortcut.REFRESH_CHANGE]: '_handleRefreshChange',
+        [this.Shortcut.OPEN_REPLY_DIALOG]: '_handleOpenReplyDialog',
+        [this.Shortcut.OPEN_DOWNLOAD_DIALOG]:
+            '_handleOpenDownloadDialogShortcut',
+        [this.Shortcut.TOGGLE_DIFF_MODE]: '_handleToggleDiffMode',
+        [this.Shortcut.TOGGLE_CHANGE_STAR]: '_handleToggleChangeStar',
+        [this.Shortcut.UP_TO_DASHBOARD]: '_handleUpToDashboard',
+        [this.Shortcut.EXPAND_ALL_MESSAGES]: '_handleExpandAllMessages',
+        [this.Shortcut.COLLAPSE_ALL_MESSAGES]: '_handleCollapseAllMessages',
+        [this.Shortcut.OPEN_DIFF_PREFS]: '_handleOpenDiffPrefsShortcut',
+        [this.Shortcut.EDIT_TOPIC]: '_handleEditTopic',
+      };
     },
 
     attached() {
@@ -332,7 +346,7 @@
       });
     },
 
-    _handleMKey(e) {
+    _handleToggleDiffMode(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -890,7 +904,7 @@
       return label;
     },
 
-    _handleAKey(e) {
+    _handleOpenReplyDialog(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) {
         return;
@@ -906,7 +920,7 @@
       });
     },
 
-    _handleDKey(e) {
+    _handleOpenDownloadDialogShortcut(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -914,13 +928,21 @@
       this.$.downloadOverlay.open();
     },
 
-    _handleCapitalRKey(e) {
+    _handleEditTopic(e) {
+      if (this.shouldSuppressKeyboardShortcut(e) ||
+          this.modifierPressed(e)) { return; }
+
+      e.preventDefault();
+      this.$.metadata.editTopic();
+    },
+
+    _handleRefreshChange(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
       e.preventDefault();
       Gerrit.Nav.navigateToChange(this._change);
     },
 
-    _handleSKey(e) {
+    _handleToggleChangeStar(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -928,7 +950,7 @@
       this.$.changeStar.toggleStar();
     },
 
-    _handleUKey(e) {
+    _handleUpToDashboard(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -936,7 +958,7 @@
       this._determinePageBack();
     },
 
-    _handleXKey(e) {
+    _handleExpandAllMessages(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -944,7 +966,7 @@
       this.messagesList.handleExpandCollapse(true);
     },
 
-    _handleZKey(e) {
+    _handleCollapseAllMessages(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -952,7 +974,7 @@
       this.messagesList.handleExpandCollapse(false);
     },
 
-    _handleCommaKey(e) {
+    _handleOpenDiffPrefsShortcut(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
 
@@ -1007,9 +1029,10 @@
 
     _handleReloadChange(e) {
       return this._reload().then(() => {
-        // If the change was rebased, we need to reload the page with the
-        // latest patch.
-        if (e.detail.action === 'rebase') {
+        // If the change was rebased or submitted, we need to reload the page
+        // with the latest patch.
+        const action = e.detail.action;
+        if (action === 'rebase' || action === 'submit') {
           Gerrit.Nav.navigateToChange(this._change);
         }
       });
@@ -1636,6 +1659,10 @@
     _handleToggleStar(e) {
       this.$.restAPI.saveChangeStarred(e.detail.change._number,
           e.detail.starred);
+    },
+
+    _computeCurrentRevision(currentRevision, revisions) {
+      return revisions && revisions[currentRevision];
     },
   });
 })();

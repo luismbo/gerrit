@@ -20,7 +20,6 @@ import static com.google.gerrit.server.permissions.RefPermission.CREATE_CHANGE;
 import com.google.common.base.Strings;
 import com.google.common.collect.ListMultimap;
 import com.google.common.flogger.FluentLogger;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.api.changes.RecipientType;
 import com.google.gerrit.extensions.api.changes.RevertInput;
@@ -66,6 +65,7 @@ import com.google.gerrit.server.update.Context;
 import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
@@ -237,11 +237,9 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
       reviewers.add(changeToRevert.getOwner());
       reviewers.addAll(reviewerSet.byState(ReviewerStateInternal.REVIEWER));
       reviewers.remove(user.getAccountId());
-      ins.setReviewers(reviewers);
-
       Set<Account.Id> ccs = new HashSet<>(reviewerSet.byState(ReviewerStateInternal.CC));
       ccs.remove(user.getAccountId());
-      ins.setExtraCC(ccs);
+      ins.setReviewersAndCcs(reviewers, ccs);
       ins.setRevertOf(changeIdToRevert);
 
       try (BatchUpdate bu = updateFactory.create(db.get(), project, user, now)) {

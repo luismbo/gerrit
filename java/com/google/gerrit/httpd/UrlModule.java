@@ -110,7 +110,9 @@ class UrlModule extends ServletModule {
     serveRegex("^/(?:a/)?groups/(.*)?$").with(GroupsRestApiServlet.class);
     serveRegex("^/(?:a/)?projects/(.*)?$").with(ProjectsRestApiServlet.class);
 
-    filter("/Documentation/").through(QueryDocumentationFilter.class);
+    serveRegex("^/Documentation$").with(redirectDocumentation());
+    serveRegex("^/Documentation/$").with(redirectDocumentation());
+    filter("/Documentation/*").through(QueryDocumentationFilter.class);
   }
 
   private Key<HttpServlet> notFound() {
@@ -132,7 +134,8 @@ class UrlModule extends ServletModule {
 
           @Override
           protected void doGet(HttpServletRequest req, HttpServletResponse rsp) throws IOException {
-            toGerrit(req.getRequestURI().substring(req.getContextPath().length()), req, rsp);
+            String path = req.getRequestURI().substring(req.getContextPath().length());
+            toGerrit(path, req, rsp, true);
           }
         });
   }
@@ -259,10 +262,31 @@ class UrlModule extends ServletModule {
         });
   }
 
+  private Key<HttpServlet> redirectDocumentation() {
+    return key(
+        new HttpServlet() {
+          private static final long serialVersionUID = 1L;
+
+          @Override
+          protected void doGet(HttpServletRequest req, HttpServletResponse rsp) throws IOException {
+            String path = "/Documentation/index.html";
+            toGerrit(path, req, rsp);
+          }
+        });
+  }
+
   static void toGerrit(String target, HttpServletRequest req, HttpServletResponse rsp)
+      throws IOException {
+    toGerrit(target, req, rsp, false);
+  }
+
+  static void toGerrit(String target, HttpServletRequest req, HttpServletResponse rsp, boolean gwt)
       throws IOException {
     final StringBuilder url = new StringBuilder();
     url.append(req.getContextPath());
+    if (gwt) {
+      url.append("/#");
+    }
     url.append(target);
     rsp.sendRedirect(url.toString());
   }

@@ -14,14 +14,13 @@
 
 package com.google.gerrit.server.account;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.gerrit.common.TimeUtil;
 import com.google.gerrit.extensions.client.DiffPreferencesInfo;
 import com.google.gerrit.extensions.client.EditPreferencesInfo;
 import com.google.gerrit.extensions.client.GeneralPreferencesInfo;
@@ -34,6 +33,7 @@ import com.google.gerrit.server.config.AllUsersName;
 import com.google.gerrit.server.git.ValidationError;
 import com.google.gerrit.server.git.meta.MetaDataUpdate;
 import com.google.gerrit.server.git.meta.VersionedMetaData;
+import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gwtorm.server.OrmDuplicateKeyException;
 import java.io.IOException;
 import java.sql.Timestamp;
@@ -90,9 +90,9 @@ public class AccountConfig extends VersionedMetaData implements ValidationError.
   private List<ValidationError> validationErrors;
 
   public AccountConfig(Account.Id accountId, AllUsersName allUsersName, Repository allUsersRepo) {
-    this.accountId = checkNotNull(accountId, "accountId");
-    this.allUsersName = checkNotNull(allUsersName, "allUsersName");
-    this.repo = checkNotNull(allUsersRepo, "allUsersRepo");
+    this.accountId = requireNonNull(accountId, "accountId");
+    this.allUsersName = requireNonNull(allUsersName, "allUsersName");
+    this.repo = requireNonNull(allUsersRepo, "allUsersRepo");
     this.ref = RefNames.refsUsers(accountId);
   }
 

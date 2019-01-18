@@ -241,6 +241,10 @@
           ];
         },
       },
+      disableEdit: {
+        type: Boolean,
+        value: false,
+      },
       _hasKnownChainState: {
         type: Boolean,
         value: false,
@@ -397,7 +401,7 @@
       '_actionsChanged(actions.*, revisionActions.*, _additionalActions.*)',
       '_changeChanged(change)',
       '_editStatusChanged(editMode, editPatchsetLoaded, ' +
-          'editBasedOnCurrentPatchSet, actions.*, change.*)',
+          'editBasedOnCurrentPatchSet, disableEdit, actions.*, change.*)',
     ],
 
     listeners: {
@@ -575,7 +579,15 @@
     },
 
     _editStatusChanged(editMode, editPatchsetLoaded,
-        editBasedOnCurrentPatchSet) {
+        editBasedOnCurrentPatchSet, disableEdit) {
+      if (disableEdit) {
+        this._deleteAndNotify('publishEdit');
+        this._deleteAndNotify('rebaseEdit');
+        this._deleteAndNotify('deleteEdit');
+        this._deleteAndNotify('stopEdit');
+        this._deleteAndNotify('edit');
+        return;
+      }
       if (editPatchsetLoaded) {
         // Only show actions that mutate an edit if an actual edit patch set
         // is loaded.
@@ -744,7 +756,7 @@
         } else if (!values.includes(a)) {
           return;
         }
-        actions[a].label = this._getActionLabel(actions[a], type);
+        actions[a].label = this._getActionLabel(actions[a]);
 
         // Triggers a re-render by ensuring object inequality.
         result.push(Object.assign({}, actions[a]));
@@ -774,15 +786,15 @@
      * Given a change action, return a display label that uses the appropriate
      * casing or includes explanatory details.
      */
-    _getActionLabel(action, type) {
-      if (action.label === 'Delete' && type === ActionType.CHANGE) {
+    _getActionLabel(action) {
+      if (action.label === 'Delete') {
         // This label is common within change and revision actions. Make it more
         // explicit to the user.
         return 'Delete change';
-      } else if (action.label === 'WIP' && type === ActionType.CHANGE) {
+      } else if (action.label === 'WIP') {
         return 'Mark as work in progress';
       }
-      // Otherwise, just map the anme to sentence case.
+      // Otherwise, just map the name to sentence case.
       return this._toSentenceCase(action.label);
     },
 
@@ -1141,14 +1153,14 @@
             break;
           case ChangeActions.DELETE:
             if (action.__type === ActionType.CHANGE) {
-              page.show('/');
+              Gerrit.Nav.navigateToRelativeUrl(Gerrit.Nav.getUrlForRoot());
             }
             break;
           case ChangeActions.WIP:
           case ChangeActions.DELETE_EDIT:
           case ChangeActions.PUBLISH_EDIT:
           case ChangeActions.REBASE_EDIT:
-            page.show(this.changePath(this.changeNum));
+            Gerrit.Nav.navigateToChange(this.change);
             break;
           default:
             this.dispatchEvent(new CustomEvent('reload-change',

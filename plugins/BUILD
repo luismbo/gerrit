@@ -1,4 +1,5 @@
 load("//tools/bzl:genrule2.bzl", "genrule2")
+load("//tools/bzl:javadoc.bzl", "java_doc")
 load(
     "//tools/bzl:plugins.bzl",
     "CORE_PLUGINS",
@@ -32,13 +33,17 @@ EXPORTS = [
     "//java/com/google/gerrit/common:server",
     "//java/com/google/gerrit/extensions:api",
     "//java/com/google/gerrit/index",
+    "//java/com/google/gerrit/index/project",
     "//java/com/google/gerrit/index:query_exception",
     "//java/com/google/gerrit/lifecycle",
     "//java/com/google/gerrit/metrics",
     "//java/com/google/gerrit/metrics/dropwizard",
     "//java/com/google/gerrit/reviewdb:server",
     "//java/com/google/gerrit/server/audit",
+    "//java/com/google/gerrit/server/logging",
     "//java/com/google/gerrit/server/schema",
+    "//java/com/google/gerrit/server/util/time",
+    "//java/com/google/gerrit/util/cli",
     "//java/com/google/gerrit/util/http",
     "//lib/commons:compress",
     "//lib/commons:dbcp",
@@ -116,8 +121,6 @@ java_binary(
         "//java/com/google/gerrit/util/http:libhttp-src.jar",
     ],
 )
-
-load("//tools/bzl:javadoc.bzl", "java_doc")
 
 java_doc(
     name = "plugin-api-javadoc",
