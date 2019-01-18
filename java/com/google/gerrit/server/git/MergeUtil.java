@@ -319,11 +319,6 @@ public class MergeUtil {
             "Cherry-pick with allow conflicts requires that content merge is enabled.");
       }
 
-      if (applyCommitModifiers) {
-        tree = commitModifier.process(inserter, rw, mergeTip, tree, commitMsg);
-      }
-
-
       // For merging with conflict markers we need a ResolveMerger, double-check that we have one.
       checkState(m instanceof ResolveMerger, "allow conflicts is not supported");
       Map<String, MergeResult<? extends Sequence>> mergeResults =
@@ -340,6 +335,10 @@ public class MergeUtil {
       tree =
           mergeWithConflicts(
               rw, inserter, dc, "HEAD", mergeTip, "CHANGE", originalCommit, mergeResults);
+    }
+
+    if (applyCommitModifiers) {
+      tree = commitModifier.process(inserter, rw, mergeTip, tree, commitMsg);
     }
 
     CommitBuilder cherryPickCommit = new CommitBuilder();
