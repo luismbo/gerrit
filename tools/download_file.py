@@ -17,7 +17,7 @@ from __future__ import print_function
 
 from hashlib import sha1
 from optparse import OptionParser
-from os import link, makedirs, path, remove
+from os import link, makedirs, path, remove, environ
 import shutil
 from subprocess import check_call, CalledProcessError
 from sys import stderr
@@ -25,7 +25,9 @@ from util import hash_file, resolve_url
 from zipfile import ZipFile, BadZipfile, LargeZipFile
 
 GERRIT_HOME = path.expanduser('~/.gerritcodereview')
-CACHE_DIR = path.join(GERRIT_HOME, 'bazel-cache', 'downloaded-artifacts')
+#SISCOG hack to avoid exceeding disk quota
+GERRIT_HOME2 = path.join('/', 'tmp', environ['LOGNAME'], '.gerritcodereview')
+CACHE_DIR = path.join(GERRIT_HOME2, 'bazel-cache', 'downloaded-artifacts')
 LOCAL_PROPERTIES = 'local.properties'
 
 
