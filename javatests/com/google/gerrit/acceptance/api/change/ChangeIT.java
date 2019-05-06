@@ -2698,7 +2698,12 @@ public class ChangeIT extends AbstractDaemonTest {
     List<String> expectedFooters =
         Arrays.asList(
             "Change-Id: " + r2.getChangeId(),
-            "Reviewed-on: " + canonicalWebUrl.get() + "c/" + r2.getChange().getId(),
+            "Reviewed-on: "
+                + canonicalWebUrl.get()
+                + "c/"
+                + project.get()
+                + "/+/"
+                + r2.getChange().getId(),
             "Reviewed-by: Administrator <admin@example.com>",
             "Custom2: Administrator <admin@example.com>",
             "Tested-by: Administrator <admin@example.com>");
@@ -2740,7 +2745,12 @@ public class ChangeIT extends AbstractDaemonTest {
     List<String> expectedFooters =
         Arrays.asList(
             "Change-Id: " + change.getChangeId(),
-            "Reviewed-on: " + canonicalWebUrl.get() + "c/" + change.getChange().getId(),
+            "Reviewed-on: "
+                + canonicalWebUrl.get()
+                + "c/"
+                + project.get()
+                + "/+/"
+                + change.getChange().getId(),
             "Custom: refs/heads/master");
     assertThat(footers).containsExactlyElementsIn(expectedFooters);
   }
@@ -3862,9 +3872,7 @@ public class ChangeIT extends AbstractDaemonTest {
       throws Exception {
     ChangeInfo c = gApi.changes().id(changeId).get(DETAILED_LABELS);
     Set<ReviewerState> states =
-        c.reviewers
-            .entrySet()
-            .stream()
+        c.reviewers.entrySet().stream()
             .filter(e -> e.getValue().stream().anyMatch(a -> a._accountId == accountId.get()))
             .map(Map.Entry::getKey)
             .collect(toSet());
@@ -4000,12 +4008,28 @@ public class ChangeIT extends AbstractDaemonTest {
     gApi.changes().id(r.getChangeId()).ignore(true);
     assertThat(gApi.changes().id(r.getChangeId()).ignored()).isTrue();
 
+    // New patch set notification is not sent to users ignoring the change
     sender.clear();
     setApiUser(admin);
-    gApi.changes().id(r.getChangeId()).abandon();
+    amendChange(r.getChangeId());
     List<Message> messages = sender.getMessages();
     assertThat(messages).hasSize(1);
-    assertThat(messages.get(0).rcpt()).containsExactly(new Address(fullname, email));
+    Address address = new Address(fullname, email);
+    assertThat(messages.get(0).rcpt()).containsExactly(address);
+
+    // Review notification is not sent to users ignoring the change
+    sender.clear();
+    gApi.changes().id(r.getChangeId()).current().review(ReviewInput.approve());
+    messages = sender.getMessages();
+    assertThat(messages).hasSize(1);
+    assertThat(messages.get(0).rcpt()).containsExactly(address);
+
+    // Abandoned notification is not sent to users ignoring the change
+    sender.clear();
+    gApi.changes().id(r.getChangeId()).abandon();
+    messages = sender.getMessages();
+    assertThat(messages).hasSize(1);
+    assertThat(messages.get(0).rcpt()).containsExactly(address);
 
     setApiUser(user);
     gApi.changes().id(r.getChangeId()).ignore(false);

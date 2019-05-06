@@ -19,6 +19,11 @@
 
   const MAX_AUTOCOMPLETE_RESULTS = 20;
 
+  const RANGE_NAMES = [
+    'QUERY LIMIT',
+    'BATCH CHANGES LIMIT',
+  ];
+
   /**
    * Fired when the permission has been modified or removed.
    *
@@ -244,7 +249,7 @@
     _handleAddRuleItem(e) {
       // The group id is encoded, but have to decode in order for the access
       // API to work as expected.
-      const groupId = decodeURIComponent(e.detail.value.id);
+      const groupId = decodeURIComponent(e.detail.value.id).replace(/\+/g, ' ');
       this.set(['permission', 'value', 'rules', groupId], {});
 
       // Purposely don't recompute sorted array so that the newly added rule
@@ -268,6 +273,12 @@
       value.added = true;
       this.set(['permission', 'value', 'rules', groupId], value);
       this.dispatchEvent(new CustomEvent('access-modified', {bubbles: true}));
+    },
+
+    _computeHasRange(name) {
+      if (!name) { return false; }
+
+      return RANGE_NAMES.includes(name.toUpperCase());
     },
   });
 })();

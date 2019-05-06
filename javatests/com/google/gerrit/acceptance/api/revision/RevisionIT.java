@@ -35,6 +35,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Iterators;
+import com.google.common.collect.ListMultimap;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.RestResponse;
@@ -224,11 +225,7 @@ public class RevisionIT extends AbstractDaemonTest {
     setApiUser(admin);
     gApi.changes().id(changeId).reviewer(user.username).deleteVote("Code-Review");
     Optional<ApprovalInfo> crUser =
-        get(changeId, DETAILED_LABELS)
-            .labels
-            .get("Code-Review")
-            .all
-            .stream()
+        get(changeId, DETAILED_LABELS).labels.get("Code-Review").all.stream()
             .filter(a -> a._accountId == user.id.get())
             .findFirst();
     assertThat(crUser).isPresent();
@@ -243,13 +240,7 @@ public class RevisionIT extends AbstractDaemonTest {
     revision(r).review(in);
 
     ApprovalInfo cr =
-        gApi.changes()
-            .id(changeId)
-            .get(DETAILED_LABELS)
-            .labels
-            .get("Code-Review")
-            .all
-            .stream()
+        gApi.changes().id(changeId).get(DETAILED_LABELS).labels.get("Code-Review").all.stream()
             .filter(a -> a._accountId == user.getId().get())
             .findFirst()
             .get();
@@ -587,8 +578,7 @@ public class RevisionIT extends AbstractDaemonTest {
             "Patch Set 1: Cherry Picked from branch master.\n\n"
                 + "The following files contain Git conflicts:\n"
                 + "* "
-                + PushOneCommit.FILE_NAME
-                + "\n");
+                + PushOneCommit.FILE_NAME);
   }
 
   @Test
@@ -955,6 +945,21 @@ public class RevisionIT extends AbstractDaemonTest {
         .isEqualTo(PushOneCommit.FILE_NAME);
 
     gApi.changes().id(r.getChangeId()).current().setReviewed(PushOneCommit.FILE_NAME, false);
+
+    assertThat(gApi.changes().id(r.getChangeId()).current().reviewed()).isEmpty();
+  }
+
+  @Test
+  public void setUnsetReviewedFlagByFileApi() throws Exception {
+    PushOneCommit push = pushFactory.create(db, admin.getIdent(), testRepo);
+    PushOneCommit.Result r = push.to("refs/for/master");
+
+    gApi.changes().id(r.getChangeId()).current().file(PushOneCommit.FILE_NAME).setReviewed(true);
+
+    assertThat(Iterables.getOnlyElement(gApi.changes().id(r.getChangeId()).current().reviewed()))
+        .isEqualTo(PushOneCommit.FILE_NAME);
+
+    gApi.changes().id(r.getChangeId()).current().file(PushOneCommit.FILE_NAME).setReviewed(false);
 
     assertThat(gApi.changes().id(r.getChangeId()).current().reviewed()).isEmpty();
   }
@@ -1458,6 +1463,47 @@ public class RevisionIT extends AbstractDaemonTest {
     assertThat(message.message).isEqualTo("Removed Code-Review+1 by User <user@example.com>\n");
     assertThat(getReviewers(c.reviewers.get(ReviewerState.REVIEWER)))
         .containsExactlyElementsIn(ImmutableSet.of(admin.getId(), user.getId()));
+  }
+
+  @Test
+  public void listVotesByRevision() throws Exception {
+    // Create patch set 1 and vote on it
+    String changeId = createChange().getChangeId();
+    ListMultimap<String, ApprovalInfo> votes = gApi.changes().id(changeId).current().votes();
+    assertThat(votes).isEmpty();
+    recommend(changeId);
+    votes = gApi.changes().id(changeId).current().votes();
+    assertThat(votes.keySet()).containsExactly("Code-Review");
+    List<ApprovalInfo> approvals = votes.get("Code-Review");
+    assertThat(approvals).hasSize(1);
+    ApprovalInfo approval = approvals.get(0);
+    assertThat(approval._accountId).isEqualTo(admin.id.get());
+    assertThat(approval.email).isEqualTo(admin.email);
+    assertThat(approval.username).isEqualTo(admin.username);
+
+    // Also vote on it with another user
+    setApiUser(user);
+    gApi.changes().id(changeId).current().review(ReviewInput.dislike());
+
+    // Patch set 1 has 2 votes on Code-Review
+    setApiUser(admin);
+    votes = gApi.changes().id(changeId).current().votes();
+    assertThat(votes.keySet()).containsExactly("Code-Review");
+    approvals = votes.get("Code-Review");
+    assertThat(approvals).hasSize(2);
+    assertThat(approvals.stream().map(a -> a._accountId))
+        .containsExactlyElementsIn(ImmutableList.of(admin.id.get(), user.id.get()));
+
+    // Create a new patch set which does not have any votes
+    amendChange(changeId);
+    votes = gApi.changes().id(changeId).current().votes();
+    assertThat(votes).isEmpty();
+
+    // Votes are still returned for ps 1
+    votes = gApi.changes().id(changeId).revision(1).votes();
+    assertThat(votes.keySet()).containsExactly("Code-Review");
+    approvals = votes.get("Code-Review");
+    assertThat(approvals).hasSize(2);
   }
 
   private static void assertCherryPickResult(

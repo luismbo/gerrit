@@ -20,9 +20,9 @@ def _npm_binary_impl(ctx):
     dest = ctx.path(base)
     repository = ctx.attr.repository
     if repository == GERRIT:
-        url = "http://gerrit-maven.storage.googleapis.com/npm-packages/%s" % filename
+        url = "https://gerrit-maven.storage.googleapis.com/npm-packages/%s" % filename
     elif repository == NPMJS:
-        url = "http://registry.npmjs.org/%s/-/%s" % (name, filename)
+        url = "https://registry.npmjs.org/%s/-/%s" % (name, filename)
     else:
         fail("repository %s not in {%s,%s}" % (repository, GERRIT, NPMJS))
 
@@ -131,20 +131,20 @@ bower_archive = repository_rule(
 )
 
 def _bower_component_impl(ctx):
-    transitive_zipfiles = depset([ctx.file.zipfile])
-    for d in ctx.attr.deps:
-        transitive_zipfiles += d.transitive_zipfiles
+    transitive_zipfiles = depset(
+        direct = [ctx.file.zipfile],
+        transitive = [d.transitive_zipfiles for d in ctx.attr.deps],
+    )
 
-    transitive_licenses = depset()
-    if ctx.file.license:
-        transitive_licenses += depset([ctx.file.license])
+    transitive_licenses = depset(
+        direct = [ctx.file.license],
+        transitive = [d.transitive_licenses for d in ctx.attr.deps],
+    )
 
-    for d in ctx.attr.deps:
-        transitive_licenses += d.transitive_licenses
-
-    transitive_versions = depset(ctx.files.version_json)
-    for d in ctx.attr.deps:
-        transitive_versions += d.transitive_versions
+    transitive_versions = depset(
+        direct = ctx.files.version_json,
+        transitive = [d.transitive_versions for d in ctx.attr.deps],
+    )
 
     return struct(
         transitive_licenses = transitive_licenses,
@@ -183,12 +183,12 @@ def _js_component(ctx):
         mnemonic = "GenBowerZip",
     )
 
-    licenses = depset()
+    licenses = []
     if ctx.file.license:
-        licenses += depset([ctx.file.license])
+        licenses.append(ctx.file.license)
 
     return struct(
-        transitive_licenses = licenses,
+        transitive_licenses = depset(licenses),
         transitive_versions = depset(),
         transitive_zipfiles = list([ctx.outputs.zip]),
     )
@@ -233,15 +233,16 @@ def _bower_component_bundle_impl(ctx):
     """A bunch of bower components zipped up."""
     zips = depset()
     for d in ctx.attr.deps:
-        zips += d.transitive_zipfiles
+        files = d.transitive_zipfiles
 
-    versions = depset()
-    for d in ctx.attr.deps:
-        versions += d.transitive_versions
+        # TODO(davido): Make sure the field always contains a depset
+        if type(files) == "list":
+            files = depset(files)
+        zips = depset(transitive = [zips, files])
 
-    licenses = depset()
-    for d in ctx.attr.deps:
-        licenses += d.transitive_versions
+    versions = depset(transitive = [d.transitive_versions for d in ctx.attr.deps])
+
+    licenses = depset(transitive = [d.transitive_versions for d in ctx.attr.deps])
 
     out_zip = ctx.outputs.zip
     out_versions = ctx.outputs.version_json
@@ -299,11 +300,7 @@ def _bundle_impl(ctx):
 
     # intermediate artifact if split is wanted.
     if ctx.attr.split:
-        bundled = ctx.new_file(
-            ctx.configuration.genfiles_dir,
-            ctx.outputs.html,
-            ".bundled.html",
-        )
+        bundled = ctx.actions.declare_file(ctx.outputs.html.path + ".bundled.html")
     else:
         bundled = ctx.outputs.html
     destdir = ctx.outputs.html.path + ".dir"
@@ -428,7 +425,7 @@ def bundle_assets(*args, **kwargs):
     """Combine html, js, css files and optionally split into js and html bundles."""
     _bundle_rule(pkg = native.package_name(), *args, **kwargs)
 
-def polygerrit_plugin(name, app, srcs = [], assets = None, plugin_name = None, **kwargs):
+def polygerrit_plugin(name, app, srcs = [], deps = [], assets = None, plugin_name = None, **kwargs):
     """Bundles plugin dependencies for deployment.
 
     This rule bundles all Polymer elements and JS dependencies into .html and .js files.
@@ -453,6 +450,7 @@ def polygerrit_plugin(name, app, srcs = [], assets = None, plugin_name = None, *
             name = name + "_combined",
             app = app,
             srcs = srcs,
+            deps = deps,
             pkg = native.package_name(),
             **kwargs
         )
@@ -473,7 +471,7 @@ def polygerrit_plugin(name, app, srcs = [], assets = None, plugin_name = None, *
 
     closure_js_binary(
         name = name + "_bin",
-        compilation_level = "SIMPLE",
+        compilation_level = "WHITESPACE_ONLY",
         defs = [
             "--polymer_version=1",
             "--language_out=ECMASCRIPT6",

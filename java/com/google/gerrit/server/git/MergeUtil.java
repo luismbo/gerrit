@@ -30,6 +30,7 @@ import com.google.common.collect.Sets;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.FooterConstants;
 import com.google.gerrit.common.data.LabelType;
+import com.google.gerrit.extensions.registration.DynamicItem;
 import com.google.gerrit.extensions.registration.DynamicSet;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.MergeConflictException;
@@ -192,7 +193,7 @@ public class MergeUtil {
 
   private final Provider<ReviewDb> db;
   private final IdentifiedUser.GenericFactory identifiedUserFactory;
-  private final UrlFormatter urlFormatter;
+  private final DynamicItem<UrlFormatter> urlFormatter;
   private final ApprovalsUtil approvalsUtil;
   private final ProjectState project;
   private final boolean useContentMerge;
@@ -205,7 +206,7 @@ public class MergeUtil {
       @GerritServerConfig Config serverConfig,
       Provider<ReviewDb> db,
       IdentifiedUser.GenericFactory identifiedUserFactory,
-      UrlFormatter urlFormatter,
+      DynamicItem<UrlFormatter> urlFormatter,
       ApprovalsUtil approvalsUtil,
       PluggableCommitMessageGenerator commitMessageGenerator,
       PluggableCommitModifier commitModifier,
@@ -227,7 +228,7 @@ public class MergeUtil {
       @GerritServerConfig Config serverConfig,
       Provider<ReviewDb> db,
       IdentifiedUser.GenericFactory identifiedUserFactory,
-      UrlFormatter urlFormatter,
+      DynamicItem<UrlFormatter> urlFormatter,
       ApprovalsUtil approvalsUtil,
       @Assisted ProjectState project,
       PluggableCommitMessageGenerator commitMessageGenerator,
@@ -324,9 +325,7 @@ public class MergeUtil {
           ((ResolveMerger) m).getMergeResults();
 
       filesWithGitConflicts =
-          mergeResults
-              .entrySet()
-              .stream()
+          mergeResults.entrySet().stream()
               .filter(e -> e.getValue().containsConflicts())
               .map(Map.Entry::getKey)
               .collect(toImmutableSet());
@@ -352,6 +351,7 @@ public class MergeUtil {
     return commit;
   }
 
+  @SuppressWarnings("resource") // TemporaryBuffer requires calling close before reading.
   public static ObjectId mergeWithConflicts(
       RevWalk rw,
       ObjectInserter ins,
@@ -385,12 +385,19 @@ public class MergeUtil {
     Map<String, ObjectId> resolved = new HashMap<>();
     for (Map.Entry<String, MergeResult<? extends Sequence>> entry : mergeResults.entrySet()) {
       MergeResult<? extends Sequence> p = entry.getValue();
-      try (TemporaryBuffer buf = new TemporaryBuffer.LocalFile(null, 10 * 1024 * 1024)) {
+      TemporaryBuffer buf = null;
+      try {
+        // TODO(dborowitz): Respect inCoreLimit here.
+        buf = new TemporaryBuffer.LocalFile(null, 10 * 1024 * 1024);
         fmt.formatMerge(buf, p, "BASE", oursNameFormatted, theirsNameFormatted, UTF_8.name());
         buf.close();
 
         try (InputStream in = buf.openInputStream()) {
           resolved.put(entry.getKey(), ins.insert(Constants.OBJ_BLOB, buf.length(), in));
+        }
+      } finally {
+        if (buf != null) {
+          buf.destroy();
         }
       }
     }
@@ -529,7 +536,7 @@ public class MergeUtil {
       msgbuf.append('\n');
     }
 
-    Optional<String> url = urlFormatter.getChangeViewUrl(null, c.getId());
+    Optional<String> url = urlFormatter.get().getChangeViewUrl(c.getProject(), c.getId());
     if (url.isPresent()) {
       if (!contains(footers, FooterConstants.REVIEWED_ON, url.get())) {
         msgbuf

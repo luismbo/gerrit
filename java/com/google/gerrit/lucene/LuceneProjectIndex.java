@@ -14,10 +14,13 @@
 
 package com.google.gerrit.lucene;
 
+import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.gerrit.index.project.ProjectField.NAME;
 
+import com.google.gerrit.index.FieldDef;
 import com.google.gerrit.index.QueryOptions;
 import com.google.gerrit.index.Schema;
+import com.google.gerrit.index.Schema.Values;
 import com.google.gerrit.index.project.ProjectData;
 import com.google.gerrit.index.project.ProjectIndex;
 import com.google.gerrit.index.query.DataSource;
@@ -28,6 +31,7 @@ import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.config.SitePaths;
 import com.google.gerrit.server.index.IndexUtils;
 import com.google.gerrit.server.project.ProjectCache;
+import com.google.gerrit.server.project.ProjectState;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
@@ -35,6 +39,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutionException;
 import org.apache.lucene.document.Document;
+import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.search.SearcherFactory;
 import org.apache.lucene.search.Sort;
@@ -42,6 +47,7 @@ import org.apache.lucene.search.SortField;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.store.RAMDirectory;
+import org.apache.lucene.util.BytesRef;
 import org.eclipse.jgit.lib.Config;
 
 public class LuceneProjectIndex extends AbstractLuceneIndex<Project.NameKey, ProjectData>
@@ -93,6 +99,17 @@ public class LuceneProjectIndex extends AbstractLuceneIndex<Project.NameKey, Pro
   }
 
   @Override
+  void add(Document doc, Values<ProjectData> values) {
+    // Add separate DocValues field for the field that is needed for sorting.
+    FieldDef<ProjectData, ?> f = values.getField();
+    if (f == NAME) {
+      String value = (String) getOnlyElement(values.getValues());
+      doc.add(new SortedDocValuesField(NAME_SORT_FIELD, new BytesRef(value)));
+    }
+    super.add(doc, values);
+  }
+
+  @Override
   public void replace(ProjectData projectState) throws IOException {
     try {
       replace(idTerm(projectState), toDocument(projectState)).get();
@@ -122,6 +139,7 @@ public class LuceneProjectIndex extends AbstractLuceneIndex<Project.NameKey, Pro
   @Override
   protected ProjectData fromDocument(Document doc) {
     Project.NameKey nameKey = new Project.NameKey(doc.getField(NAME.getName()).stringValue());
-    return projectCache.get().get(nameKey).toProjectData();
+    ProjectState projectState = projectCache.get().get(nameKey);
+    return projectState == null ? null : projectState.toProjectData();
   }
 }

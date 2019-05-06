@@ -16,6 +16,7 @@ package com.google.gerrit.server.restapi.change;
 
 import static com.google.gerrit.extensions.conditions.BooleanCondition.or;
 
+import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.conditions.BooleanCondition;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
@@ -24,6 +25,7 @@ import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ChangeMessagesUtil;
 import com.google.gerrit.server.change.ChangeResource;
+import com.google.gerrit.server.change.SetPrivateOp;
 import com.google.gerrit.server.permissions.GlobalPermission;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.update.BatchUpdate;
@@ -59,7 +61,7 @@ public class DeletePrivate
 
   @Override
   protected Response<String> applyImpl(
-      BatchUpdate.Factory updateFactory, ChangeResource rsrc, SetPrivateOp.Input input)
+      BatchUpdate.Factory updateFactory, ChangeResource rsrc, @Nullable SetPrivateOp.Input input)
       throws RestApiException, UpdateException {
     if (!canDeletePrivate(rsrc).value()) {
       throw new AuthException("not allowed to unmark private");

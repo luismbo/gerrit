@@ -14,11 +14,13 @@
 
 package com.google.gerrit.pgm;
 
+import static com.google.gerrit.common.Version.getVersion;
 import static com.google.gerrit.server.schema.DataSourceProvider.Context.MULTI_USER;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Joiner;
 import com.google.common.base.MoreObjects;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
@@ -125,6 +127,7 @@ import java.lang.Thread.UncaughtExceptionHandler;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import javax.servlet.http.HttpServletRequest;
 import org.eclipse.jgit.lib.Config;
@@ -199,7 +202,7 @@ public class Daemon extends SiteProgram {
   private boolean inMemoryTest;
   private AbstractModule luceneModule;
   private Module emailModule;
-  private Module testSysModule;
+  private List<Module> testSysModules = new ArrayList<>();
   private Module auditEventModule;
 
   private Runnable serverStarted;
@@ -333,8 +336,8 @@ public class Daemon extends SiteProgram {
   }
 
   @VisibleForTesting
-  public void setAdditionalSysModuleForTesting(@Nullable Module m) {
-    testSysModule = m;
+  public void addAdditionalSysModuleForTesting(@Nullable Module... modules) {
+    testSysModules.addAll(Arrays.asList(modules));
   }
 
   @VisibleForTesting
@@ -387,7 +390,15 @@ public class Daemon extends SiteProgram {
   }
 
   private String myVersion() {
-    return com.google.gerrit.common.Version.getVersion();
+    List<String> versionParts = new ArrayList<>();
+    if (slave) {
+      versionParts.add("[slave]");
+    }
+    if (headless) {
+      versionParts.add("[headless]");
+    }
+    versionParts.add(getVersion());
+    return Joiner.on(" ").join(versionParts);
   }
 
   private Injector createCfgInjector() {
@@ -494,9 +505,7 @@ public class Daemon extends SiteProgram {
     if (migrateToNoteDb()) {
       modules.add(new OnlineNoteDbMigrator.Module(trial));
     }
-    if (testSysModule != null) {
-      modules.add(testSysModule);
-    }
+    modules.addAll(testSysModules);
     modules.add(new LocalMergeSuperSetComputation.Module());
     modules.add(new DefaultProjectNameLockManager.Module());
     return cfgInjector.createChildInjector(

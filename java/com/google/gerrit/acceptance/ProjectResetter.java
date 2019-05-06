@@ -46,6 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Stream;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.RefUpdate;
@@ -259,9 +260,7 @@ public class ProjectResetter implements AutoCloseable {
         refsPatternByProject.asMap().entrySet()) {
       try (Repository repo = repoManager.openRepository(e.getKey())) {
         Collection<Ref> nonRestoredRefs =
-            repo.getAllRefs()
-                .values()
-                .stream()
+            repo.getRefDatabase().getRefs().stream()
                 .filter(
                     r ->
                         !keptRefsByProject.containsEntry(e.getKey(), r.getName())
@@ -314,9 +313,7 @@ public class ProjectResetter implements AutoCloseable {
 
   private Set<Project.NameKey> projectsWithConfigChanges(
       Multimap<Project.NameKey, String> projects) {
-    return projects
-        .entries()
-        .stream()
+    return projects.entries().stream()
         .filter(e -> e.getValue().equals(RefNames.REFS_CONFIG))
         .map(Map.Entry::getKey)
         .collect(toSet());
@@ -324,21 +321,20 @@ public class ProjectResetter implements AutoCloseable {
 
   /** Evict accounts that were modified. */
   private void evictAndReindexAccounts() throws IOException {
-    Set<Account.Id> deletedAccounts = accountIds(deletedRefsByProject.get(allUsersName));
+    Set<Account.Id> deletedAccounts = accountIds(deletedRefsByProject.get(allUsersName).stream());
     if (accountCreator != null) {
       accountCreator.evict(deletedAccounts);
     }
     if (accountCache != null || accountIndexer != null) {
       Set<Account.Id> modifiedAccounts =
-          new HashSet<>(accountIds(restoredRefsByProject.get(allUsersName)));
+          new HashSet<>(accountIds(restoredRefsByProject.get(allUsersName).stream()));
 
       if (restoredRefsByProject.get(allUsersName).contains(RefNames.REFS_EXTERNAL_IDS)
           || deletedRefsByProject.get(allUsersName).contains(RefNames.REFS_EXTERNAL_IDS)) {
         // The external IDs have been modified but we don't know which accounts were affected.
         // Make sure all accounts are evicted and reindexed.
         try (Repository repo = repoManager.openRepository(allUsersName)) {
-          for (Account.Id id :
-              accountIds(repo.getAllRefs().values().stream().map(Ref::getName).collect(toSet()))) {
+          for (Account.Id id : accountIds(repo)) {
             evictAndReindexAccount(id);
           }
         }
@@ -397,9 +393,12 @@ public class ProjectResetter implements AutoCloseable {
     }
   }
 
-  private Set<Account.Id> accountIds(Collection<String> refs) {
-    return refs.stream()
-        .filter(r -> r.startsWith(REFS_USERS))
+  private static Set<Account.Id> accountIds(Repository repo) throws IOException {
+    return accountIds(repo.getRefDatabase().getRefsByPrefix(REFS_USERS).stream().map(Ref::getName));
+  }
+
+  private static Set<Account.Id> accountIds(Stream<String> refs) {
+    return refs.filter(r -> r.startsWith(REFS_USERS))
         .map(Account.Id::fromRef)
         .filter(Objects::nonNull)
         .collect(toSet());

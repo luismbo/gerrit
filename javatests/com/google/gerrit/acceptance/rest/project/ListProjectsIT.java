@@ -17,9 +17,13 @@ package com.google.gerrit.acceptance.rest.project;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.gerrit.acceptance.rest.project.ProjectAssert.assertThatNameList;
 import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS;
+import static java.util.stream.Collectors.toList;
 
+import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
+import com.google.gerrit.acceptance.GerritConfig;
 import com.google.gerrit.acceptance.NoHttpd;
 import com.google.gerrit.acceptance.Sandboxed;
 import com.google.gerrit.acceptance.TestProjectInput;
@@ -31,15 +35,26 @@ import com.google.gerrit.extensions.api.projects.Projects.ListRequest.FilterType
 import com.google.gerrit.extensions.client.ProjectState;
 import com.google.gerrit.extensions.common.ProjectInfo;
 import com.google.gerrit.extensions.restapi.BadRequestException;
+import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.reviewdb.client.Project;
+import com.google.gerrit.server.OutputFormat;
+import com.google.gerrit.server.project.ProjectCacheImpl;
 import com.google.gerrit.server.project.testing.Util;
+import com.google.gerrit.server.restapi.project.ListProjects;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.inject.Inject;
+import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.IntStream;
 import org.junit.Test;
 
 @NoHttpd
 @Sandboxed
 public class ListProjectsIT extends AbstractDaemonTest {
+  @Inject private ListProjects listProjects;
 
   @Test
   public void listProjects() throws Exception {
@@ -87,6 +102,7 @@ public class ListProjectsIT extends AbstractDaemonTest {
 
   @Test
   public void listProjectsWithLimit() throws Exception {
+    ProjectCacheImpl projectCacheImpl = (ProjectCacheImpl) projectCache;
     for (int i = 0; i < 5; i++) {
       createProject("someProject" + i);
     }
@@ -94,10 +110,93 @@ public class ListProjectsIT extends AbstractDaemonTest {
     String p = name("");
     // 5, plus p which was automatically created.
     int n = 6;
+    projectCacheImpl.evictAllByName();
     for (int i = 1; i <= n + 2; i++) {
       assertThatNameList(gApi.projects().list().withPrefix(p).withLimit(i).get())
           .hasSize(Math.min(i, n));
+      assertThat(projectCacheImpl.sizeAllByName())
+          .isAtMost((long) (i + 2)); // 2 = AllProjects + AllUsers
     }
+  }
+
+  @Test
+  @GerritConfig(name = "gerrit.listProjectsFromIndex", value = "true")
+  public void listProjectsFromIndexShouldBeLimitedTo500() throws Exception {
+    int numTestProjects = 501;
+    assertThat(createProjects("foo", numTestProjects)).hasSize(numTestProjects);
+    assertThat(gApi.projects().list().get()).hasSize(500);
+  }
+
+  @Test
+  public void listProjectsShouldNotBeLimitedByDefault() throws Exception {
+    int numTestProjects = 501;
+    assertThat(createProjects("foo", numTestProjects)).hasSize(numTestProjects);
+    assertThat(gApi.projects().list().get().size()).isAtLeast(numTestProjects);
+  }
+
+  @Test
+  public void listProjectsToOutputStream() throws Exception {
+    int numInitialProjects = gApi.projects().list().get().size();
+    int numTestProjects = 5;
+    List<String> testProjects = createProjects("zzz_testProject", numTestProjects);
+    try (ByteArrayOutputStream displayOut = new ByteArrayOutputStream()) {
+
+      listProjects.setStart(numInitialProjects);
+      listProjects.displayToStream(displayOut);
+
+      List<String> lines =
+          Splitter.on("\n").omitEmptyStrings().splitToList(new String(displayOut.toByteArray()));
+      assertThat(lines).isEqualTo(testProjects);
+    }
+  }
+
+  @Test
+  public void listProjectsAsJsonMultilineToOutputStream() throws Exception {
+    listProjectsAsJsonToOutputStream(OutputFormat.JSON);
+  }
+
+  @Test
+  public void listProjectsAsJsonCompactToOutputStream() throws Exception {
+    String jsonOutput = listProjectsAsJsonToOutputStream(OutputFormat.JSON_COMPACT).trim();
+    assertThat(jsonOutput).doesNotContain("\n");
+  }
+
+  private String listProjectsAsJsonToOutputStream(OutputFormat jsonFormat) throws Exception {
+    assertThat(jsonFormat.isJson()).isTrue();
+
+    int numInitialProjects = gApi.projects().list().get().size();
+    int numTestProjects = 5;
+    Set<String> testProjects =
+        ImmutableSet.copyOf(createProjects("zzz_testProject", numTestProjects));
+    try (ByteArrayOutputStream displayOut = new ByteArrayOutputStream()) {
+
+      listProjects.setStart(numInitialProjects);
+      listProjects.setFormat(jsonFormat);
+      listProjects.displayToStream(displayOut);
+
+      String projectsJsonOutput = new String(displayOut.toByteArray());
+
+      Gson gson = jsonFormat.newGson();
+      Set<String> projectsJsonNames = gson.fromJson(projectsJsonOutput, JsonObject.class).keySet();
+      assertThat(projectsJsonNames).isEqualTo(testProjects);
+
+      return projectsJsonOutput;
+    }
+  }
+
+  private List<String> createProjects(String prefix, int numProjects) {
+    return IntStream.range(0, numProjects)
+        .mapToObj(
+            i -> {
+              String projectName = prefix + i;
+              try {
+                return createProject(projectName);
+              } catch (RestApiException e) {
+                throw new IllegalStateException("Unable to create project " + projectName, e);
+              }
+            })
+        .map(Project.NameKey::get)
+        .collect(toList());
   }
 
   @Test
@@ -186,6 +285,27 @@ public class ListProjectsIT extends AbstractDaemonTest {
 
     assertThatNameList(filter(gApi.projects().list().withType(FilterType.ALL).get()))
         .containsExactly(allProjects, allUsers, project)
+        .inOrder();
+  }
+
+  @Test
+  public void listParentCandidates() throws Exception {
+    Map<String, ProjectInfo> result =
+        gApi.projects().list().withType(FilterType.PARENT_CANDIDATES).getAsMap();
+    assertThat(result).hasSize(1);
+    assertThat(result).containsKey(allProjects.get());
+
+    // Create a new project with 'project' as parent
+    Project.NameKey testProject = createProject(name("test"), project);
+
+    // Parent candidates are All-Projects and 'project'
+    assertThatNameList(filter(gApi.projects().list().withType(FilterType.PARENT_CANDIDATES).get()))
+        .containsExactly(allProjects, project)
+        .inOrder();
+
+    // All projects are listed
+    assertThatNameList(filter(gApi.projects().list().get()))
+        .containsExactly(allProjects, allUsers, testProject, project)
         .inOrder();
   }
 

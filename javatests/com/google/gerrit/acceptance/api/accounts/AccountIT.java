@@ -104,11 +104,9 @@ import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.Sequences;
 import com.google.gerrit.server.ServerInitiated;
-import com.google.gerrit.server.account.AccountManager;
 import com.google.gerrit.server.account.AccountProperties;
 import com.google.gerrit.server.account.AccountState;
 import com.google.gerrit.server.account.AccountsUpdate;
-import com.google.gerrit.server.account.AuthRequest;
 import com.google.gerrit.server.account.Emails;
 import com.google.gerrit.server.account.ProjectWatches;
 import com.google.gerrit.server.account.ProjectWatches.NotifyType;
@@ -231,8 +229,6 @@ public class AccountIT extends AbstractDaemonTest {
 
   @Inject
   private DynamicSet<AccountActivationValidationListener> accountActivationValidationListeners;
-
-  @Inject private AccountManager accountManager;
 
   private AccountIndexedCounter accountIndexedCounter;
   private RegistrationHandle accountIndexEventCounterHandle;
@@ -916,10 +912,7 @@ public class AccountIT extends AbstractDaemonTest {
     gApi.accounts().id(foo.id.hashCode()).addEmail(input);
 
     assertThat(
-            gApi.accounts()
-                .id(foo.id.get())
-                .getEmails()
-                .stream()
+            gApi.accounts().id(foo.id.get()).getEmails().stream()
                 .map(e -> e.email)
                 .collect(toSet()))
         .containsExactly(email, secondaryEmail);
@@ -1899,8 +1892,11 @@ public class AccountIT extends AbstractDaemonTest {
     String id = key.getKeyIdString();
     addExternalIdEmail(admin, "test1@example.com");
 
+    sender.clear();
     assertKeyMapContains(key, addGpgKey(key.getPublicKeyArmored()));
     assertKeys(key);
+    assertThat(sender.getMessages()).hasSize(1);
+    assertThat(sender.getMessages().get(0).body()).contains("new GPG keys have been added");
 
     setApiUser(user);
     exception.expect(ResourceNotFoundException.class);
@@ -1915,14 +1911,21 @@ public class AccountIT extends AbstractDaemonTest {
     String id = key.getKeyIdString();
     PGPPublicKey pk = key.getPublicKey();
 
+    sender.clear();
     GpgKeyInfo info = addGpgKey(armor(pk)).get(id);
     assertThat(info.userIds).hasSize(2);
     assertIteratorSize(2, getOnlyKeyFromStore(key).getUserIDs());
+    assertThat(sender.getMessages()).hasSize(1);
+    assertThat(sender.getMessages().get(0).body()).contains("new GPG keys have been added");
 
     pk = PGPPublicKey.removeCertification(pk, "foo:myId");
+    sender.clear();
     info = addGpgKeyNoReindex(armor(pk)).get(id);
     assertThat(info.userIds).hasSize(1);
     assertIteratorSize(1, getOnlyKeyFromStore(key).getUserIDs());
+    // TODO: Issue 10769: Adding an already existing key should not result in a notification email
+    assertThat(sender.getMessages()).hasSize(1);
+    assertThat(sender.getMessages().get(0).body()).contains("new GPG keys have been added");
   }
 
   @Test
@@ -2032,32 +2035,42 @@ public class AccountIT extends AbstractDaemonTest {
     assertSequenceNumbers(info);
     SshKeyInfo key = info.get(0);
     KeyPair keyPair = sshKeys.getKeyPair(admin);
-    String inital = TestSshKeys.publicKey(keyPair, admin.email);
-    assertThat(key.sshPublicKey).isEqualTo(inital);
+    String initial = TestSshKeys.publicKey(keyPair, admin.email);
+    assertThat(key.sshPublicKey).isEqualTo(initial);
     accountIndexedCounter.assertNoReindex();
 
     // Add a new key
+    sender.clear();
     String newKey = TestSshKeys.publicKey(TestSshKeys.genSshKey(), admin.email);
     gApi.accounts().self().addSshKey(newKey);
     info = gApi.accounts().self().listSshKeys();
     assertThat(info).hasSize(2);
     assertSequenceNumbers(info);
     accountIndexedCounter.assertReindexOf(admin);
+    assertThat(sender.getMessages()).hasSize(1);
+    assertThat(sender.getMessages().get(0).body()).contains("new SSH keys have been added");
 
     // Add an existing key (the request succeeds, but the key isn't added again)
-    gApi.accounts().self().addSshKey(inital);
+    sender.clear();
+    gApi.accounts().self().addSshKey(initial);
     info = gApi.accounts().self().listSshKeys();
     assertThat(info).hasSize(2);
     assertSequenceNumbers(info);
     accountIndexedCounter.assertNoReindex();
+    // TODO: Issue 10769: Adding an already existing key should not result in a notification email
+    assertThat(sender.getMessages()).hasSize(1);
+    assertThat(sender.getMessages().get(0).body()).contains("new SSH keys have been added");
 
     // Add another new key
+    sender.clear();
     String newKey2 = TestSshKeys.publicKey(TestSshKeys.genSshKey(), admin.email);
     gApi.accounts().self().addSshKey(newKey2);
     info = gApi.accounts().self().listSshKeys();
     assertThat(info).hasSize(3);
     assertSequenceNumbers(info);
     accountIndexedCounter.assertReindexOf(admin);
+    assertThat(sender.getMessages()).hasSize(1);
+    assertThat(sender.getMessages().get(0).body()).contains("new SSH keys have been added");
 
     // Delete second key
     gApi.accounts().self().deleteSshKey(2);
@@ -2498,10 +2511,7 @@ public class AccountIT extends AbstractDaemonTest {
     assertThat(bgCounterA1.get()).isEqualTo(0);
     assertThat(bgCounterA2.get()).isEqualTo(0);
     assertThat(
-            gApi.accounts()
-                .id(accountId.get())
-                .getExternalIds()
-                .stream()
+            gApi.accounts().id(accountId.get()).getExternalIds().stream()
                 .map(i -> i.identity)
                 .collect(toSet()))
         .containsExactly(extIdA1.key().get());
@@ -2531,10 +2541,7 @@ public class AccountIT extends AbstractDaemonTest {
     assertThat(updatedAccount.get().getExternalIds()).containsExactly(extIdB2);
     assertThat(accounts.get(accountId).get().getExternalIds()).containsExactly(extIdB2);
     assertThat(
-            gApi.accounts()
-                .id(accountId.get())
-                .getExternalIds()
-                .stream()
+            gApi.accounts().id(accountId.get()).getExternalIds().stream()
                 .map(i -> i.identity)
                 .collect(toSet()))
         .containsExactly(extIdB2.key().get());
@@ -2749,15 +2756,64 @@ public class AccountIT extends AbstractDaemonTest {
   }
 
   @Test
-  public void updateDisplayName() throws Exception {
-    String name = name("test");
-    gApi.accounts().create(name);
-    AuthRequest who = AuthRequest.forUser(name);
-    accountManager.authenticate(who);
-    assertThat(gApi.accounts().id(name).get().name).isEqualTo(name);
-    who.setDisplayName("Something Else");
-    accountManager.authenticate(who);
-    assertThat(gApi.accounts().id(name).get().name).isEqualTo("Something Else");
+  public void userCanGenerateNewHttpPassword() throws Exception {
+    String newPassword = gApi.accounts().self().generateHttpPassword();
+    assertThat(newPassword).isNotNull();
+  }
+
+  @Test
+  public void adminCanGenerateNewHttpPasswordForUser() throws Exception {
+    setApiUser(admin);
+    String newPassword = gApi.accounts().id(user.username).generateHttpPassword();
+    assertThat(newPassword).isNotNull();
+  }
+
+  @Test
+  public void userCannotGenerateNewHttpPasswordForOtherUser() throws Exception {
+    setApiUser(user);
+    exception.expect(AuthException.class);
+    gApi.accounts().id(admin.username).generateHttpPassword();
+  }
+
+  @Test
+  public void userCannotExplicitlySetHttpPassword() throws Exception {
+    setApiUser(user);
+    exception.expect(AuthException.class);
+    gApi.accounts().self().setHttpPassword("my-new-password");
+  }
+
+  @Test
+  public void userCannotExplicitlySetHttpPasswordForOtherUser() throws Exception {
+    setApiUser(user);
+    exception.expect(AuthException.class);
+    gApi.accounts().id(admin.username).setHttpPassword("my-new-password");
+  }
+
+  @Test
+  public void userCanRemoveHttpPassword() throws Exception {
+    setApiUser(user);
+    assertThat(gApi.accounts().self().setHttpPassword(null)).isNull();
+  }
+
+  @Test
+  public void userCannotRemoveHttpPasswordForOtherUser() throws Exception {
+    setApiUser(user);
+    exception.expect(AuthException.class);
+    gApi.accounts().id(admin.username).setHttpPassword(null);
+  }
+
+  @Test
+  public void adminCanExplicitlySetHttpPasswordForUser() throws Exception {
+    setApiUser(admin);
+    String httpPassword = "new-password-for-user";
+    assertThat(gApi.accounts().id(user.username).setHttpPassword(httpPassword))
+        .isEqualTo(httpPassword);
+  }
+
+  @Test
+  public void adminCanRemoveHttpPasswordForUser() throws Exception {
+    setApiUser(admin);
+    assertThat(gApi.accounts().id(user.username).setHttpPassword(null)).isNull();
   }
 
   private void createDraft(PushOneCommit.Result r, String path, String message) throws Exception {
@@ -2773,11 +2829,7 @@ public class AccountIT extends AbstractDaemonTest {
       setApiUser(testAccount);
       for (ChangeInfo changeInfo : gApi.changes().query("has:draft").get()) {
         for (CommentInfo c :
-            gApi.changes()
-                .id(changeInfo.id)
-                .drafts()
-                .values()
-                .stream()
+            gApi.changes().id(changeInfo.id).drafts().values().stream()
                 .flatMap(List::stream)
                 .collect(toImmutableList())) {
           gApi.changes().id(changeInfo.id).revision(c.patchSet).draft(c.id).delete();
@@ -2865,9 +2917,7 @@ public class AccountIT extends AbstractDaemonTest {
     Iterable<String> expectedFps =
         expected.transform(k -> BaseEncoding.base16().encode(k.getPublicKey().getFingerprint()));
     Iterable<String> actualFps =
-        externalIds
-            .byAccount(currAccountId, SCHEME_GPGKEY)
-            .stream()
+        externalIds.byAccount(currAccountId, SCHEME_GPGKEY).stream()
             .map(e -> e.key().id())
             .collect(toSet());
     assertThat(actualFps).named("external IDs in database").containsExactlyElementsIn(expectedFps);
@@ -2886,7 +2936,9 @@ public class AccountIT extends AbstractDaemonTest {
         .isEqualTo(Fingerprint.toString(expected.getPublicKey().getFingerprint()));
     List<String> userIds = ImmutableList.copyOf(expected.getPublicKey().getUserIDs());
     assertThat(actual.userIds).named(id).containsExactlyElementsIn(userIds);
-    assertThat(actual.key).named(id).startsWith("-----BEGIN PGP PUBLIC KEY BLOCK-----\n");
+    String key = actual.key;
+    assertThat(key).named(id).startsWith("-----BEGIN PGP PUBLIC KEY BLOCK-----\n");
+    assertThat(key).named(id).endsWith("-----END PGP PUBLIC KEY BLOCK-----\n");
     assertThat(actual.status).isEqualTo(GpgKeyInfo.Status.TRUSTED);
     assertThat(actual.problems).isEmpty();
   }
