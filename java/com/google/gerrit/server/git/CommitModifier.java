@@ -1,7 +1,6 @@
 package com.google.gerrit.server.git;
 
 import com.google.gerrit.extensions.annotations.ExtensionPoint;
-import com.google.gerrit.reviewdb.client.Branch;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectInserter;
 import org.eclipse.jgit.revwalk.RevCommit;
