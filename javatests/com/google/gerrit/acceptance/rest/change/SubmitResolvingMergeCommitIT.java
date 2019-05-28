@@ -29,7 +29,6 @@ import com.google.gerrit.server.restapi.change.Submit;
 import com.google.gerrit.server.submit.ChangeSet;
 import com.google.gerrit.server.submit.MergeSuperSet;
 import com.google.gerrit.testing.ConfigSuite;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import java.io.IOException;
@@ -305,9 +304,9 @@ public class SubmitResolvingMergeCommitIT extends AbstractDaemonTest {
   }
 
   private void assertChangeSetMergeable(ChangeData change, boolean expected)
-      throws MissingObjectException, IncorrectObjectTypeException, IOException, OrmException,
+      throws MissingObjectException, IncorrectObjectTypeException, IOException,
           PermissionBackendException {
-    ChangeSet cs = mergeSuperSet.get().completeChangeSet(db, change.change(), user(admin));
+    ChangeSet cs = mergeSuperSet.get().completeChangeSet(change.change(), user(admin));
     assertThat(submit.unmergeableChanges(cs).isEmpty()).isEqualTo(expected);
   }
 
@@ -333,7 +332,7 @@ public class SubmitResolvingMergeCommitIT extends AbstractDaemonTest {
       List<RevCommit> parents,
       String ref)
       throws Exception {
-    PushOneCommit push = pushFactory.create(db, admin.getIdent(), repo, subject, fileName, content);
+    PushOneCommit push = pushFactory.create(admin.newIdent(), repo, subject, fileName, content);
 
     if (!parents.isEmpty()) {
       push.setParents(parents);
@@ -351,7 +350,7 @@ public class SubmitResolvingMergeCommitIT extends AbstractDaemonTest {
 
   private PushOneCommit.Result createChange(TestRepository<?> repo, String subject)
       throws Exception {
-    return createChange(repo, subject, "x", "x", new ArrayList<RevCommit>(), "refs/for/master");
+    return createChange(repo, subject, "x", "x", new ArrayList<>(), "refs/for/master");
   }
 
   private PushOneCommit.Result createChange(
@@ -366,8 +365,7 @@ public class SubmitResolvingMergeCommitIT extends AbstractDaemonTest {
 
   @Override
   protected PushOneCommit.Result createChange(String subject) throws Exception {
-    return createChange(
-        testRepo, subject, "", "", Collections.<RevCommit>emptyList(), "refs/for/master");
+    return createChange(testRepo, subject, "", "", Collections.emptyList(), "refs/for/master");
   }
 
   private PushOneCommit.Result createChange(String subject, List<RevCommit> parents)

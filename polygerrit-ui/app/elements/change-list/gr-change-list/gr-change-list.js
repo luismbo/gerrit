@@ -24,6 +24,7 @@
 
   Polymer({
     is: 'gr-change-list',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when next page key shortcut was pressed.
@@ -63,7 +64,7 @@
        * properties should not be used together.
        *
        * @type {!Array<{
-       *   sectionName: string,
+       *   name: string,
        *   query: string,
        *   results: !Array<!Object>
        * }>}
@@ -75,6 +76,9 @@
       labelNames: {
         type: Array,
         computed: '_computeLabelNames(sections)',
+      },
+      _dynamicHeaderEndpoints: {
+        type: Array,
       },
       selectedIndex: {
         type: Number,
@@ -126,6 +130,13 @@
         [this.Shortcut.TOGGLE_CHANGE_STAR]: '_toggleChangeStar',
         [this.Shortcut.REFRESH_CHANGE_LIST]: '_refreshChangeList',
       };
+    },
+
+    attached() {
+      Gerrit.awaitPluginsLoaded().then(() => {
+        this._dynamicHeaderEndpoints = Gerrit._endpoints.getDynamicEndpoints(
+            'change-list-header');
+      });
     },
 
     /**
@@ -341,7 +352,9 @@
     },
 
     _getListItems() {
-      return Polymer.dom(this.root).querySelectorAll('gr-change-list-item');
+      // Polymer2: querySelectorAll returns NodeList instead of Array.
+      return Array.from(
+          Polymer.dom(this.root).querySelectorAll('gr-change-list-item'));
     },
 
     _sectionsChanged() {

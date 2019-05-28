@@ -27,7 +27,6 @@ import com.google.gerrit.index.query.Predicate;
 import com.google.gerrit.index.query.QueryParseException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.FanOutExecutor;
 import com.google.gerrit.server.change.ReviewerSuggestion;
@@ -40,7 +39,6 @@ import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gerrit.server.query.change.ChangeQueryBuilder;
 import com.google.gerrit.server.query.change.InternalChangeQuery;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import java.io.IOException;
@@ -51,7 +49,6 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -80,7 +77,6 @@ public class ReviewerRecommender {
   private final PluginMapContext<ReviewerSuggestion> reviewerSuggestionPluginMap;
   private final Provider<InternalChangeQuery> queryProvider;
   private final ExecutorService executor;
-  private final Provider<ReviewDb> dbProvider;
   private final ApprovalsUtil approvalsUtil;
 
   @Inject
@@ -89,7 +85,6 @@ public class ReviewerRecommender {
       PluginMapContext<ReviewerSuggestion> reviewerSuggestionPluginMap,
       Provider<InternalChangeQuery> queryProvider,
       @FanOutExecutor ExecutorService executor,
-      Provider<ReviewDb> dbProvider,
       ApprovalsUtil approvalsUtil,
       @GerritServerConfig Config config) {
     this.changeQueryBuilder = changeQueryBuilder;
@@ -97,7 +92,6 @@ public class ReviewerRecommender {
     this.queryProvider = queryProvider;
     this.reviewerSuggestionPluginMap = reviewerSuggestionPluginMap;
     this.executor = executor;
-    this.dbProvider = dbProvider;
     this.approvalsUtil = approvalsUtil;
   }
 
@@ -106,7 +100,7 @@ public class ReviewerRecommender {
       SuggestReviewers suggestReviewers,
       ProjectState projectState,
       List<Account.Id> candidateList)
-      throws OrmException, IOException, ConfigInvalidException {
+      throws IOException, ConfigInvalidException {
     logger.atFine().log("Candidates %s", candidateList);
 
     String query = suggestReviewers.getQuery();
@@ -183,7 +177,7 @@ public class ReviewerRecommender {
 
       // Remove existing reviewers
       approvalsUtil
-          .getReviewers(dbProvider.get(), changeNotes)
+          .getReviewers(changeNotes)
           .byState(REVIEWER)
           .forEach(
               r -> {
@@ -194,7 +188,7 @@ public class ReviewerRecommender {
     }
 
     // Sort results
-    Stream<Entry<Account.Id, MutableDouble>> sorted =
+    Stream<Map.Entry<Account.Id, MutableDouble>> sorted =
         reviewerScores.entrySet().stream()
             .sorted(Collections.reverseOrder(Map.Entry.comparingByValue()));
     List<Account.Id> sortedSuggestions = sorted.map(Map.Entry::getKey).collect(toList());
@@ -203,7 +197,7 @@ public class ReviewerRecommender {
   }
 
   private Map<Account.Id, MutableDouble> baseRankingForEmptyQuery(double baseWeight)
-      throws OrmException, IOException, ConfigInvalidException {
+      throws IOException, ConfigInvalidException {
     // Get the user's last 25 changes, check approvals
     try {
       List<ChangeData> result =
@@ -233,7 +227,7 @@ public class ReviewerRecommender {
 
   private Map<Account.Id, MutableDouble> baseRankingForCandidateList(
       List<Account.Id> candidates, ProjectState projectState, double baseWeight)
-      throws OrmException, IOException, ConfigInvalidException {
+      throws IOException, ConfigInvalidException {
     // Get each reviewer's activity based on number of applied labels
     // (weighted 10d), number of comments (weighted 0.5d) and number of owned
     // changes (weighted 1d).

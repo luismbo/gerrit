@@ -21,6 +21,7 @@
 
   Polymer({
     is: 'gr-endpoint-decorator',
+    _legacyUndefinedCheck: true,
 
     properties: {
       name: String,
@@ -71,7 +72,9 @@
     },
 
     _getEndpointParams() {
-      return Polymer.dom(this).querySelectorAll('gr-endpoint-param');
+      // Polymer2: querySelectorAll returns NodeList instead of Array.
+      return Array.from(
+          Polymer.dom(this).querySelectorAll('gr-endpoint-param'));
     },
 
     /**

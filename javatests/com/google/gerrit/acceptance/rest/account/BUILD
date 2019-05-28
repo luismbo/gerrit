@@ -18,7 +18,6 @@ java_library(
     deps = [
         "//java/com/google/gerrit/acceptance:lib",
         "//java/com/google/gerrit/reviewdb:server",
-        "//lib:gwtorm",
         "//lib:junit",
     ],
 )

@@ -16,6 +16,7 @@ package com.google.gerrit.server.group.db;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.gerrit.server.group.testing.InternalGroupSubject.internalGroups;
 import static com.google.gerrit.truth.OptionalSubject.assertThat;
 import static org.hamcrest.CoreMatchers.instanceOf;
 
@@ -32,9 +33,8 @@ import com.google.gerrit.server.git.meta.MetaDataUpdate;
 import com.google.gerrit.server.group.InternalGroup;
 import com.google.gerrit.server.group.testing.InternalGroupSubject;
 import com.google.gerrit.server.util.time.TimeUtil;
+import com.google.gerrit.testing.GerritBaseTests;
 import com.google.gerrit.truth.OptionalSubject;
-import com.google.gwtorm.client.KeyUtil;
-import com.google.gwtorm.server.StandardKeyEncoder;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.time.LocalDate;
@@ -53,18 +53,9 @@ import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
-public class GroupConfigTest {
-  static {
-    // Necessary so that toString() methods of ReviewDb entities work correctly.
-    KeyUtil.setEncoderImpl(new StandardKeyEncoder());
-  }
-
-  @Rule public ExpectedException expectedException = ExpectedException.none();
-
+public class GroupConfigTest extends GerritBaseTests {
   private Project.NameKey projectName;
   private Repository repository;
   private TestRepository<?> testRepository;
@@ -122,8 +113,8 @@ public class GroupConfigTest {
     GroupConfig groupConfig = GroupConfig.createForNewGroup(projectName, repository, groupCreation);
 
     try (MetaDataUpdate metaDataUpdate = createMetaDataUpdate()) {
-      expectedException.expectCause(instanceOf(ConfigInvalidException.class));
-      expectedException.expectMessage("Name of the group " + groupUuid);
+      exception.expectCause(instanceOf(ConfigInvalidException.class));
+      exception.expectMessage("Name of the group " + groupUuid);
       groupConfig.commit(metaDataUpdate);
     }
   }
@@ -135,8 +126,8 @@ public class GroupConfigTest {
     GroupConfig groupConfig = GroupConfig.createForNewGroup(projectName, repository, groupCreation);
 
     try (MetaDataUpdate metaDataUpdate = createMetaDataUpdate()) {
-      expectedException.expectCause(instanceOf(ConfigInvalidException.class));
-      expectedException.expectMessage("Name of the group " + groupUuid);
+      exception.expectCause(instanceOf(ConfigInvalidException.class));
+      exception.expectMessage("Name of the group " + groupUuid);
       groupConfig.commit(metaDataUpdate);
     }
   }
@@ -157,8 +148,8 @@ public class GroupConfigTest {
     GroupConfig groupConfig = GroupConfig.createForNewGroup(projectName, repository, groupCreation);
 
     try (MetaDataUpdate metaDataUpdate = createMetaDataUpdate()) {
-      expectedException.expectCause(instanceOf(ConfigInvalidException.class));
-      expectedException.expectMessage("ID of the group " + groupUuid);
+      exception.expectCause(instanceOf(ConfigInvalidException.class));
+      exception.expectMessage("ID of the group " + groupUuid);
       groupConfig.commit(metaDataUpdate);
     }
   }
@@ -236,8 +227,8 @@ public class GroupConfigTest {
     groupConfig.setGroupUpdate(groupUpdate, auditLogFormatter);
 
     try (MetaDataUpdate metaDataUpdate = createMetaDataUpdate()) {
-      expectedException.expectCause(instanceOf(ConfigInvalidException.class));
-      expectedException.expectMessage("Owner UUID of the group " + groupUuid);
+      exception.expectCause(instanceOf(ConfigInvalidException.class));
+      exception.expectMessage("Owner UUID of the group " + groupUuid);
       groupConfig.commit(metaDataUpdate);
     }
   }
@@ -251,8 +242,8 @@ public class GroupConfigTest {
     groupConfig.setGroupUpdate(groupUpdate, auditLogFormatter);
 
     try (MetaDataUpdate metaDataUpdate = createMetaDataUpdate()) {
-      expectedException.expectCause(instanceOf(ConfigInvalidException.class));
-      expectedException.expectMessage("Owner UUID of the group " + groupUuid);
+      exception.expectCause(instanceOf(ConfigInvalidException.class));
+      exception.expectMessage("Owner UUID of the group " + groupUuid);
       groupConfig.commit(metaDataUpdate);
     }
   }
@@ -362,8 +353,8 @@ public class GroupConfigTest {
   public void idInConfigMustBeDefined() throws Exception {
     populateGroupConfig(groupUuid, "[group]\n\tname = users\n\townerGroupUuid = owners\n");
 
-    expectedException.expect(ConfigInvalidException.class);
-    expectedException.expectMessage("ID of the group " + groupUuid);
+    exception.expect(ConfigInvalidException.class);
+    exception.expectMessage("ID of the group " + groupUuid);
     GroupConfig.loadForGroup(projectName, repository, groupUuid);
   }
 
@@ -372,8 +363,8 @@ public class GroupConfigTest {
     populateGroupConfig(
         groupUuid, "[group]\n\tname = users\n\tid = -5\n\townerGroupUuid = owners\n");
 
-    expectedException.expect(ConfigInvalidException.class);
-    expectedException.expectMessage("ID of the group " + groupUuid);
+    exception.expect(ConfigInvalidException.class);
+    exception.expectMessage("ID of the group " + groupUuid);
     GroupConfig.loadForGroup(projectName, repository, groupUuid);
   }
 
@@ -398,8 +389,8 @@ public class GroupConfigTest {
   public void ownerGroupUuidInConfigMustBeDefined() throws Exception {
     populateGroupConfig(groupUuid, "[group]\n\tname = users\n\tid = 42\n");
 
-    expectedException.expect(ConfigInvalidException.class);
-    expectedException.expectMessage("Owner UUID of the group " + groupUuid);
+    exception.expect(ConfigInvalidException.class);
+    exception.expectMessage("Owner UUID of the group " + groupUuid);
     GroupConfig.loadForGroup(projectName, repository, groupUuid);
   }
 
@@ -452,8 +443,8 @@ public class GroupConfigTest {
     populateGroupConfig(groupUuid, "[group]\n\tname=users\n\tid = 42\n\townerGroupUuid = owners\n");
     populateMembersFile(groupUuid, "One");
 
-    expectedException.expect(ConfigInvalidException.class);
-    expectedException.expectMessage("Invalid file members");
+    exception.expect(ConfigInvalidException.class);
+    exception.expectMessage("Invalid file members");
     loadGroup(groupUuid);
   }
 
@@ -462,8 +453,8 @@ public class GroupConfigTest {
     populateGroupConfig(groupUuid, "[group]\n\tname=users\n\tid = 42\n\townerGroupUuid = owners\n");
     populateMembersFile(groupUuid, "1\t2");
 
-    expectedException.expect(ConfigInvalidException.class);
-    expectedException.expectMessage("Invalid file members");
+    exception.expect(ConfigInvalidException.class);
+    exception.expectMessage("Invalid file members");
     loadGroup(groupUuid);
   }
 
@@ -554,8 +545,8 @@ public class GroupConfigTest {
     groupConfig.setGroupUpdate(groupUpdate, auditLogFormatter);
 
     try (MetaDataUpdate metaDataUpdate = createMetaDataUpdate()) {
-      expectedException.expectCause(instanceOf(ConfigInvalidException.class));
-      expectedException.expectMessage("Name of the group " + groupUuid);
+      exception.expectCause(instanceOf(ConfigInvalidException.class));
+      exception.expectMessage("Name of the group " + groupUuid);
       groupConfig.commit(metaDataUpdate);
     }
   }
@@ -570,8 +561,8 @@ public class GroupConfigTest {
     groupConfig.setGroupUpdate(groupUpdate, auditLogFormatter);
 
     try (MetaDataUpdate metaDataUpdate = createMetaDataUpdate()) {
-      expectedException.expectCause(instanceOf(ConfigInvalidException.class));
-      expectedException.expectMessage("Name of the group " + groupUuid);
+      exception.expectCause(instanceOf(ConfigInvalidException.class));
+      exception.expectMessage("Name of the group " + groupUuid);
       groupConfig.commit(metaDataUpdate);
     }
   }
@@ -637,8 +628,8 @@ public class GroupConfigTest {
     groupConfig.setGroupUpdate(groupUpdate, auditLogFormatter);
 
     try (MetaDataUpdate metaDataUpdate = createMetaDataUpdate()) {
-      expectedException.expectCause(instanceOf(ConfigInvalidException.class));
-      expectedException.expectMessage("Owner UUID of the group " + groupUuid);
+      exception.expectCause(instanceOf(ConfigInvalidException.class));
+      exception.expectMessage("Owner UUID of the group " + groupUuid);
       groupConfig.commit(metaDataUpdate);
     }
   }
@@ -653,8 +644,8 @@ public class GroupConfigTest {
     groupConfig.setGroupUpdate(groupUpdate, auditLogFormatter);
 
     try (MetaDataUpdate metaDataUpdate = createMetaDataUpdate()) {
-      expectedException.expectCause(instanceOf(ConfigInvalidException.class));
-      expectedException.expectMessage("Owner UUID of the group " + groupUuid);
+      exception.expectCause(instanceOf(ConfigInvalidException.class));
+      exception.expectMessage("Owner UUID of the group " + groupUuid);
       groupConfig.commit(metaDataUpdate);
     }
   }
@@ -1683,6 +1674,6 @@ public class GroupConfigTest {
 
   private static OptionalSubject<InternalGroupSubject, InternalGroup> assertThatGroup(
       Optional<InternalGroup> loadedGroup) {
-    return assertThat(loadedGroup, InternalGroupSubject::assertThat);
+    return assertThat(loadedGroup, internalGroups());
   }
 }

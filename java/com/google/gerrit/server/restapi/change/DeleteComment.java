@@ -22,7 +22,6 @@ import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.reviewdb.client.Comment;
 import com.google.gerrit.reviewdb.client.PatchSet;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CommentsUtil;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.change.CommentResource;
@@ -37,7 +36,6 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -51,7 +49,6 @@ public class DeleteComment
     extends RetryingRestModifyView<CommentResource, DeleteCommentInput, CommentInfo> {
 
   private final Provider<CurrentUser> userProvider;
-  private final Provider<ReviewDb> dbProvider;
   private final PermissionBackend permissionBackend;
   private final CommentsUtil commentsUtil;
   private final Provider<CommentJson> commentJson;
@@ -60,7 +57,6 @@ public class DeleteComment
   @Inject
   public DeleteComment(
       Provider<CurrentUser> userProvider,
-      Provider<ReviewDb> dbProvider,
       PermissionBackend permissionBackend,
       RetryHelper retryHelper,
       CommentsUtil commentsUtil,
@@ -68,7 +64,6 @@ public class DeleteComment
       ChangeNotes.Factory notesFactory) {
     super(retryHelper);
     this.userProvider = userProvider;
-    this.dbProvider = dbProvider;
     this.permissionBackend = permissionBackend;
     this.commentsUtil = commentsUtil;
     this.commentJson = commentJson;
@@ -78,8 +73,8 @@ public class DeleteComment
   @Override
   public CommentInfo applyImpl(
       BatchUpdate.Factory batchUpdateFactory, CommentResource rsrc, DeleteCommentInput input)
-      throws RestApiException, IOException, ConfigInvalidException, OrmException,
-          PermissionBackendException, UpdateException {
+      throws RestApiException, IOException, ConfigInvalidException, PermissionBackendException,
+          UpdateException {
     CurrentUser user = userProvider.get();
     permissionBackend.user(user).check(GlobalPermission.ADMINISTRATE_SERVER);
 
@@ -91,13 +86,13 @@ public class DeleteComment
     DeleteCommentOp deleteCommentOp = new DeleteCommentOp(rsrc, newMessage);
     try (BatchUpdate batchUpdate =
         batchUpdateFactory.create(
-            dbProvider.get(), rsrc.getRevisionResource().getProject(), user, TimeUtil.nowTs())) {
+            rsrc.getRevisionResource().getProject(), user, TimeUtil.nowTs())) {
       batchUpdate.addOp(rsrc.getRevisionResource().getChange().getId(), deleteCommentOp).execute();
     }
 
     ChangeNotes updatedNotes =
         notesFactory.createChecked(rsrc.getRevisionResource().getChange().getId());
-    List<Comment> changeComments = commentsUtil.publishedByChange(dbProvider.get(), updatedNotes);
+    List<Comment> changeComments = commentsUtil.publishedByChange(updatedNotes);
     Optional<Comment> updatedComment =
         changeComments.stream().filter(c -> c.key.equals(rsrc.getComment().key)).findFirst();
     if (!updatedComment.isPresent()) {
@@ -127,14 +122,10 @@ public class DeleteComment
 
     @Override
     public boolean updateChange(ChangeContext ctx)
-        throws ResourceConflictException, OrmException, ResourceNotFoundException {
+        throws ResourceConflictException, ResourceNotFoundException {
       PatchSet.Id psId = ctx.getChange().currentPatchSetId();
       commentsUtil.deleteCommentByRewritingHistory(
-          ctx.getDb(),
-          ctx.getUpdate(psId),
-          rsrc.getComment().key,
-          rsrc.getPatchSet().getId(),
-          newMessage);
+          ctx.getUpdate(psId), rsrc.getComment().key, newMessage);
       return true;
     }
   }

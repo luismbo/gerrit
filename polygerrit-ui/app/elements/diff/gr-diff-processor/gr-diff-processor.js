@@ -45,8 +45,22 @@
    */
   const MAX_GROUP_SIZE = 120;
 
+  /**
+   * Converts the API's `DiffContent`s  to `GrDiffGroup`s for rendering.
+   *
+   * This includes a number of tasks:
+   *  - adding a group for the "File" pseudo line that file-level comments can
+   *    be attached to
+   *  - replacing unchanged parts of the diff that are outside the user's
+   *    context setting and do not have comments with a group representing the
+   *    "expand context" widget. This may require splitting a `DiffContent` so
+   *    that the part that is within the context or has comments is shown, while
+   *    the rest is not.
+   *  - splitting large `DiffContent`s to allow more granular async rendering
+   */
   Polymer({
     is: 'gr-diff-processor',
+    _legacyUndefinedCheck: true,
 
     properties: {
 
@@ -80,8 +94,18 @@
         value: 64,
       },
 
-      /** @type {number|undefined} */
+      /** @type {?number} */
       _nextStepHandle: Number,
+      /**
+       * The promise last returned from `process()` while the asynchronous
+       * processing is running - `null` otherwise. Provides a `cancel()`
+       * method that rejects it with `{isCancelled: true}`.
+       * @type {?Object}
+       */
+      _processPromise: {
+        type: Object,
+        value: null,
+      },
       _isScrolling: Boolean,
     },
 
@@ -108,6 +132,10 @@
      *     processed.
      */
     process(content, isBinary) {
+      // Cancel any still running process() calls, because they append to the
+      // same groups field.
+      this.cancel();
+
       this.groups = [];
       this.push('groups', this._makeFileComments());
 
@@ -115,57 +143,65 @@
       // so finish processing.
       if (isBinary) { return Promise.resolve(); }
 
-      return new Promise(resolve => {
-        const state = {
-          lineNums: {left: 0, right: 0},
-          sectionIndex: 0,
-        };
 
-        content = this._splitCommonGroupsWithComments(content);
+      this._processPromise = util.makeCancelable(
+          new Promise(resolve => {
+            const state = {
+              lineNums: {left: 0, right: 0},
+              sectionIndex: 0,
+            };
 
-        let currentBatch = 0;
-        const nextStep = () => {
-          if (this._isScrolling) {
-            this.async(nextStep, 100);
-            return;
-          }
-          // If we are done, resolve the promise.
-          if (state.sectionIndex >= content.length) {
-            resolve(this.groups);
-            this._nextStepHandle = undefined;
-            return;
-          }
+            content = this._splitLargeChunks(content);
+            content = this._splitUnchangedChunksWithComments(content);
 
-          // Process the next section and incorporate the result.
-          const result = this._processNext(state, content);
-          for (const group of result.groups) {
-            this.push('groups', group);
-            currentBatch += group.lines.length;
-          }
-          state.lineNums.left += result.lineDelta.left;
-          state.lineNums.right += result.lineDelta.right;
+            let currentBatch = 0;
+            const nextStep = () => {
+              if (this._isScrolling) {
+                this.async(nextStep, 100);
+                return;
+              }
+              // If we are done, resolve the promise.
+              if (state.sectionIndex >= content.length) {
+                resolve(this.groups);
+                this._nextStepHandle = null;
+                return;
+              }
 
-          // Increment the index and recurse.
-          state.sectionIndex++;
-          if (currentBatch >= this._asyncThreshold) {
-            currentBatch = 0;
-            this._nextStepHandle = this.async(nextStep, 1);
-          } else {
+              // Process the next section and incorporate the result.
+              const result = this._processNext(state, content);
+              for (const group of result.groups) {
+                this.push('groups', group);
+                currentBatch += group.lines.length;
+              }
+              state.lineNums.left += result.lineDelta.left;
+              state.lineNums.right += result.lineDelta.right;
+
+              // Increment the index and recurse.
+              state.sectionIndex++;
+              if (currentBatch >= this._asyncThreshold) {
+                currentBatch = 0;
+                this._nextStepHandle = this.async(nextStep, 1);
+              } else {
+                nextStep.call(this);
+              }
+            };
+
             nextStep.call(this);
-          }
-        };
-
-        nextStep.call(this);
-      });
+          }));
+      return this._processPromise
+          .finally(() => { this._processPromise = null; });
     },
 
     /**
      * Cancel any jobs that are running.
      */
     cancel() {
-      if (this._nextStepHandle !== undefined) {
+      if (this._nextStepHandle != null) {
         this.cancelAsync(this._nextStepHandle);
-        this._nextStepHandle = undefined;
+        this._nextStepHandle = null;
+      }
+      if (this._processPromise) {
+        this._processPromise.cancel();
       }
     },
 
@@ -349,60 +385,78 @@
       return new GrDiffGroup(GrDiffGroup.Type.BOTH, [line]);
     },
 
+
+    /**
+     * Split chunks into smaller chunks of the same kind.
+     *
+     * This is done to prevent doing too much work on the main thread in one
+     * uninterrupted rendering step, which would make the browser unresponsive.
+     *
+     * Note that in the case of unmodified chunks, we only split chunks if the
+     * context is set to file (because otherwise they are split up further down
+     * the processing into the visible and hidden context), and only split it
+     * into 2 chunks, one max sized one and the rest (for reasons that are
+     * unclear to me).
+     *
+     * @param {!Array<!Object>} chunks Chunks as returned from the server
+     * @return {!Array<!Object>} Finer grained chunks.
+     */
+    _splitLargeChunks(chunks) {
+      const newChunks = [];
+
+      for (const chunk of chunks) {
+        if (!chunk.ab) {
+          for (const group of this._breakdownGroup(chunk)) {
+            newChunks.push(group);
+          }
+          continue;
+        }
+
+        // If the context is set to "whole file", then break down the shared
+        // chunks so they can be rendered incrementally. Note: this is not
+        // enabled for any other context preference because manipulating the
+        // chunks in this way violates assumptions by the context grouper logic.
+        if (this.context === -1 && chunk.ab.length > MAX_GROUP_SIZE * 2) {
+          // Split large shared groups in two, where the first is the maximum
+          // group size.
+          newChunks.push({ab: chunk.ab.slice(0, MAX_GROUP_SIZE)});
+          newChunks.push({ab: chunk.ab.slice(MAX_GROUP_SIZE)});
+        } else {
+          newChunks.push(chunk);
+        }
+      }
+      return newChunks;
+    },
+
     /**
      * In order to show comments out of the bounds of the selected context,
      * treat them as separate chunks within the model so that the content (and
      * context surrounding it) renders correctly.
-     * @param {?} content The diff content object. (has to be iterable)
-     * @return {!Object} A new diff content object with regions split up.
+     * @param {!Array<!Object>} chunks DiffContents as returned from server.
+     * @return {!Array<!Object>} Finer grained DiffContents.
      */
-    _splitCommonGroupsWithComments(content) {
+    _splitUnchangedChunksWithComments(chunks) {
       const result = [];
       let leftLineNum = 0;
       let rightLineNum = 0;
 
-      // If the context is set to "whole file", then break down the shared
-      // chunks so they can be rendered incrementally. Note: this is not enabled
-      // for any other context preference because manipulating the chunks in
-      // this way violates assumptions by the context grouper logic.
-      if (this.context === -1) {
-        const newContent = [];
-        for (const group of content) {
-          if (group.ab && group.ab.length > MAX_GROUP_SIZE * 2) {
-            // Split large shared groups in two, where the first is the maximum
-            // group size.
-            newContent.push({ab: group.ab.slice(0, MAX_GROUP_SIZE)});
-            newContent.push({ab: group.ab.slice(MAX_GROUP_SIZE)});
-          } else {
-            newContent.push(group);
+      for (const chunk of chunks) {
+        // If it isn't a common chunk, append it as-is and update line numbers.
+        if (!chunk.ab) {
+          if (chunk.a) {
+            leftLineNum += chunk.a.length;
           }
-        }
-        content = newContent;
-      }
-
-      // For each section in the diff.
-      for (let i = 0; i < content.length; i++) {
-        // If it isn't a common group, append it as-is and update line numbers.
-        if (!content[i].ab) {
-          if (content[i].a) {
-            leftLineNum += content[i].a.length;
+          if (chunk.b) {
+            rightLineNum += chunk.b.length;
           }
-          if (content[i].b) {
-            rightLineNum += content[i].b.length;
-          }
-
-          for (const group of this._breakdownGroup(content[i])) {
-            result.push(group);
-          }
-
+          result.push(chunk);
           continue;
         }
 
-        const chunk = content[i].ab;
         let currentChunk = {ab: []};
 
         // For each line in the common group.
-        for (const subChunk of chunk) {
+        for (const line of chunk.ab) {
           leftLineNum++;
           rightLineNum++;
 
@@ -418,10 +472,10 @@
             }
 
             // Add the non-collapse line as its own chunk.
-            result.push({ab: [subChunk]});
+            result.push({ab: [line]});
           } else {
             // Append the current line to the current chunk.
-            currentChunk.ab.push(subChunk);
+            currentChunk.ab.push(line);
           }
         }
 

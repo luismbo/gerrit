@@ -14,14 +14,15 @@
 
 package com.google.gerrit.server.notedb;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assert_;
 import static com.google.gerrit.reviewdb.client.RefNames.changeMetaRef;
 import static com.google.gerrit.reviewdb.client.RefNames.refsDraftComments;
 import static com.google.gerrit.server.notedb.ReviewerStateInternal.CC;
 import static com.google.gerrit.server.notedb.ReviewerStateInternal.REMOVED;
 import static com.google.gerrit.server.notedb.ReviewerStateInternal.REVIEWER;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Comparator.comparing;
 import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
 import static org.junit.Assert.fail;
 
@@ -34,6 +35,7 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.gerrit.common.data.SubmitRecord;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.mail.Address;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Branch;
@@ -45,7 +47,6 @@ import com.google.gerrit.reviewdb.client.PatchLineComment.Status;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
 import com.google.gerrit.reviewdb.client.RevId;
-import com.google.gerrit.reviewdb.server.ReviewDbUtil;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.ReviewerSet;
@@ -54,14 +55,11 @@ import com.google.gerrit.server.logging.RequestId;
 import com.google.gerrit.server.notedb.ChangeNotesCommit.ChangeNotesRevWalk;
 import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gerrit.testing.TestChanges;
-import com.google.gerrit.testing.TestTimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import java.sql.Timestamp;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Ref;
@@ -408,10 +406,10 @@ public class ChangeNotesTest extends AbstractChangeNotesTest {
     update.commit();
 
     ChangeNotes notes = newNotes(c);
-    List<PatchSetApproval> approvals =
-        ReviewDbUtil.intKeyOrdering()
-            .onResultOf(PatchSetApproval::getAccountId)
-            .sortedCopy(notes.getApprovals().get(c.currentPatchSetId()));
+    ImmutableList<PatchSetApproval> approvals =
+        notes.getApprovals().get(c.currentPatchSetId()).stream()
+            .sorted(comparing(a -> a.getAccountId().get()))
+            .collect(toImmutableList());
     assertThat(approvals).hasSize(2);
 
     assertThat(approvals.get(0).getAccountId()).isEqualTo(changeOwner.getAccountId());
@@ -956,7 +954,7 @@ public class ChangeNotesTest extends AbstractChangeNotesTest {
     Change c = TestChanges.newChange(project, changeOwner.getAccountId());
     String trimmedSubj = c.getSubject();
     c.setCurrentPatchSet(c.currentPatchSetId(), "  " + trimmedSubj, c.getOriginalSubject());
-    ChangeUpdate update = newUpdate(c, changeOwner);
+    ChangeUpdate update = newUpdateForNewChange(c, changeOwner);
     update.setChangeId(c.getKey().get());
     update.setBranch(c.getDest().get());
     update.commit();
@@ -968,7 +966,7 @@ public class ChangeNotesTest extends AbstractChangeNotesTest {
 
     c = TestChanges.newChange(project, changeOwner.getAccountId());
     c.setCurrentPatchSet(c.currentPatchSetId(), tabSubj, c.getOriginalSubject());
-    update = newUpdate(c, changeOwner);
+    update = newUpdateForNewChange(c, changeOwner);
     update.setChangeId(c.getKey().get());
     update.setBranch(c.getDest().get());
     update.commit();
@@ -995,7 +993,7 @@ public class ChangeNotesTest extends AbstractChangeNotesTest {
     try {
       newNotes(c);
       fail("Expected IOException");
-    } catch (OrmException e) {
+    } catch (StorageException e) {
       assertCause(
           e,
           ConfigInvalidException.class,
@@ -2605,7 +2603,7 @@ public class ChangeNotesTest extends AbstractChangeNotesTest {
     }
 
     // Looking at drafts directly shows the zombie comment.
-    DraftCommentNotes draftNotes = draftNotesFactory.create(c, otherUserId);
+    DraftCommentNotes draftNotes = draftNotesFactory.create(c.getId(), otherUserId);
     assertThat(draftNotes.load().getComments().get(rev1)).containsExactly(comment1, comment2);
 
     // Zombie comment is filtered out of drafts via ChangeNotes.
@@ -2757,76 +2755,6 @@ public class ChangeNotesTest extends AbstractChangeNotesTest {
     update.setPatchSetState(PatchSetState.DELETED);
     update.commit();
     assertThat(newNotes(c).getChange().currentPatchSetId().get()).isEqualTo(2);
-  }
-
-  @Test
-  public void readOnlyUntilExpires() throws Exception {
-    Change c = newChange();
-    ChangeUpdate update = newUpdate(c, changeOwner);
-    Timestamp until = new Timestamp(TimeUtil.nowMs() + 10000);
-    update.setReadOnlyUntil(until);
-    update.commit();
-
-    update = newUpdate(c, changeOwner);
-    update.setTopic("failing-topic");
-    try {
-      update.commit();
-      assert_().fail("expected OrmException");
-    } catch (OrmException e) {
-      assertThat(e.getMessage()).contains("read-only until");
-    }
-
-    ChangeNotes notes = newNotes(c);
-    assertThat(notes.getChange().getTopic()).isNotEqualTo("failing-topic");
-    assertThat(notes.getReadOnlyUntil()).isEqualTo(until);
-
-    TestTimeUtil.incrementClock(30, TimeUnit.SECONDS);
-    update = newUpdate(c, changeOwner);
-    update.setTopic("succeeding-topic");
-    update.commit();
-
-    // Write succeeded; lease still exists, even though it's expired.
-    notes = newNotes(c);
-    assertThat(notes.getChange().getTopic()).isEqualTo("succeeding-topic");
-    assertThat(notes.getReadOnlyUntil()).isEqualTo(until);
-
-    // New lease takes precedence.
-    update = newUpdate(c, changeOwner);
-    until = new Timestamp(TimeUtil.nowMs() + 10000);
-    update.setReadOnlyUntil(until);
-    update.commit();
-    assertThat(newNotes(c).getReadOnlyUntil()).isEqualTo(until);
-  }
-
-  @Test
-  public void readOnlyUntilCleared() throws Exception {
-    Change c = newChange();
-    ChangeUpdate update = newUpdate(c, changeOwner);
-    Timestamp until = new Timestamp(TimeUtil.nowMs() + TimeUnit.DAYS.toMillis(30));
-    update.setReadOnlyUntil(until);
-    update.commit();
-
-    update = newUpdate(c, changeOwner);
-    update.setTopic("failing-topic");
-    try {
-      update.commit();
-      assert_().fail("expected OrmException");
-    } catch (OrmException e) {
-      assertThat(e.getMessage()).contains("read-only until");
-    }
-
-    // Sentinel timestamp of 0 can be written to clear lease.
-    update = newUpdate(c, changeOwner);
-    update.setReadOnlyUntil(new Timestamp(0));
-    update.commit();
-
-    update = newUpdate(c, changeOwner);
-    update.setTopic("succeeding-topic");
-    update.commit();
-
-    ChangeNotes notes = newNotes(c);
-    assertThat(notes.getChange().getTopic()).isEqualTo("succeeding-topic");
-    assertThat(notes.getReadOnlyUntil()).isEqualTo(new Timestamp(0));
   }
 
   @Test
@@ -3067,7 +2995,7 @@ public class ChangeNotesTest extends AbstractChangeNotesTest {
   public void setRevertOfPersistsValue() throws Exception {
     Change changeToRevert = newChange();
     Change c = TestChanges.newChange(project, changeOwner.getAccountId());
-    ChangeUpdate update = newUpdate(c, changeOwner);
+    ChangeUpdate update = newUpdateForNewChange(c, changeOwner);
     update.setChangeId(c.getKey().get());
     update.setRevertOf(changeToRevert.getId().get());
     update.commit();
@@ -3088,7 +3016,7 @@ public class ChangeNotesTest extends AbstractChangeNotesTest {
     Change c = newChange();
     ChangeUpdate update = newUpdate(c, changeOwner);
     update.setRevertOf(newChange().getId().get());
-    exception.expect(OrmException.class);
+    exception.expect(StorageException.class);
     exception.expectMessage("Given ChangeUpdate is only allowed on initial commit");
     update.commit();
   }

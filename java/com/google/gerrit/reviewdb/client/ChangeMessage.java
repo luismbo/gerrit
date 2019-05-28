@@ -14,20 +14,22 @@
 
 package com.google.gerrit.reviewdb.client;
 
-import com.google.gwtorm.client.Column;
+import com.google.gerrit.common.Nullable;
 import com.google.gwtorm.client.StringKey;
 import java.sql.Timestamp;
 import java.util.Objects;
 
 /** A message attached to a {@link Change}. */
 public final class ChangeMessage {
+  public static Key key(Change.Id changeId, String uuid) {
+    return new Key(changeId, uuid);
+  }
+
   public static class Key extends StringKey<Change.Id> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1)
     protected Change.Id changeId;
 
-    @Column(id = 2, length = 40)
     protected String uuid;
 
     protected Key() {
@@ -44,9 +46,17 @@ public final class ChangeMessage {
       return changeId;
     }
 
+    public Change.Id changeId() {
+      return getParentKey();
+    }
+
     @Override
     public String get() {
       return uuid;
+    }
+
+    public String uuid() {
+      return get();
     }
 
     @Override
@@ -55,32 +65,25 @@ public final class ChangeMessage {
     }
   }
 
-  @Column(id = 1, name = Column.NONE)
   protected Key key;
 
   /** Who wrote this comment; null if it was written by the Gerrit system. */
-  @Column(id = 2, name = "author_id", notNull = false)
-  protected Account.Id author;
+  @Nullable protected Account.Id author;
 
   /** When this comment was drafted. */
-  @Column(id = 3)
   protected Timestamp writtenOn;
 
   /** The text left by the user. */
-  @Column(id = 4, notNull = false, length = Integer.MAX_VALUE)
-  protected String message;
+  @Nullable protected String message;
 
   /** Which patchset (if any) was this message generated from? */
-  @Column(id = 5, notNull = false)
-  protected PatchSet.Id patchset;
+  @Nullable protected PatchSet.Id patchset;
 
   /** Tag associated with change message */
-  @Column(id = 6, notNull = false)
-  protected String tag;
+  @Nullable protected String tag;
 
   /** Real user that added this message on behalf of the user recorded in {@link #author}. */
-  @Column(id = 7, notNull = false)
-  protected Account.Id realAuthor;
+  @Nullable protected Account.Id realAuthor;
 
   protected ChangeMessage() {}
 

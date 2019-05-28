@@ -22,6 +22,7 @@
 
   Polymer({
     is: 'gr-dropdown',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when a non-link dropdown item with the given ID is tapped.
@@ -280,7 +281,9 @@
      */
     _resetCursorStops() {
       Polymer.dom.flush();
-      this._listElements = Polymer.dom(this.root).querySelectorAll('li');
+      // Polymer2: querySelectorAll returns NodeList instead of Array.
+      this._listElements = Array.from(
+          Polymer.dom(this.root).querySelectorAll('li'));
     },
 
     _computeHasTooltip(tooltip) {

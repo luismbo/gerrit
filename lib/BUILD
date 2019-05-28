@@ -27,38 +27,10 @@ java_library(
 )
 
 java_library(
-    name = "gwtjsonrpc",
-    data = ["//lib:LICENSE-Apache2.0"],
-    visibility = ["//visibility:public"],
-    exports = ["@gwtjsonrpc//jar"],
-)
-
-java_library(
-    name = "gwtjsonrpc_src",
-    data = ["//lib:LICENSE-Apache2.0"],
-    visibility = ["//visibility:public"],
-    exports = ["@gwtjsonrpc//jar:src"],
-)
-
-java_library(
     name = "gson",
     data = ["//lib:LICENSE-Apache2.0"],
     visibility = ["//visibility:public"],
     exports = ["@gson//jar"],
-)
-
-java_library(
-    name = "gwtorm-client",
-    data = ["//lib:LICENSE-Apache2.0"],
-    visibility = ["//visibility:public"],
-    exports = ["@gwtorm-client//jar"],
-)
-
-java_library(
-    name = "gwtorm-client_src",
-    data = ["//lib:LICENSE-Apache2.0"],
-    visibility = ["//visibility:public"],
-    exports = ["@gwtorm-client//jar:src"],
 )
 
 java_library(
@@ -69,14 +41,10 @@ java_library(
 )
 
 java_library(
-    name = "gwtorm",
+    name = "guava-failureaccess",
+    data = ["//lib:LICENSE-Apache2.0"],
     visibility = ["//visibility:public"],
-    exports = [":gwtorm-client"],
-    runtime_deps = [
-        ":protobuf",
-        "//lib/antlr:java-runtime",
-        "//lib/ow2:ow2-asm",
-    ],
+    exports = ["@guava-failureaccess//jar"],
 )
 
 java_library(
@@ -91,6 +59,7 @@ java_library(
     data = ["//lib:LICENSE-Apache2.0"],
     visibility = ["//visibility:public"],
     exports = [
+        ":guava-failureaccess",
         ":j2objc",
         "@guava//jar",
     ],
@@ -455,13 +424,6 @@ java_library(
 )
 
 java_library(
-    name = "derby",
-    data = ["//lib:LICENSE-Apache2.0"],
-    visibility = ["//visibility:public"],
-    exports = ["@derby//jar"],
-)
-
-java_library(
     name = "soy",
     data = ["//lib:LICENSE-Apache2.0"],
     visibility = ["//visibility:public"],
@@ -498,9 +460,8 @@ java_library(
     exports = ["@icu4j//jar"],
 )
 
-java_library(
-    name = "postgresql",
-    data = ["//lib:LICENSE-postgresql"],
-    visibility = ["//visibility:public"],
-    exports = ["@postgresql//jar"],
+sh_test(
+    name = "nongoogle_test",
+    srcs = ["nongoogle_test.sh"],
+    data = ["//tools:nongoogle.bzl"],
 )

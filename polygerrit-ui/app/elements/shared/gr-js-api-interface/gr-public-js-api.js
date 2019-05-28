@@ -189,14 +189,36 @@
         this, endpointName, EndpointType.STYLE, moduleName);
   };
 
+  /**
+   * Registers an endpoint for the plugin.
+  */
   Plugin.prototype.registerCustomComponent = function(
       endpointName, opt_moduleName, opt_options) {
+    return this._registerCustomComponent(endpointName, opt_moduleName,
+        opt_options);
+  };
+
+  /**
+   * Registers a dynamic endpoint for the plugin.
+   *
+   * Dynamic plugins are registered by specific prefix, such as
+   * 'change-list-header'.
+  */
+  Plugin.prototype.registerDynamicCustomComponent = function(
+      endpointName, opt_moduleName, opt_options) {
+    const fullEndpointName = `${endpointName}-${this.getPluginName()}`;
+    return this._registerCustomComponent(fullEndpointName, opt_moduleName,
+        opt_options, endpointName);
+  };
+
+  Plugin.prototype._registerCustomComponent = function(
+      endpointName, opt_moduleName, opt_options, dynamicEndpoint) {
     const type = opt_options && opt_options.replace ?
           EndpointType.REPLACE : EndpointType.DECORATE;
     const hook = this._domHooks.getDomHook(endpointName, opt_moduleName);
     const moduleName = opt_moduleName || hook.getModuleName();
     Gerrit._endpoints.registerModule(
-        this, endpointName, type, moduleName, hook);
+        this, endpointName, type, moduleName, hook, dynamicEndpoint);
     return hook.getPublicAPI();
   };
 
@@ -217,9 +239,14 @@
   };
 
   Plugin.prototype.url = function(opt_path) {
-    const base = Gerrit.BaseUrlBehavior.getBaseUrl();
-    return this._url.origin + base + '/plugins/' +
-        this._name + (opt_path || '/');
+    const relPath = '/plugins/' + this._name + (opt_path || '/');
+    if (window.location.origin === this._url.origin) {
+      // Plugin loaded from the same origin as gr-app, getBaseUrl in effect.
+      return this._url.origin + Gerrit.BaseUrlBehavior.getBaseUrl() + relPath;
+    } else {
+      // Plugin loaded from assets bundle, expect assets placed along with it.
+      return this._url.href.split('/plugins/' + this._name)[0] + relPath;
+    }
   };
 
   Plugin.prototype.screenUrl = function(opt_screenName) {

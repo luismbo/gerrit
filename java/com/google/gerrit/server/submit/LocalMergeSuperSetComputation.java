@@ -23,12 +23,12 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.data.SubmitTypeRecord;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.client.SubmitType;
 import com.google.gerrit.extensions.registration.DynamicItem;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.permissions.ChangePermission;
 import com.google.gerrit.server.permissions.PermissionBackend;
@@ -37,9 +37,9 @@ import com.google.gerrit.server.project.NoSuchProjectException;
 import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.query.change.ChangeData;
+import com.google.gerrit.server.query.change.ChangeIsVisibleToPredicate;
 import com.google.gerrit.server.query.change.InternalChangeQuery;
 import com.google.gerrit.server.submit.MergeOpRepoManager.OpenRepo;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.AbstractModule;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
@@ -87,26 +87,29 @@ public class LocalMergeSuperSetComputation implements MergeSuperSetComputation {
 
   private final PermissionBackend permissionBackend;
   private final Provider<InternalChangeQuery> queryProvider;
-  private final Map<QueryKey, List<ChangeData>> queryCache;
+  private final Map<QueryKey, ImmutableList<ChangeData>> queryCache;
   private final Map<Branch.NameKey, Optional<RevCommit>> heads;
   private final ProjectCache projectCache;
+  private final ChangeIsVisibleToPredicate changeIsVisibleToPredicate;
 
   @Inject
   LocalMergeSuperSetComputation(
       PermissionBackend permissionBackend,
       Provider<InternalChangeQuery> queryProvider,
-      ProjectCache projectCache) {
+      ProjectCache projectCache,
+      ChangeIsVisibleToPredicate changeIsVisibleToPredicate) {
     this.projectCache = projectCache;
     this.permissionBackend = permissionBackend;
     this.queryProvider = queryProvider;
     this.queryCache = new HashMap<>();
     this.heads = new HashMap<>();
+    this.changeIsVisibleToPredicate = changeIsVisibleToPredicate;
   }
 
   @Override
   public ChangeSet completeWithoutTopic(
-      ReviewDb db, MergeOpRepoManager orm, ChangeSet changeSet, CurrentUser user)
-      throws OrmException, IOException, PermissionBackendException {
+      MergeOpRepoManager orm, ChangeSet changeSet, CurrentUser user)
+      throws IOException, PermissionBackendException {
     Collection<ChangeData> visibleChanges = new ArrayList<>();
     Collection<ChangeData> nonVisibleChanges = new ArrayList<>();
 
@@ -119,7 +122,7 @@ public class LocalMergeSuperSetComputation implements MergeSuperSetComputation {
       List<RevCommit> visibleCommits = new ArrayList<>();
       List<RevCommit> nonVisibleCommits = new ArrayList<>();
       for (ChangeData cd : bc.get(b)) {
-        boolean visible = isVisible(db, changeSet, cd, user);
+        boolean visible = isVisible(changeSet, cd, user);
 
         if (submitType(cd) == SubmitType.CHERRY_PICK) {
           if (visible) {
@@ -147,17 +150,18 @@ public class LocalMergeSuperSetComputation implements MergeSuperSetComputation {
 
       Set<String> visibleHashes =
           walkChangesByHashes(visibleCommits, Collections.emptySet(), or, b);
-      Iterables.addAll(visibleChanges, byCommitsOnBranchNotMerged(or, db, b, visibleHashes));
-
       Set<String> nonVisibleHashes = walkChangesByHashes(nonVisibleCommits, visibleHashes, or, b);
-      Iterables.addAll(nonVisibleChanges, byCommitsOnBranchNotMerged(or, db, b, nonVisibleHashes));
+
+      ChangeSet partialSet = byCommitsOnBranchNotMerged(or, b, visibleHashes, nonVisibleHashes);
+      Iterables.addAll(visibleChanges, partialSet.changes());
+      Iterables.addAll(nonVisibleChanges, partialSet.nonVisibleChanges());
     }
 
     return new ChangeSet(visibleChanges, nonVisibleChanges);
   }
 
   private static ImmutableListMultimap<Branch.NameKey, ChangeData> byBranch(
-      Iterable<ChangeData> changes) throws OrmException {
+      Iterable<ChangeData> changes) {
     ImmutableListMultimap.Builder<Branch.NameKey, ChangeData> builder =
         ImmutableListMultimap.builder();
     for (ChangeData cd : changes) {
@@ -176,7 +180,7 @@ public class LocalMergeSuperSetComputation implements MergeSuperSetComputation {
     }
   }
 
-  private boolean isVisible(ReviewDb db, ChangeSet changeSet, ChangeData cd, CurrentUser user)
+  private boolean isVisible(ChangeSet changeSet, ChangeData cd, CurrentUser user)
       throws PermissionBackendException, IOException {
     ProjectState projectState = projectCache.checkedGet(cd.project());
     boolean visible =
@@ -188,7 +192,7 @@ public class LocalMergeSuperSetComputation implements MergeSuperSetComputation {
     }
 
     try {
-      permissionBackend.user(user).change(cd).database(db).check(ChangePermission.READ);
+      permissionBackend.user(user).change(cd).check(ChangePermission.READ);
       return true;
     } catch (AuthException e) {
       // We thought the change was visible, but it isn't.
@@ -198,7 +202,7 @@ public class LocalMergeSuperSetComputation implements MergeSuperSetComputation {
     }
   }
 
-  private SubmitType submitType(ChangeData cd) throws OrmException {
+  private SubmitType submitType(ChangeData cd) {
     SubmitTypeRecord str = cd.submitTypeRecord();
     if (!str.isOk()) {
       logErrorAndThrow("Failed to get submit type for " + cd.getId() + ": " + str.errorMessage);
@@ -206,24 +210,36 @@ public class LocalMergeSuperSetComputation implements MergeSuperSetComputation {
     return str.type;
   }
 
-  private List<ChangeData> byCommitsOnBranchNotMerged(
-      OpenRepo or, ReviewDb db, Branch.NameKey branch, Set<String> hashes)
-      throws OrmException, IOException {
+  private ChangeSet byCommitsOnBranchNotMerged(
+      OpenRepo or, Branch.NameKey branch, Set<String> visibleHashes, Set<String> nonVisibleHashes)
+      throws IOException {
+    List<ChangeData> potentiallyVisibleChanges =
+        byCommitsOnBranchNotMerged(or, branch, visibleHashes);
+    List<ChangeData> invisibleChanges =
+        new ArrayList<>(byCommitsOnBranchNotMerged(or, branch, nonVisibleHashes));
+    List<ChangeData> visibleChanges = new ArrayList<>(potentiallyVisibleChanges.size());
+    for (ChangeData cd : potentiallyVisibleChanges) {
+      if (changeIsVisibleToPredicate.match(cd)) {
+        visibleChanges.add(cd);
+      } else {
+        invisibleChanges.add(cd);
+      }
+    }
+    return new ChangeSet(visibleChanges, invisibleChanges);
+  }
+
+  private ImmutableList<ChangeData> byCommitsOnBranchNotMerged(
+      OpenRepo or, Branch.NameKey branch, Set<String> hashes) throws IOException {
     if (hashes.isEmpty()) {
       return ImmutableList.of();
     }
     QueryKey k = QueryKey.create(branch, hashes);
-    List<ChangeData> cached = queryCache.get(k);
-    if (cached != null) {
-      return cached;
+    if (queryCache.containsKey(k)) {
+      return queryCache.get(k);
     }
-
-    List<ChangeData> result = new ArrayList<>();
-    Iterable<ChangeData> destChanges =
-        queryProvider.get().byCommitsOnBranchNotMerged(or.repo, db, branch, hashes);
-    for (ChangeData chd : destChanges) {
-      result.add(chd);
-    }
+    ImmutableList<ChangeData> result =
+        ImmutableList.copyOf(
+            queryProvider.get().byCommitsOnBranchNotMerged(or.repo, branch, hashes));
     queryCache.put(k, result);
     return result;
   }
@@ -265,8 +281,8 @@ public class LocalMergeSuperSetComputation implements MergeSuperSetComputation {
     }
   }
 
-  private void logErrorAndThrow(String msg) throws OrmException {
+  private void logErrorAndThrow(String msg) {
     logger.atSevere().log(msg);
-    throw new OrmException(msg);
+    throw new StorageException(msg);
   }
 }

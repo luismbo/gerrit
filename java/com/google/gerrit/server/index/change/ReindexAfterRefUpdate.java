@@ -27,7 +27,6 @@ import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.account.AccountCache;
 import com.google.gerrit.server.config.AllUsersName;
 import com.google.gerrit.server.config.GerritServerConfig;
@@ -40,7 +39,6 @@ import com.google.gerrit.server.query.change.InternalChangeQuery;
 import com.google.gerrit.server.util.ManualRequestContext;
 import com.google.gerrit.server.util.OneOffRequestContext;
 import com.google.gerrit.server.util.RequestContext;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import java.io.IOException;
@@ -92,12 +90,8 @@ public class ReindexAfterRefUpdate implements GitReferenceUpdatedListener {
     if (allUsersName.get().equals(event.getProjectName())) {
       Account.Id accountId = Account.Id.fromRef(event.getRefName());
       if (accountId != null && !event.getRefName().startsWith(RefNames.REFS_STARRED_CHANGES)) {
-        try {
-          accountCache.evict(accountId);
-          indexer.get().index(accountId);
-        } catch (IOException e) {
-          logger.atSevere().withCause(e).log("Reindex account %s failed.", accountId);
-        }
+        accountCache.evict(accountId);
+        indexer.get().index(accountId);
       }
     }
 
@@ -153,7 +147,7 @@ public class ReindexAfterRefUpdate implements GitReferenceUpdatedListener {
     }
 
     @Override
-    protected List<Change> impl(RequestContext ctx) throws OrmException {
+    protected List<Change> impl(RequestContext ctx) {
       String ref = event.getRefName();
       Project.NameKey project = new Project.NameKey(event.getProjectName());
       if (ref.equals(RefNames.REFS_CONFIG)) {
@@ -180,15 +174,12 @@ public class ReindexAfterRefUpdate implements GitReferenceUpdatedListener {
     }
 
     @Override
-    protected Void impl(RequestContext ctx) throws OrmException, IOException {
+    protected Void impl(RequestContext ctx) throws IOException {
       // Reload change, as some time may have passed since GetChanges.
-      ReviewDb db = ctx.getReviewDbProvider().get();
       try {
         Change c =
-            notesFactory
-                .createChecked(db, new Project.NameKey(event.getProjectName()), id)
-                .getChange();
-        indexerFactory.create(executor, indexes).index(db, c);
+            notesFactory.createChecked(new Project.NameKey(event.getProjectName()), id).getChange();
+        indexerFactory.create(executor, indexes).index(c);
       } catch (NoSuchChangeException e) {
         indexerFactory.create(executor, indexes).delete(id);
       }

@@ -17,6 +17,7 @@ package com.google.gerrit.server.restapi.change;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.flogger.FluentLogger;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.api.changes.RebaseInput;
 import com.google.gerrit.extensions.client.ListChangesOption;
 import com.google.gerrit.extensions.common.ChangeInfo;
@@ -27,13 +28,12 @@ import com.google.gerrit.extensions.restapi.RestModifyView;
 import com.google.gerrit.extensions.webui.UiAction;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
-import com.google.gerrit.reviewdb.client.Change.Status;
 import com.google.gerrit.reviewdb.client.PatchSet;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.change.ChangeJson;
 import com.google.gerrit.server.change.ChangeResource;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.change.RebaseChangeOp;
 import com.google.gerrit.server.change.RebaseUtil;
 import com.google.gerrit.server.change.RebaseUtil.Base;
@@ -49,9 +49,7 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.Singleton;
 import java.io.IOException;
 import org.eclipse.jgit.lib.ObjectId;
@@ -74,7 +72,6 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
   private final RebaseChangeOp.Factory rebaseFactory;
   private final RebaseUtil rebaseUtil;
   private final ChangeJson.Factory json;
-  private final Provider<ReviewDb> dbProvider;
   private final PermissionBackend permissionBackend;
   private final ProjectCache projectCache;
   private final PatchSetUtil patchSetUtil;
@@ -86,7 +83,6 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
       RebaseChangeOp.Factory rebaseFactory,
       RebaseUtil rebaseUtil,
       ChangeJson.Factory json,
-      Provider<ReviewDb> dbProvider,
       PermissionBackend permissionBackend,
       ProjectCache projectCache,
       PatchSetUtil patchSetUtil) {
@@ -95,7 +91,6 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
     this.rebaseFactory = rebaseFactory;
     this.rebaseUtil = rebaseUtil;
     this.json = json;
-    this.dbProvider = dbProvider;
     this.permissionBackend = permissionBackend;
     this.projectCache = projectCache;
     this.patchSetUtil = patchSetUtil;
@@ -104,12 +99,11 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
   @Override
   protected ChangeInfo applyImpl(
       BatchUpdate.Factory updateFactory, RevisionResource rsrc, RebaseInput input)
-      throws OrmException, UpdateException, RestApiException, IOException,
-          PermissionBackendException {
+      throws UpdateException, RestApiException, IOException, PermissionBackendException {
     // Not allowed to rebase if the current patch set is locked.
     patchSetUtil.checkPatchSetNotLocked(rsrc.getNotes());
 
-    rsrc.permissions().database(dbProvider).check(ChangePermission.REBASE);
+    rsrc.permissions().check(ChangePermission.REBASE);
     projectCache.checkedGet(rsrc.getProject()).checkStatePermitsWrite();
 
     Change change = rsrc.getChange();
@@ -118,14 +112,15 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
         ObjectReader reader = oi.newReader();
         RevWalk rw = new RevWalk(reader);
         BatchUpdate bu =
-            updateFactory.create(
-                dbProvider.get(), change.getProject(), rsrc.getUser(), TimeUtil.nowTs())) {
-      if (!change.getStatus().isOpen()) {
+            updateFactory.create(change.getProject(), rsrc.getUser(), TimeUtil.nowTs())) {
+      if (!change.isNew()) {
         throw new ResourceConflictException("change is " + ChangeUtil.status(change));
       } else if (!hasOneParent(rw, rsrc.getPatchSet())) {
         throw new ResourceConflictException(
             "cannot rebase merge commits or commit with no ancestor");
       }
+      // TODO(dborowitz): Why no notification? This seems wrong; dig up blame.
+      bu.setNotify(NotifyResolver.Result.none());
       bu.setRepository(repo, rw, oi);
       bu.addOp(
           change.getId(),
@@ -140,7 +135,7 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
 
   private ObjectId findBaseRev(
       Repository repo, RevWalk rw, RevisionResource rsrc, RebaseInput input)
-      throws RestApiException, OrmException, IOException, NoSuchChangeException, AuthException,
+      throws RestApiException, IOException, NoSuchChangeException, AuthException,
           PermissionBackendException {
     Branch.NameKey destRefKey = rsrc.getChange().getDest();
     if (input == null || input.base == null) {
@@ -161,18 +156,15 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
 
     Base base = rebaseUtil.parseBase(rsrc, str);
     if (base == null) {
-      throw new ResourceConflictException("base revision is missing: " + str);
+      throw new ResourceConflictException(
+          "base revision is missing from the destination branch: " + str);
     }
     PatchSet.Id baseId = base.patchSet().getId();
     if (change.getId().equals(baseId.getParentKey())) {
       throw new ResourceConflictException("cannot rebase change onto itself");
     }
 
-    permissionBackend
-        .user(rsrc.getUser())
-        .database(dbProvider)
-        .change(base.notes())
-        .check(ChangePermission.READ);
+    permissionBackend.user(rsrc.getUser()).change(base.notes()).check(ChangePermission.READ);
 
     Change baseChange = base.notes().getChange();
     if (!baseChange.getProject().equals(change.getProject())) {
@@ -181,7 +173,7 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
     } else if (!baseChange.getDest().equals(change.getDest())) {
       throw new ResourceConflictException(
           "base change is targeting wrong branch: " + baseChange.getDest());
-    } else if (baseChange.getStatus() == Status.ABANDONED) {
+    } else if (baseChange.isAbandoned()) {
       throw new ResourceConflictException("base change is abandoned: " + baseChange.getKey());
     } else if (isMergedInto(rw, rsrc.getPatchSet(), base.patchSet())) {
       throw new ResourceConflictException(
@@ -213,7 +205,7 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
             .setVisible(false);
 
     Change change = rsrc.getChange();
-    if (!(change.getStatus().isOpen() && rsrc.isCurrent())) {
+    if (!(change.isNew() && rsrc.isCurrent())) {
       return description;
     }
 
@@ -231,7 +223,7 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
       if (patchSetUtil.isPatchSetLocked(rsrc.getNotes())) {
         return description;
       }
-    } catch (OrmException | IOException e) {
+    } catch (StorageException | IOException e) {
       logger.atSevere().withCause(e).log(
           "Failed to check if the current patch set of change %s is locked", change.getId());
       return description;
@@ -243,13 +235,17 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
       if (hasOneParent(rw, rsrc.getPatchSet())) {
         enabled = rebaseUtil.canRebase(rsrc.getPatchSet(), change.getDest(), repo, rw);
       }
-    } catch (IOException e) {
+    } catch (Exception e) {
+      // Be generous here with the exceptions that we log and swallow. RebaseUtil#canRebase uses the
+      // change index and this UI action is on the critical path of rendering a change details page.
+      // If the index is broken, we log and disable the UI action, but still show the page to the
+      // user.
       logger.atSevere().withCause(e).log(
           "Failed to check if patch set can be rebased: %s", rsrc.getPatchSet());
       return description;
     }
 
-    if (rsrc.permissions().database(dbProvider).testOrFalse(ChangePermission.REBASE)) {
+    if (rsrc.permissions().testOrFalse(ChangePermission.REBASE)) {
       return description.setVisible(true).setEnabled(enabled);
     }
     return description;
@@ -270,9 +266,8 @@ public class Rebase extends RetryingRestModifyView<RevisionResource, RebaseInput
     @Override
     protected ChangeInfo applyImpl(
         BatchUpdate.Factory updateFactory, ChangeResource rsrc, RebaseInput input)
-        throws OrmException, UpdateException, RestApiException, IOException,
-            PermissionBackendException {
-      PatchSet ps = psUtil.current(rebase.dbProvider.get(), rsrc.getNotes());
+        throws UpdateException, RestApiException, IOException, PermissionBackendException {
+      PatchSet ps = psUtil.current(rsrc.getNotes());
       if (ps == null) {
         throw new ResourceConflictException("current revision is missing");
       }

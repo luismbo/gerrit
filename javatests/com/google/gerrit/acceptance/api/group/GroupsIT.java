@@ -28,8 +28,10 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.stream.Collectors.toList;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.truth.Correspondence;
+import com.google.common.truth.Correspondence.BinaryPredicate;
 import com.google.common.util.concurrent.AtomicLongMap;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.GerritConfig;
@@ -40,6 +42,8 @@ import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.Sandboxed;
 import com.google.gerrit.acceptance.TestAccount;
 import com.google.gerrit.acceptance.testsuite.account.AccountOperations;
+import com.google.gerrit.acceptance.testsuite.group.GroupOperations;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.GlobalCapability;
 import com.google.gerrit.common.data.GroupReference;
@@ -68,7 +72,6 @@ import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
-import com.google.gerrit.server.Sequences;
 import com.google.gerrit.server.ServerInitiated;
 import com.google.gerrit.server.account.GroupIncludeCache;
 import com.google.gerrit.server.group.InternalGroup;
@@ -81,6 +84,9 @@ import com.google.gerrit.server.group.db.InternalGroupCreation;
 import com.google.gerrit.server.group.db.InternalGroupUpdate;
 import com.google.gerrit.server.index.group.GroupIndexer;
 import com.google.gerrit.server.index.group.StalenessChecker;
+import com.google.gerrit.server.notedb.Sequences;
+import com.google.gerrit.server.project.ProjectConfig;
+import com.google.gerrit.server.project.testing.Util;
 import com.google.gerrit.server.util.MagicBranch;
 import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gerrit.testing.TestTimeUtil;
@@ -89,14 +95,13 @@ import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.sql.Timestamp;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import org.eclipse.jgit.internal.storage.dfs.InMemoryRepository;
 import org.eclipse.jgit.junit.TestRepository;
 import org.eclipse.jgit.lib.CommitBuilder;
@@ -117,16 +122,18 @@ import org.junit.Test;
 
 @NoHttpd
 public class GroupsIT extends AbstractDaemonTest {
-  @Inject private Groups groups;
   @Inject @ServerInitiated private GroupsUpdate groupsUpdate;
+  @Inject private AccountOperations accountOperations;
+  @Inject private DynamicSet<GroupIndexedListener> groupIndexedListeners;
   @Inject private GroupIncludeCache groupIncludeCache;
-  @Inject private StalenessChecker stalenessChecker;
   @Inject private GroupIndexer groupIndexer;
+  @Inject private GroupOperations groupOperations;
+  @Inject private Groups groups;
   @Inject private GroupsConsistencyChecker consistencyChecker;
   @Inject private PeriodicGroupIndexer slaveGroupIndexer;
-  @Inject private DynamicSet<GroupIndexedListener> groupIndexedListeners;
+  @Inject private RequestScopeOperations requestScopeOperations;
   @Inject private Sequences seq;
-  @Inject private AccountOperations accountOperations;
+  @Inject private StalenessChecker stalenessChecker;
 
   @Before
   public void setTimeForTesting() {
@@ -173,12 +180,14 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void addRemoveMember() throws Exception {
-    String g = createGroup("users");
-    gApi.groups().id(g).addMembers("user");
-    assertMembers(g, user);
+    AccountGroup.UUID group = groupOperations.newGroup().create();
 
-    gApi.groups().id(g).removeMembers("user");
-    assertNoMembers(g);
+    gApi.groups().id(group.get()).addMembers("user");
+    assertMembers(group.get(), user);
+
+    gApi.groups().id(group.get()).removeMembers("user");
+    ImmutableSet<Account.Id> members = groupOperations.group(group).get().members();
+    assertThat(members).isEmpty();
   }
 
   @Test
@@ -188,16 +197,15 @@ public class GroupsIT extends AbstractDaemonTest {
 
     // Fill the cache for the observed account.
     groupIncludeCache.getGroupsWithMember(accountId);
-    String groupName = createGroup("users");
-    AccountGroup.UUID groupUuid = new AccountGroup.UUID(gApi.groups().id(groupName).get().id);
+    AccountGroup.UUID groupUuid = groupOperations.newGroup().create();
 
-    gApi.groups().id(groupName).addMembers(username);
+    gApi.groups().id(groupUuid.get()).addMembers(username);
 
     Collection<AccountGroup.UUID> groupsWithMemberAfterAddition =
         groupIncludeCache.getGroupsWithMember(accountId);
     assertThat(groupsWithMemberAfterAddition).contains(groupUuid);
 
-    gApi.groups().id(groupName).removeMembers(username);
+    gApi.groups().id(groupUuid.get()).removeMembers(username);
 
     Collection<AccountGroup.UUID> groupsWithMemberAfterRemoval =
         groupIncludeCache.getGroupsWithMember(accountId);
@@ -229,16 +237,16 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void addMultipleMembers() throws Exception {
-    String g = createGroup("users");
+    AccountGroup.UUID group = groupOperations.newGroup().create();
 
     String u1 = name("u1");
     accountOperations.newAccount().username(u1).create();
     String u2 = name("u2");
     accountOperations.newAccount().username(u2).create();
 
-    gApi.groups().id(g).addMembers(u1, u2);
+    gApi.groups().id(group.get()).addMembers(u1, u2);
 
-    List<AccountInfo> members = gApi.groups().id(g).members();
+    List<AccountInfo> members = gApi.groups().id(group.get()).members();
     assertThat(members)
         .comparingElementsUsing(getAccountToUsernameCorrespondence())
         .containsExactly(u1, u2);
@@ -246,13 +254,13 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void membersWithAtSignInUsernameCanBeAdded() throws Exception {
-    String g = createGroup("users");
+    AccountGroup.UUID group = groupOperations.newGroup().create();
     String usernameWithAt = name("u1@something");
     accountOperations.newAccount().username(usernameWithAt).create();
 
-    gApi.groups().id(g).addMembers(usernameWithAt);
+    gApi.groups().id(group.get()).addMembers(usernameWithAt);
 
-    List<AccountInfo> members = gApi.groups().id(g).members();
+    List<AccountInfo> members = gApi.groups().id(group.get()).members();
     assertThat(members)
         .comparingElementsUsing(getAccountToUsernameCorrespondence())
         .containsExactly(usernameWithAt);
@@ -260,7 +268,7 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void membersWithAtSignInUsernameAreNotConfusedWithSimilarUsernames() throws Exception {
-    String g = createGroup("users");
+    AccountGroup.UUID group = groupOperations.newGroup().create();
     String usernameWithAt = name("u1@something");
     accountOperations.newAccount().username(usernameWithAt).create();
     String usernameWithoutAt = name("u1something");
@@ -271,10 +279,10 @@ public class GroupsIT extends AbstractDaemonTest {
     accountOperations.newAccount().username(usernameOnlySuffix).create();
 
     gApi.groups()
-        .id(g)
+        .id(group.get())
         .addMembers(usernameWithAt, usernameWithoutAt, usernameOnlyPrefix, usernameOnlySuffix);
 
-    List<AccountInfo> members = gApi.groups().id(g).members();
+    List<AccountInfo> members = gApi.groups().id(group.get()).members();
     assertThat(members)
         .comparingElementsUsing(getAccountToUsernameCorrespondence())
         .containsExactly(usernameWithAt, usernameWithoutAt, usernameOnlyPrefix, usernameOnlySuffix);
@@ -282,52 +290,54 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void includeRemoveGroup() throws Exception {
-    String p = createGroup("parent");
-    String g = createGroup("newGroup");
-    gApi.groups().id(p).addGroups(g);
-    assertIncludes(p, g);
+    AccountGroup.UUID parent = groupOperations.newGroup().create();
+    AccountGroup.UUID group = groupOperations.newGroup().create();
+    gApi.groups().id(parent.get()).addGroups(group.get());
+    assertThat(groupOperations.group(parent).get().subgroups()).containsExactly(group);
 
-    gApi.groups().id(p).removeGroups(g);
-    assertNoIncludes(p);
+    gApi.groups().id(parent.get()).removeGroups(group.get());
+    assertThat(groupOperations.group(parent).get().subgroups()).isEmpty();
   }
 
   @Test
   public void includeExternalGroup() throws Exception {
-    String g = createGroup("group");
+    AccountGroup.UUID group = groupOperations.newGroup().create();
     String subgroupUuid = SystemGroupBackend.REGISTERED_USERS.get();
-    gApi.groups().id(g).addGroups(subgroupUuid);
+    gApi.groups().id(group.get()).addGroups(subgroupUuid);
 
-    List<GroupInfo> subgroups = gApi.groups().id(g).includedGroups();
+    List<GroupInfo> subgroups = gApi.groups().id(group.get()).includedGroups();
     assertThat(subgroups).hasSize(1);
     assertThat(subgroups.get(0).id).isEqualTo(subgroupUuid.replace(":", "%3A"));
     assertThat(subgroups.get(0).name).isEqualTo("Registered Users");
     assertThat(subgroups.get(0).groupId).isNull();
 
-    List<? extends GroupAuditEventInfo> auditEvents = gApi.groups().id(g).auditLog();
+    List<? extends GroupAuditEventInfo> auditEvents = gApi.groups().id(group.get()).auditLog();
     assertThat(auditEvents).hasSize(1);
-    assertSubgroupAuditEvent(auditEvents.get(0), Type.ADD_GROUP, admin.id, "Registered Users");
+    assertSubgroupAuditEvent(auditEvents.get(0), Type.ADD_GROUP, admin.id(), "Registered Users");
   }
 
   @Test
   public void includeExistingGroup_OK() throws Exception {
-    String p = createGroup("parent");
-    String g = createGroup("newGroup");
-    gApi.groups().id(p).addGroups(g);
-    assertIncludes(p, g);
-    gApi.groups().id(p).addGroups(g);
-    assertIncludes(p, g);
+    AccountGroup.UUID parent = groupOperations.newGroup().create();
+    AccountGroup.UUID group = groupOperations.newGroup().create();
+    groupOperations.group(parent).forUpdate().addSubgroup(group);
+
+    gApi.groups().id(parent.get()).addGroups(group.get());
+
+    ImmutableSet<AccountGroup.UUID> subgroups = groupOperations.group(parent).get().subgroups();
+    assertThat(subgroups).containsExactly(group);
   }
 
   @Test
   public void addMultipleIncludes() throws Exception {
-    String p = createGroup("parent");
-    String g1 = createGroup("newGroup1");
-    String g2 = createGroup("newGroup2");
-    List<String> groups = new ArrayList<>();
-    groups.add(g1);
-    groups.add(g2);
-    gApi.groups().id(p).addGroups(g1, g2);
-    assertIncludes(p, g1, g2);
+    AccountGroup.UUID parent = groupOperations.newGroup().create();
+    AccountGroup.UUID group1 = groupOperations.newGroup().create();
+    AccountGroup.UUID group2 = groupOperations.newGroup().create();
+
+    gApi.groups().id(parent.get()).addGroups(group1.get(), group2.get());
+
+    ImmutableSet<AccountGroup.UUID> subgroups = groupOperations.group(parent).get().subgroups();
+    assertThat(subgroups).containsExactly(group1, group2);
   }
 
   @Test
@@ -403,7 +413,7 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void createGroupWithoutCapability_Forbidden() throws Exception {
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(AuthException.class);
     gApi.groups().create(name("newGroup"));
   }
@@ -628,33 +638,39 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void listEmptyGroupIncludes() throws Exception {
-    String gx = createGroup("gx");
-    assertThat(gApi.groups().id(gx).includedGroups()).isEmpty();
+    AccountGroup.UUID gx = groupOperations.newGroup().create();
+    assertThat(gApi.groups().id(gx.get()).includedGroups()).isEmpty();
   }
 
   @Test
   public void includeNonExistingGroup() throws Exception {
-    String gx = createGroup("gx");
+    AccountGroup.UUID gx = groupOperations.newGroup().create();
     exception.expect(UnprocessableEntityException.class);
-    gApi.groups().id(gx).addGroups("non-existing");
+    gApi.groups().id(gx.get()).addGroups("non-existing");
   }
 
   @Test
   public void listNonEmptyGroupIncludes() throws Exception {
-    String gx = createGroup("gx");
-    String gy = createGroup("gy");
-    String gz = createGroup("gz");
-    gApi.groups().id(gx).addGroups(gy);
-    gApi.groups().id(gx).addGroups(gz);
-    assertIncludes(gApi.groups().id(gx).includedGroups(), gy, gz);
+    AccountGroup.UUID gz = groupOperations.newGroup().create();
+    AccountGroup.UUID gy = groupOperations.newGroup().create();
+    AccountGroup.UUID gx = groupOperations.newGroup().subgroups(gy, gz).create();
+
+    List<GroupInfo> includes = gApi.groups().id(gx.get()).includedGroups();
+
+    String gyName = groupOperations.group(gy).get().name();
+    String gzName = groupOperations.group(gz).get().name();
+    assertIncludes(includes, gyName, gzName);
   }
 
   @Test
   public void listOneIncludeMember() throws Exception {
-    String gx = createGroup("gx");
-    String gy = createGroup("gy");
-    gApi.groups().id(gx).addGroups(gy);
-    assertIncludes(gApi.groups().id(gx).includedGroups(), gy);
+    AccountGroup.UUID gy = groupOperations.newGroup().create();
+    AccountGroup.UUID gx = groupOperations.newGroup().subgroups(gy).create();
+
+    List<GroupInfo> includes = gApi.groups().id(gx.get()).includedGroups();
+
+    String gyName = groupOperations.group(gy).get().name();
+    assertIncludes(includes, gyName);
   }
 
   @Test
@@ -665,109 +681,109 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void listEmptyGroupMembers() throws Exception {
-    String group = createGroup("empty");
-    assertThat(gApi.groups().id(group).members()).isEmpty();
+    AccountGroup.UUID group = groupOperations.newGroup().create();
+    assertThat(gApi.groups().id(group.get()).members()).isEmpty();
   }
 
   @Test
   public void listNonEmptyGroupMembers() throws Exception {
-    String group = createGroup("group");
+    AccountGroup.UUID group = groupOperations.newGroup().create();
     String user1 = name("user1");
     accountOperations.newAccount().username(user1).create();
     String user2 = name("user2");
     accountOperations.newAccount().username(user2).create();
-    gApi.groups().id(group).addMembers(user1, user2);
+    gApi.groups().id(group.get()).addMembers(user1, user2);
 
-    assertMembers(gApi.groups().id(group).members(), user1, user2);
+    assertMembers(gApi.groups().id(group.get()).members(), user1, user2);
   }
 
   @Test
   public void listOneGroupMember() throws Exception {
-    String group = createGroup("group");
+    AccountGroup.UUID group = groupOperations.newGroup().create();
     String user = name("user1");
     accountOperations.newAccount().username(user).create();
-    gApi.groups().id(group).addMembers(user);
+    gApi.groups().id(group.get()).addMembers(user);
 
-    assertMembers(gApi.groups().id(group).members(), user);
+    assertMembers(gApi.groups().id(group.get()).members(), user);
   }
 
   @Test
   public void listGroupMembersRecursively() throws Exception {
-    String gx = createGroup("gx");
+    AccountGroup.UUID gx = groupOperations.newGroup().create();
     String ux = name("ux");
     accountOperations.newAccount().username(ux).create();
-    gApi.groups().id(gx).addMembers(ux);
+    gApi.groups().id(gx.get()).addMembers(ux);
 
-    String gy = createGroup("gy");
+    AccountGroup.UUID gy = groupOperations.newGroup().create();
     String uy = name("uy");
     accountOperations.newAccount().username(uy).create();
-    gApi.groups().id(gy).addMembers(uy);
+    gApi.groups().id(gy.get()).addMembers(uy);
 
-    String gz = createGroup("gz");
+    AccountGroup.UUID gz = groupOperations.newGroup().create();
     String uz = name("uz");
     accountOperations.newAccount().username(uz).create();
-    gApi.groups().id(gz).addMembers(uz);
+    gApi.groups().id(gz.get()).addMembers(uz);
 
-    gApi.groups().id(gx).addGroups(gy);
-    gApi.groups().id(gy).addGroups(gz);
-    assertMembers(gApi.groups().id(gx).members(), ux);
-    assertMembers(gApi.groups().id(gx).members(true), ux, uy, uz);
+    gApi.groups().id(gx.get()).addGroups(gy.get());
+    gApi.groups().id(gy.get()).addGroups(gz.get());
+    assertMembers(gApi.groups().id(gx.get()).members(), ux);
+    assertMembers(gApi.groups().id(gx.get()).members(true), ux, uy, uz);
   }
 
   @Test
   public void usersSeeTheirDirectMembershipWhenListingMembersRecursively() throws Exception {
-    String group = createGroup("group");
-    gApi.groups().id(group).addMembers(user.username);
+    AccountGroup.UUID group = groupOperations.newGroup().create();
+    gApi.groups().id(group.get()).addMembers(user.username());
 
-    setApiUser(user);
-    assertMembers(gApi.groups().id(group).members(true), user.fullName);
+    requestScopeOperations.setApiUser(user.id());
+    assertMembers(gApi.groups().id(group.get()).members(true), user.fullName());
   }
 
   @Test
   public void usersDoNotSeeTheirIndirectMembershipWhenListingMembersRecursively() throws Exception {
-    String group1 = createGroup("group1");
-    String group2 = createGroup("group2");
-    gApi.groups().id(group1).addGroups(group2);
-    gApi.groups().id(group2).addMembers(user.username);
+    AccountGroup.UUID group1 = groupOperations.newGroup().ownerGroupUuid(adminGroupUuid()).create();
+    AccountGroup.UUID group2 = groupOperations.newGroup().ownerGroupUuid(adminGroupUuid()).create();
+    gApi.groups().id(group1.get()).addGroups(group2.get());
+    gApi.groups().id(group2.get()).addMembers(user.username());
 
-    setApiUser(user);
-    List<AccountInfo> listedMembers = gApi.groups().id(group1).members(true);
+    requestScopeOperations.setApiUser(user.id());
+    List<AccountInfo> listedMembers = gApi.groups().id(group1.get()).members(true);
 
     assertMembers(listedMembers);
   }
 
   @Test
   public void adminsSeeTheirIndirectMembershipWhenListingMembersRecursively() throws Exception {
-    String ownerGroup = createGroup("ownerGroup", null);
-    String group1 = createGroup("group1", ownerGroup);
-    String group2 = createGroup("group2", ownerGroup);
-    gApi.groups().id(group1).addGroups(group2);
-    gApi.groups().id(group2).addMembers(admin.username);
+    AccountGroup.UUID ownerGroup = groupOperations.newGroup().create();
+    AccountGroup.UUID group1 = groupOperations.newGroup().ownerGroupUuid(ownerGroup).create();
+    AccountGroup.UUID group2 = groupOperations.newGroup().ownerGroupUuid(ownerGroup).create();
+    gApi.groups().id(group1.get()).addGroups(group2.get());
+    gApi.groups().id(group2.get()).addMembers(admin.username());
 
-    List<AccountInfo> listedMembers = gApi.groups().id(group1).members(true);
+    List<AccountInfo> listedMembers = gApi.groups().id(group1.get()).members(true);
 
-    assertMembers(listedMembers, admin.fullName);
+    assertMembers(listedMembers, admin.fullName());
   }
 
   @Test
   public void ownersSeeTheirIndirectMembershipWhenListingMembersRecursively() throws Exception {
-    String ownerGroup = createGroup("ownerGroup", null);
-    String group1 = createGroup("group1", ownerGroup);
-    String group2 = createGroup("group2", ownerGroup);
-    gApi.groups().id(group1).addGroups(group2);
-    gApi.groups().id(ownerGroup).addMembers(user.username);
-    gApi.groups().id(group2).addMembers(user.username);
+    AccountGroup.UUID ownerGroup = groupOperations.newGroup().create();
+    AccountGroup.UUID group1 = groupOperations.newGroup().ownerGroupUuid(ownerGroup).create();
+    AccountGroup.UUID group2 = groupOperations.newGroup().ownerGroupUuid(ownerGroup).create();
+    gApi.groups().id(group1.get()).addGroups(group2.get());
+    gApi.groups().id(ownerGroup.get()).addMembers(user.username());
+    gApi.groups().id(group2.get()).addMembers(user.username());
 
-    setApiUser(user);
-    List<AccountInfo> listedMembers = gApi.groups().id(group1).members(true);
+    requestScopeOperations.setApiUser(user.id());
+    List<AccountInfo> listedMembers = gApi.groups().id(group1.get()).members(true);
 
-    assertMembers(listedMembers, user.fullName);
+    assertMembers(listedMembers, user.fullName());
   }
 
   @Test
   public void defaultGroupsCreated() throws Exception {
     Iterable<String> names = gApi.groups().list().getAsMap().keySet();
-    assertThat(names).containsAllOf("Administrators", "Non-Interactive Users").inOrder();
+    assertThat(names).containsAtLeast("Administrators", "Non-Interactive Users").inOrder();
   }
 
   @Test
@@ -782,18 +798,21 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void getGroupsByOwner() throws Exception {
-    String parent = createGroup("test-parent");
-    List<String> children =
-        Arrays.asList(createGroup("test-child1", parent), createGroup("test-child2", parent));
+    AccountGroup.UUID parent = groupOperations.newGroup().ownerGroupUuid(adminGroupUuid()).create();
+    List<AccountGroup.UUID> children =
+        Arrays.asList(
+            groupOperations.newGroup().ownerGroupUuid(parent).create(),
+            groupOperations.newGroup().ownerGroupUuid(parent).create());
 
     // By UUID
-    List<GroupInfo> owned = gApi.groups().list().withOwnedBy(groupUuid(parent).get()).get();
-    assertThat(owned.stream().map(g -> g.name).collect(toList()))
+    List<GroupInfo> owned = gApi.groups().list().withOwnedBy(parent.get()).get();
+    assertThat(owned.stream().map(g -> new AccountGroup.UUID(g.id)).collect(toList()))
         .containsExactlyElementsIn(children);
 
     // By name
-    owned = gApi.groups().list().withOwnedBy(parent).get();
-    assertThat(owned.stream().map(g -> g.name).collect(toList()))
+    String parentName = groupOperations.group(parent).get().name();
+    owned = gApi.groups().list().withOwnedBy(parentName).get();
+    assertThat(owned.stream().map(g -> new AccountGroup.UUID(g.id)).collect(toList()))
         .containsExactlyElementsIn(children);
 
     // By group that does not own any others
@@ -816,13 +835,13 @@ public class GroupsIT extends AbstractDaemonTest {
     in.ownerId = adminGroupUuid().get();
     gApi.groups().create(in);
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertThat(gApi.groups().list().getAsMap()).doesNotContainKey(newGroupName);
 
-    setApiUser(admin);
-    gApi.groups().id(newGroupName).addMembers(user.username);
+    requestScopeOperations.setApiUser(admin.id());
+    gApi.groups().id(newGroupName).addMembers(user.username());
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertThat(gApi.groups().list().getAsMap()).containsKey(newGroupName);
   }
 
@@ -895,41 +914,41 @@ public class GroupsIT extends AbstractDaemonTest {
     GroupApi g = gApi.groups().create(name("group"));
     List<? extends GroupAuditEventInfo> auditEvents = g.auditLog();
     assertThat(auditEvents).hasSize(1);
-    assertMemberAuditEvent(auditEvents.get(0), Type.ADD_USER, admin.id, admin.id);
+    assertMemberAuditEvent(auditEvents.get(0), Type.ADD_USER, admin.id(), admin.id());
 
-    g.addMembers(user.username);
+    g.addMembers(user.username());
     auditEvents = g.auditLog();
     assertThat(auditEvents).hasSize(2);
-    assertMemberAuditEvent(auditEvents.get(0), Type.ADD_USER, admin.id, user.id);
+    assertMemberAuditEvent(auditEvents.get(0), Type.ADD_USER, admin.id(), user.id());
 
-    g.removeMembers(user.username);
+    g.removeMembers(user.username());
     auditEvents = g.auditLog();
     assertThat(auditEvents).hasSize(3);
-    assertMemberAuditEvent(auditEvents.get(0), Type.REMOVE_USER, admin.id, user.id);
+    assertMemberAuditEvent(auditEvents.get(0), Type.REMOVE_USER, admin.id(), user.id());
 
     String otherGroup = name("otherGroup");
     gApi.groups().create(otherGroup);
     g.addGroups(otherGroup);
     auditEvents = g.auditLog();
     assertThat(auditEvents).hasSize(4);
-    assertSubgroupAuditEvent(auditEvents.get(0), Type.ADD_GROUP, admin.id, otherGroup);
+    assertSubgroupAuditEvent(auditEvents.get(0), Type.ADD_GROUP, admin.id(), otherGroup);
 
     g.removeGroups(otherGroup);
     auditEvents = g.auditLog();
     assertThat(auditEvents).hasSize(5);
-    assertSubgroupAuditEvent(auditEvents.get(0), Type.REMOVE_GROUP, admin.id, otherGroup);
+    assertSubgroupAuditEvent(auditEvents.get(0), Type.REMOVE_GROUP, admin.id(), otherGroup);
 
     // Add a removed member back again.
-    g.addMembers(user.username);
+    g.addMembers(user.username());
     auditEvents = g.auditLog();
     assertThat(auditEvents).hasSize(6);
-    assertMemberAuditEvent(auditEvents.get(0), Type.ADD_USER, admin.id, user.id);
+    assertMemberAuditEvent(auditEvents.get(0), Type.ADD_USER, admin.id(), user.id());
 
     // Add a removed group back again.
     g.addGroups(otherGroup);
     auditEvents = g.auditLog();
     assertThat(auditEvents).hasSize(7);
-    assertSubgroupAuditEvent(auditEvents.get(0), Type.ADD_GROUP, admin.id, otherGroup);
+    assertSubgroupAuditEvent(auditEvents.get(0), Type.ADD_GROUP, admin.id(), otherGroup);
 
     Timestamp lastDate = null;
     for (GroupAuditEventInfo auditEvent : auditEvents) {
@@ -941,8 +960,8 @@ public class GroupsIT extends AbstractDaemonTest {
   }
 
   /**
-   * @Sandboxed is used by this test because it deletes a group reference which introduces an
-   * inconsistency for the group storage. Once group deletion is supported, this test should be
+   * {@code @Sandboxed} is used by this test because it deletes a group reference which introduces
+   * an inconsistency for the group storage. Once group deletion is supported, this test should be
    * updated to use the API instead.
    */
   @Test
@@ -961,7 +980,7 @@ public class GroupsIT extends AbstractDaemonTest {
     List<? extends GroupAuditEventInfo> auditEvents = gApi.groups().id(parentGroup.id).auditLog();
     assertThat(auditEvents).hasSize(2);
     // Verify the unavailable subgroup's name is null.
-    assertSubgroupAuditEvent(auditEvents.get(0), Type.ADD_GROUP, admin.id, null);
+    assertSubgroupAuditEvent(auditEvents.get(0), Type.ADD_GROUP, admin.id(), null);
   }
 
   private void deleteGroupRef(String groupId) throws Exception {
@@ -990,21 +1009,20 @@ public class GroupsIT extends AbstractDaemonTest {
     TestAccount groupOwner = accountCreator.user2();
     GroupInput in = new GroupInput();
     in.name = name("group");
-    in.members =
-        Collections.singleton(groupOwner).stream().map(u -> u.id.toString()).collect(toList());
+    in.members = Stream.of(groupOwner).map(u -> u.id().toString()).collect(toList());
     in.visibleToAll = true;
     GroupInfo group = gApi.groups().create(in).get();
 
     // admin can reindex any group
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     gApi.groups().id(group.id).index();
 
     // group owner can reindex own group (group is owned by itself)
-    setApiUser(groupOwner);
+    requestScopeOperations.setApiUser(groupOwner.id());
     gApi.groups().id(group.id).index();
 
     // user cannot reindex any group
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(AuthException.class);
     exception.expectMessage("not allowed to index group");
     gApi.groups().id(group.id).index();
@@ -1034,7 +1052,7 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void pushToGroupsBranchForNonAllUsersRepo() throws Exception {
-    assertCreateGroupBranch(project, null);
+    assertCreateGroupBranch(project);
     String groupRef =
         RefNames.refsGroups(new AccountGroup.UUID(gApi.groups().create(name("foo")).get().id));
     createBranch(project, groupRef);
@@ -1043,7 +1061,7 @@ public class GroupsIT extends AbstractDaemonTest {
 
   @Test
   public void pushToDeletedGroupsBranchForNonAllUsersRepo() throws Exception {
-    assertCreateGroupBranch(project, null);
+    assertCreateGroupBranch(project);
     String groupRef =
         RefNames.refsDeletedGroups(
             new AccountGroup.UUID(gApi.groups().create(name("foo")).get().id));
@@ -1059,11 +1077,15 @@ public class GroupsIT extends AbstractDaemonTest {
 
   private void assertPushToGroupBranch(
       Project.NameKey project, String groupRefName, String expectedErrorOnUpdate) throws Exception {
-    grant(project, RefNames.REFS_GROUPS + "*", Permission.CREATE, false, REGISTERED_USERS);
-    grant(project, RefNames.REFS_GROUPS + "*", Permission.PUSH, false, REGISTERED_USERS);
-    grant(project, RefNames.REFS_DELETED_GROUPS + "*", Permission.CREATE, false, REGISTERED_USERS);
-    grant(project, RefNames.REFS_DELETED_GROUPS + "*", Permission.PUSH, false, REGISTERED_USERS);
-    grant(project, RefNames.REFS_GROUPNAMES, Permission.PUSH, false, REGISTERED_USERS);
+    try (ProjectConfigUpdate u = updateProject(project)) {
+      ProjectConfig cfg = u.getConfig();
+      Util.allow(cfg, Permission.CREATE, REGISTERED_USERS, RefNames.REFS_GROUPS + "*");
+      Util.allow(cfg, Permission.PUSH, REGISTERED_USERS, RefNames.REFS_GROUPS + "*");
+      Util.allow(cfg, Permission.CREATE, REGISTERED_USERS, RefNames.REFS_DELETED_GROUPS + "*");
+      Util.allow(cfg, Permission.PUSH, REGISTERED_USERS, RefNames.REFS_DELETED_GROUPS + "*");
+      Util.allow(cfg, Permission.PUSH, REGISTERED_USERS, RefNames.REFS_GROUPNAMES);
+      u.save();
+    }
 
     TestRepository<InMemoryRepository> repo = cloneProject(project);
 
@@ -1072,7 +1094,7 @@ public class GroupsIT extends AbstractDaemonTest {
     repo.reset("groupRef");
     PushOneCommit.Result r =
         pushFactory
-            .create(db, admin.getIdent(), repo, "Update group", "arbitraryFile.txt", "some content")
+            .create(admin.newIdent(), repo, "Update group", "arbitraryFile.txt", "some content")
             .to(groupRefName);
     if (expectedErrorOnUpdate != null) {
       r.assertErrorStatus(expectedErrorOnUpdate);
@@ -1081,21 +1103,20 @@ public class GroupsIT extends AbstractDaemonTest {
     }
   }
 
-  private void assertCreateGroupBranch(Project.NameKey project, String expectedErrorOnCreate)
-      throws Exception {
-    grant(project, RefNames.REFS_GROUPS + "*", Permission.CREATE, false, REGISTERED_USERS);
-    grant(project, RefNames.REFS_GROUPS + "*", Permission.PUSH, false, REGISTERED_USERS);
+  private void assertCreateGroupBranch(Project.NameKey project) throws Exception {
+    try (ProjectConfigUpdate u = updateProject(project)) {
+      ProjectConfig cfg = u.getConfig();
+      Util.allow(cfg, Permission.CREATE, REGISTERED_USERS, RefNames.REFS_GROUPS + "*");
+      Util.allow(cfg, Permission.PUSH, REGISTERED_USERS, RefNames.REFS_GROUPS + "*");
+      u.save();
+    }
     TestRepository<InMemoryRepository> repo = cloneProject(project);
     PushOneCommit.Result r =
         pushFactory
-            .create(db, admin.getIdent(), repo, "Update group", "arbitraryFile.txt", "some content")
+            .create(admin.newIdent(), repo, "Update group", "arbitraryFile.txt", "some content")
             .setParents(ImmutableList.of())
             .to(RefNames.REFS_GROUPS + name("bar"));
-    if (expectedErrorOnCreate != null) {
-      r.assertErrorStatus(expectedErrorOnCreate);
-    } else {
-      r.assertOkStatus();
-    }
+    r.assertOkStatus();
   }
 
   @Test
@@ -1130,7 +1151,7 @@ public class GroupsIT extends AbstractDaemonTest {
 
     PushOneCommit.Result r =
         pushFactory
-            .create(db, admin.getIdent(), repo, "Subject", "project.config", config)
+            .create(admin.newIdent(), repo, "Subject", "project.config", config)
             .to(RefNames.REFS_CONFIG);
     r.assertErrorStatus("invalid project configuration");
     r.assertMessage("All-Users must inherit from All-Projects");
@@ -1180,7 +1201,7 @@ public class GroupsIT extends AbstractDaemonTest {
     grant(allUsers, refPattern, Permission.PUSH);
 
     TestRepository<InMemoryRepository> allUsersRepo = cloneProject(allUsers);
-    PushOneCommit.Result r = pushFactory.create(db, admin.getIdent(), allUsersRepo).to(groupRef);
+    PushOneCommit.Result r = pushFactory.create(admin.newIdent(), allUsersRepo).to(groupRef);
     r.assertErrorStatus();
     assertThat(r.getMessage()).contains("Not allowed to create group branch.");
 
@@ -1279,12 +1300,12 @@ public class GroupsIT extends AbstractDaemonTest {
   public void groupsOfUserCanBeListedInSlaveMode() throws Exception {
     GroupInput groupInput = new GroupInput();
     groupInput.name = name("contributors");
-    groupInput.members = ImmutableList.of(user.username);
+    groupInput.members = ImmutableList.of(user.username());
     gApi.groups().create(groupInput).get();
     restartAsSlave();
 
-    setApiUser(user);
-    List<GroupInfo> groups = gApi.groups().list().withUser(user.username).get();
+    requestScopeOperations.setApiUser(user.id());
+    List<GroupInfo> groups = gApi.groups().list().withUser(user.username()).get();
     ImmutableList<String> groupNames =
         groups.stream().map(group -> group.name).collect(toImmutableList());
     assertThat(groupNames).contains(groupInput.name);
@@ -1373,18 +1394,15 @@ public class GroupsIT extends AbstractDaemonTest {
   }
 
   private static Correspondence<AccountInfo, String> getAccountToUsernameCorrespondence() {
-    return new Correspondence<AccountInfo, String>() {
-      @Override
-      public boolean compare(AccountInfo actualAccount, String expectedName) {
-        String username = actualAccount == null ? null : actualAccount.username;
-        return Objects.equals(username, expectedName);
-      }
-
-      @Override
-      public String toString() {
-        return "has username";
-      }
-    };
+    return Correspondence.from(
+        new BinaryPredicate<AccountInfo, String>() {
+          @Override
+          public boolean apply(AccountInfo actualAccount, String expectedName) {
+            String username = actualAccount == null ? null : actualAccount.username;
+            return Objects.equals(username, expectedName);
+          }
+        },
+        "has username");
   }
 
   private void assertStaleGroupAndReindex(AccountGroup.UUID groupUuid) throws IOException {
@@ -1409,8 +1427,7 @@ public class GroupsIT extends AbstractDaemonTest {
 
     PushOneCommit.Result r =
         pushFactory
-            .create(
-                db, admin.getIdent(), repo, "Update group config", "group.config", "some content")
+            .create(admin.newIdent(), repo, "Update group config", "group.config", "some content")
             .to(MagicBranch.NEW_CHANGE + groupRef);
     r.assertOkStatus();
     assertThat(r.getChange().change().getDest().get()).isEqualTo(groupRef);
@@ -1484,7 +1501,7 @@ public class GroupsIT extends AbstractDaemonTest {
   private void assertMembers(String group, TestAccount... expectedMembers) throws Exception {
     assertMembers(
         gApi.groups().id(group).members(),
-        TestAccount.names(expectedMembers).stream().toArray(String[]::new));
+        TestAccount.names(expectedMembers).toArray(new String[0]));
     assertAccountInfos(Arrays.asList(expectedMembers), gApi.groups().id(group).members());
   }
 
@@ -1494,22 +1511,10 @@ public class GroupsIT extends AbstractDaemonTest {
         .inOrder();
   }
 
-  private void assertNoMembers(String group) throws Exception {
-    assertThat(gApi.groups().id(group).members()).isEmpty();
-  }
-
-  private void assertIncludes(String group, String... expectedNames) throws Exception {
-    assertIncludes(gApi.groups().id(group).includedGroups(), expectedNames);
-  }
-
-  private static void assertIncludes(Iterable<GroupInfo> includes, String... expectedNames) {
-    assertThat(Iterables.transform(includes, i -> i.name))
-        .containsExactlyElementsIn(Arrays.asList(expectedNames))
-        .inOrder();
-  }
-
-  private void assertNoIncludes(String group) throws Exception {
-    assertThat(gApi.groups().id(group).includedGroups()).isEmpty();
+  private static void assertIncludes(List<GroupInfo> includes, String... expectedNames) {
+    List<String> names = includes.stream().map(i -> i.name).collect(toImmutableList());
+    assertThat(names).containsExactlyElementsIn(Arrays.asList(expectedNames));
+    assertThat(names).isOrdered();
   }
 
   private void assertBadRequest(ListRequest req) throws Exception {

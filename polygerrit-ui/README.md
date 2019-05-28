@@ -71,9 +71,9 @@ When your project is set up and works using the classic UI, run a test server
 that serves PolyGerrit:
 
 ```sh
-bazel build polygerrit &&
-  $(bazel info output_base)/external/local_jdk/bin/java \
-  -jar bazel-bin/polygerrit.war daemon --polygerrit-dev \
+bazel build gerrit &&
+  $(bazel info output_base)/external/local_jdk/bin/java -DsourceRoot=/path/to/my/checkout \
+  -jar bazel-bin/gerrit.war daemon --polygerrit-dev \
   -d ../gerrit_testsite --console-log --show-stack-trace
 ```
 
@@ -123,7 +123,9 @@ For interactively working on a single test file, do the following:
 ./polygerrit-ui/run-server.sh
 ```
 
-Then visit http://localhost:8081/elements/foo/bar_test.html
+Then visit http://localhost:8081/elements/foo/bar_test.html and check "Disable
+cache" in the "Network" tab of Chrome's dev tools, so code changes are picked
+up on "reload".
 
 To run Chrome tests in headless mode:
 

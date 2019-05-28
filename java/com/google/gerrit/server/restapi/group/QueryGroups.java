@@ -17,6 +17,7 @@ package com.google.gerrit.server.restapi.group;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.gerrit.extensions.client.ListGroupsOption;
+import com.google.gerrit.extensions.client.ListOption;
 import com.google.gerrit.extensions.common.GroupInfo;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.MethodNotAllowedException;
@@ -29,7 +30,6 @@ import com.google.gerrit.server.group.InternalGroupDescription;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.query.group.GroupQueryBuilder;
 import com.google.gerrit.server.query.group.GroupQueryProcessor;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -82,7 +82,7 @@ public class QueryGroups implements RestReadView<TopLevelResource> {
 
   @Option(name = "-O", usage = "Output option flags, in hex")
   public void setOptionFlagsHex(String hex) {
-    options.addAll(ListGroupsOption.fromBits(Integer.parseInt(hex, 16)));
+    options.addAll(ListOption.fromBits(ListGroupsOption.class, Integer.parseInt(hex, 16)));
   }
 
   @Inject
@@ -95,8 +95,7 @@ public class QueryGroups implements RestReadView<TopLevelResource> {
 
   @Override
   public List<GroupInfo> apply(TopLevelResource resource)
-      throws BadRequestException, MethodNotAllowedException, OrmException,
-          PermissionBackendException {
+      throws BadRequestException, MethodNotAllowedException, PermissionBackendException {
     if (Strings.isNullOrEmpty(query)) {
       throw new BadRequestException("missing query field");
     }

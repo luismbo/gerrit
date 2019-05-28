@@ -18,8 +18,8 @@ import static com.google.gerrit.reviewdb.client.RefNames.REFS_DRAFT_COMMENTS;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_STARRED_CHANGES;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_USERS;
 
+import com.google.common.primitives.Ints;
 import com.google.gerrit.extensions.client.DiffPreferencesInfo;
-import com.google.gwtorm.client.Column;
 import com.google.gwtorm.client.IntKey;
 import java.sql.Timestamp;
 import java.util.Optional;
@@ -46,18 +46,14 @@ import java.util.Optional;
  * </ul>
  */
 public final class Account {
-  /**
-   * Key local to Gerrit to identify a user.
-   *
-   * <p>Fields in this type must be annotated with {@link Column} so that account IDs can be
-   * converted into protos (protobuf requires the {@link Column} annotations for decoding/encoding).
-   * We need to be able to store account IDs as protos because we store change protos in the change
-   * index and a change references account IDs for the change owner and the assignee.
-   */
+  public static Id id(int id) {
+    return new Id(id);
+  }
+
+  /** Key local to Gerrit to identify a user. */
   public static class Id extends IntKey<com.google.gwtorm.client.Key<?>> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1)
     protected int id;
 
     protected Id() {}
@@ -78,11 +74,7 @@ public final class Account {
 
     /** Parse an Account.Id out of a string representation. */
     public static Optional<Id> tryParse(String str) {
-      try {
-        return Optional.of(new Id(Integer.parseInt(str)));
-      } catch (NumberFormatException e) {
-        return Optional.empty();
-      }
+      return Optional.ofNullable(Ints.tryParse(str)).map(Id::new);
     }
 
     public static Id fromRef(String name) {
@@ -151,10 +143,7 @@ public final class Account {
   /** The user-settable status of this account (e.g. busy, OOO, available) */
   private String status;
 
-  /**
-   * ID of the user branch from which the account was read, {@code null} if the account was read
-   * from ReviewDb.
-   */
+  /** ID of the user branch from which the account was read. */
   private String metaId;
 
   protected Account() {}
@@ -162,7 +151,7 @@ public final class Account {
   /**
    * Create a new account.
    *
-   * @param newId unique id, see {@link com.google.gerrit.server.Sequences#nextAccountId()}.
+   * @param newId unique id, see {@link com.google.gerrit.server.notedb.Sequences#nextAccountId()}.
    * @param registeredOn when the account was registered.
    */
   public Account(Account.Id newId, Timestamp registeredOn) {

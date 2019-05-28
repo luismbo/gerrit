@@ -15,13 +15,14 @@
 package com.google.gerrit.server.submit;
 
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.collect.Maps;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.IdentifiedUser;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.git.CodeReviewCommit;
 import com.google.gerrit.server.git.CodeReviewCommit.CodeReviewRevWalk;
 import com.google.gerrit.server.git.GitRepositoryManager;
@@ -105,12 +106,13 @@ public class MergeOpRepoManager implements AutoCloseable {
     }
 
     public BatchUpdate getUpdate() {
-      checkState(db != null, "call setContext before getUpdate");
+      checkState(caller != null, "call setContext before getUpdate");
       if (update == null) {
         update =
             batchUpdateFactory
-                .create(db, getProjectName(), caller, ts)
+                .create(getProjectName(), caller, ts)
                 .setRepository(repo, rw, ins)
+                .setNotify(notify)
                 .setOnSubmitValidators(onSubmitValidatorsFactory.create());
       }
       return update;
@@ -157,9 +159,9 @@ public class MergeOpRepoManager implements AutoCloseable {
   private final GitRepositoryManager repoManager;
   private final ProjectCache projectCache;
 
-  private ReviewDb db;
   private Timestamp ts;
   private IdentifiedUser caller;
+  private NotifyResolver.Result notify;
 
   @Inject
   MergeOpRepoManager(
@@ -175,10 +177,10 @@ public class MergeOpRepoManager implements AutoCloseable {
     openRepos = new HashMap<>();
   }
 
-  public void setContext(ReviewDb db, Timestamp ts, IdentifiedUser caller) {
-    this.db = db;
-    this.ts = ts;
-    this.caller = caller;
+  public void setContext(Timestamp ts, IdentifiedUser caller, NotifyResolver.Result notify) {
+    this.ts = requireNonNull(ts);
+    this.caller = requireNonNull(caller);
+    this.notify = requireNonNull(notify);
   }
 
   public OpenRepo getRepo(Project.NameKey project) throws NoSuchProjectException, IOException {
@@ -203,7 +205,7 @@ public class MergeOpRepoManager implements AutoCloseable {
       throws NoSuchProjectException, IOException {
     List<BatchUpdate> updates = new ArrayList<>(projects.size());
     for (Project.NameKey project : projects) {
-      updates.add(getRepo(project).getUpdate().setRefLogMessage("merged"));
+      updates.add(getRepo(project).getUpdate().setNotify(notify).setRefLogMessage("merged"));
     }
     return updates;
   }

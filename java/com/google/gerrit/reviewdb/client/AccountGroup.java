@@ -14,10 +14,11 @@
 
 package com.google.gerrit.reviewdb.client;
 
-import com.google.gwtorm.client.Column;
+import com.google.gerrit.common.Nullable;
 import com.google.gwtorm.client.IntKey;
 import com.google.gwtorm.client.StringKey;
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.Objects;
 
 /** Named group of one or more accounts, typically used for access controls. */
@@ -26,19 +27,20 @@ public final class AccountGroup {
    * Time when the audit subsystem was implemented, used as the default value for {@link #createdOn}
    * when one couldn't be determined from the audit log.
    */
-  // Can't use Instant here because GWT. This is verified against a readable time in the tests,
-  // which don't need to compile under GWT.
-  private static final long AUDIT_CREATION_INSTANT_MS = 1244489460000L;
+  private static final Instant AUDIT_CREATION_INSTANT_MS = Instant.ofEpochMilli(1244489460000L);
 
   public static Timestamp auditCreationInstantTs() {
-    return new Timestamp(AUDIT_CREATION_INSTANT_MS);
+    return Timestamp.from(AUDIT_CREATION_INSTANT_MS);
+  }
+
+  public static NameKey nameKey(String n) {
+    return new NameKey(n);
   }
 
   /** Group name key */
   public static class NameKey extends StringKey<com.google.gwtorm.client.Key<?>> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1)
     protected String name;
 
     protected NameKey() {}
@@ -58,11 +60,14 @@ public final class AccountGroup {
     }
   }
 
+  public static UUID uuid(String n) {
+    return new UUID(n);
+  }
+
   /** Globally unique identifier. */
   public static class UUID extends StringKey<com.google.gwtorm.client.Key<?>> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1)
     protected String uuid;
 
     protected UUID() {}
@@ -116,11 +121,14 @@ public final class AccountGroup {
     return uuid.get().matches("^[0-9a-f]{40}$");
   }
 
+  public static Id id(int id) {
+    return new Id(id);
+  }
+
   /** Synthetic key to link to within the database */
   public static class Id extends IntKey<com.google.gwtorm.client.Key<?>> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1)
     protected int id;
 
     protected Id() {}
@@ -148,29 +156,24 @@ public final class AccountGroup {
   }
 
   /** Unique name of this group within the system. */
-  @Column(id = 1)
   protected NameKey name;
 
   /** Unique identity, to link entities as {@link #name} can change. */
-  @Column(id = 2)
   protected Id groupId;
 
   // DELETED: id = 3 (ownerGroupId)
 
   /** A textual description of the group's purpose. */
-  @Column(id = 4, length = Integer.MAX_VALUE, notNull = false)
-  protected String description;
+  @Nullable protected String description;
 
   // DELETED: id = 5 (groupType)
   // DELETED: id = 6 (externalName)
 
-  @Column(id = 7)
   protected boolean visibleToAll;
 
   // DELETED: id = 8 (emailOnlyAuthors)
 
   /** Globally unique identifier name for this group. */
-  @Column(id = 9)
   protected UUID groupUUID;
 
   /**
@@ -178,11 +181,9 @@ public final class AccountGroup {
    *
    * <p>This can be a self-reference to indicate the group's members manage itself.
    */
-  @Column(id = 10)
   protected UUID ownerGroupUUID;
 
-  @Column(id = 11, notNull = false)
-  protected Timestamp createdOn;
+  @Nullable protected Timestamp createdOn;
 
   protected AccountGroup() {}
 

@@ -24,7 +24,6 @@ junit_tests(
         "//java/org/eclipse/jgit:server",
         "//lib:gson",
         "//lib:guava-retrying",
-        "//lib:gwtorm",
         "//lib/commons:codec",
         "//lib/guice",
         "//lib/jgit/org.eclipse.jgit:jgit",

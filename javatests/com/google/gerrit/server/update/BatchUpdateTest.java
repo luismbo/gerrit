@@ -14,13 +14,13 @@
 
 package com.google.gerrit.server.update;
 
-import static org.junit.Assert.assertEquals;
+import static com.google.common.truth.Truth.assertThat;
 
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.util.time.TimeUtil;
+import com.google.gerrit.testing.GerritBaseTests;
 import com.google.gerrit.testing.InMemoryTestEnvironment;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
@@ -31,12 +31,11 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 
-public class BatchUpdateTest {
+public class BatchUpdateTest extends GerritBaseTests {
   @Rule public InMemoryTestEnvironment testEnvironment = new InMemoryTestEnvironment();
 
   @Inject private GitRepositoryManager repoManager;
   @Inject private BatchUpdate.Factory batchUpdateFactory;
-  @Inject private ReviewDb db;
   @Inject private Provider<CurrentUser> user;
 
   private Project.NameKey project;
@@ -52,10 +51,10 @@ public class BatchUpdateTest {
 
   @Test
   public void addRefUpdateFromFastForwardCommit() throws Exception {
-    final RevCommit masterCommit = repo.branch("master").commit().create();
-    final RevCommit branchCommit = repo.branch("branch").commit().parent(masterCommit).create();
+    RevCommit masterCommit = repo.branch("master").commit().create();
+    RevCommit branchCommit = repo.branch("branch").commit().parent(masterCommit).create();
 
-    try (BatchUpdate bu = batchUpdateFactory.create(db, project, user.get(), TimeUtil.nowTs())) {
+    try (BatchUpdate bu = batchUpdateFactory.create(project, user.get(), TimeUtil.nowTs())) {
       bu.addRepoOnlyOp(
           new RepoOnlyOp() {
             @Override
@@ -66,7 +65,7 @@ public class BatchUpdateTest {
       bu.execute();
     }
 
-    assertEquals(
-        repo.getRepository().exactRef("refs/heads/master").getObjectId(), branchCommit.getId());
+    assertThat(repo.getRepository().exactRef("refs/heads/master").getObjectId())
+        .isEqualTo(branchCommit.getId());
   }
 }

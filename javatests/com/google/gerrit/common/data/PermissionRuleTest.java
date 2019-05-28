@@ -18,14 +18,11 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.gerrit.common.data.PermissionRule.Action;
 import com.google.gerrit.reviewdb.client.AccountGroup;
+import com.google.gerrit.testing.GerritBaseTests;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
-public class PermissionRuleTest {
-  @Rule public ExpectedException exception = ExpectedException.none();
-
+public class PermissionRuleTest extends GerritBaseTests {
   private GroupReference groupReference;
   private PermissionRule permissionRule;
 

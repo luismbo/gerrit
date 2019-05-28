@@ -20,12 +20,14 @@
   // Eagerly render Polymer components when backgrounded. (Skips
   // requestAnimationFrame.)
   // @see https://github.com/Polymer/polymer/issues/3851
-  // TODO: Reassess after Polymer 2.0 upgrade.
   // @see Issue 4699
-  Polymer.RenderStatus._makeReady();
+  if (!window.POLYMER2) {
+    Polymer.RenderStatus._makeReady();
+  }
 
   Polymer({
     is: 'gr-app',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when the URL location changes.
@@ -89,6 +91,11 @@
         type: String,
         value: 'https://bugs.chromium.org/p/gerrit/issues/entry' +
           '?template=PolyGerrit%20Issue',
+      },
+      // Used to allow searching on mobile
+      mobileSearch: {
+        type: Boolean,
+        value: false,
       },
     },
 
@@ -331,11 +338,6 @@
       this.$.header.unfloat();
     },
 
-    _computeShowGwtUiLink(config) {
-      return !window.DEPRECATE_GWT_UI &&
-          config.gerrit.web_uis && config.gerrit.web_uis.includes('GWT');
-    },
-
     _handlePageError(e) {
       const props = [
         '_showChangeListView',
@@ -451,6 +453,10 @@
     _handleRpcLog(e) {
       this.$.reporting.reportRpcTiming(e.detail.anonymizedUrl,
           e.detail.elapsed);
+    },
+
+    _mobileSearchToggle(e) {
+      this.mobileSearch = !this.mobileSearch;
     },
   });
 })();

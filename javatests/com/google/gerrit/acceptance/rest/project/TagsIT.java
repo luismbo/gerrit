@@ -23,6 +23,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.NoHttpd;
 import com.google.gerrit.acceptance.PushOneCommit;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.projects.ProjectApi.ListRefsRequest;
 import com.google.gerrit.extensions.api.projects.TagApi;
@@ -33,6 +34,7 @@ import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.MethodNotAllowedException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
+import com.google.inject.Inject;
 import java.sql.Timestamp;
 import java.util.List;
 import org.junit.Test;
@@ -56,6 +58,8 @@ public class TagsIT extends AbstractDaemonTest {
           + "=XFeC\n"
           + "-----END PGP SIGNATURE-----";
 
+  @Inject private RequestScopeOperations requestScopeOperations;
+
   @Test
   public void listTagsOfNonExistingProject() throws Exception {
     exception.expect(ResourceNotFoundException.class);
@@ -71,7 +75,7 @@ public class TagsIT extends AbstractDaemonTest {
   @Test
   public void listTagsOfNonVisibleProject() throws Exception {
     blockRead("refs/*");
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(ResourceNotFoundException.class);
     gApi.projects().name(project.get()).tags().get();
   }
@@ -126,7 +130,7 @@ public class TagsIT extends AbstractDaemonTest {
   public void listTagsOfNonVisibleBranch() throws Exception {
     grantTagPermissions();
 
-    PushOneCommit push1 = pushFactory.create(db, admin.getIdent(), testRepo);
+    PushOneCommit push1 = pushFactory.create(admin.newIdent(), testRepo);
     PushOneCommit.Result r1 = push1.to("refs/heads/master");
     r1.assertOkStatus();
     TagInput tag1 = new TagInput();
@@ -137,7 +141,7 @@ public class TagsIT extends AbstractDaemonTest {
     assertThat(result.revision).isEqualTo(tag1.revision);
 
     pushTo("refs/heads/hidden");
-    PushOneCommit push2 = pushFactory.create(db, admin.getIdent(), testRepo);
+    PushOneCommit push2 = pushFactory.create(admin.newIdent(), testRepo);
     PushOneCommit.Result r2 = push2.to("refs/heads/hidden");
     r2.assertOkStatus();
 
@@ -166,7 +170,7 @@ public class TagsIT extends AbstractDaemonTest {
   public void lightweightTag() throws Exception {
     grantTagPermissions();
 
-    PushOneCommit push = pushFactory.create(db, admin.getIdent(), testRepo);
+    PushOneCommit push = pushFactory.create(admin.newIdent(), testRepo);
     PushOneCommit.Result r = push.to("refs/heads/master");
     r.assertOkStatus();
 
@@ -187,7 +191,7 @@ public class TagsIT extends AbstractDaemonTest {
     assertThat(result.canDelete).isTrue();
     assertThat(result.created).isEqualTo(timestamp(r));
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     result = tag(input.ref).get();
     assertThat(result.canDelete).isNull();
 
@@ -198,7 +202,7 @@ public class TagsIT extends AbstractDaemonTest {
   public void annotatedTag() throws Exception {
     grantTagPermissions();
 
-    PushOneCommit push = pushFactory.create(db, admin.getIdent(), testRepo);
+    PushOneCommit push = pushFactory.create(admin.newIdent(), testRepo);
     PushOneCommit.Result r = push.to("refs/heads/master");
     r.assertOkStatus();
 
@@ -211,8 +215,8 @@ public class TagsIT extends AbstractDaemonTest {
     assertThat(result.ref).isEqualTo(R_TAGS + input.ref);
     assertThat(result.object).isEqualTo(input.revision);
     assertThat(result.message).isEqualTo(input.message);
-    assertThat(result.tagger.name).isEqualTo(admin.fullName);
-    assertThat(result.tagger.email).isEqualTo(admin.email);
+    assertThat(result.tagger.name).isEqualTo(admin.fullName());
+    assertThat(result.tagger.email).isEqualTo(admin.email());
     assertThat(result.created).isEqualTo(result.tagger.date);
 
     eventRecorder.assertRefUpdatedEvents(project.get(), result.ref, null, result.revision);
@@ -226,8 +230,8 @@ public class TagsIT extends AbstractDaemonTest {
     assertThat(result2.ref).isEqualTo(input2.ref);
     assertThat(result2.object).isEqualTo(input2.revision);
     assertThat(result2.message).isEqualTo(input2.message);
-    assertThat(result2.tagger.name).isEqualTo(admin.fullName);
-    assertThat(result2.tagger.email).isEqualTo(admin.email);
+    assertThat(result2.tagger.name).isEqualTo(admin.fullName());
+    assertThat(result2.tagger.email).isEqualTo(admin.email());
     assertThat(result2.created).isEqualTo(result2.tagger.date);
 
     eventRecorder.assertRefUpdatedEvents(project.get(), result2.ref, null, result2.revision);

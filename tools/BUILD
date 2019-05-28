@@ -4,6 +4,8 @@ load(
     "default_java_toolchain",
 )
 
+exports_files(["nongoogle.bzl"])
+
 py_binary(
     name = "merge_jars",
     srcs = ["merge_jars.py"],
@@ -62,7 +64,7 @@ java_package_configuration(
         "-Xep:LiteralClassName:WARN",
         "-Xep:MissingFail:WARN",
         "-Xep:MissingOverride:WARN",
-        "-Xep:MutableConstantField:WARN",
+        "-Xep:MutableConstantField:ERROR",
         "-Xep:NarrowingCompoundAssignment:WARN",
         "-Xep:NonAtomicVolatileUpdate:WARN",
         "-Xep:NonOverridingEquals:WARN",

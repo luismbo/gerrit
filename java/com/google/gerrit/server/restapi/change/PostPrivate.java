@@ -24,8 +24,6 @@ import com.google.gerrit.extensions.restapi.Response;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.webui.UiAction;
 import com.google.gerrit.reviewdb.client.Change;
-import com.google.gerrit.reviewdb.server.ReviewDb;
-import com.google.gerrit.server.ChangeMessagesUtil;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.change.SetPrivateOp;
 import com.google.gerrit.server.config.GerritServerConfig;
@@ -37,7 +35,6 @@ import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.Singleton;
 import org.eclipse.jgit.lib.Config;
 
@@ -45,23 +42,17 @@ import org.eclipse.jgit.lib.Config;
 public class PostPrivate
     extends RetryingRestModifyView<ChangeResource, SetPrivateOp.Input, Response<String>>
     implements UiAction<ChangeResource> {
-  private final ChangeMessagesUtil cmUtil;
-  private final Provider<ReviewDb> dbProvider;
   private final PermissionBackend permissionBackend;
   private final SetPrivateOp.Factory setPrivateOpFactory;
   private final boolean disablePrivateChanges;
 
   @Inject
   PostPrivate(
-      Provider<ReviewDb> dbProvider,
       RetryHelper retryHelper,
-      ChangeMessagesUtil cmUtil,
       PermissionBackend permissionBackend,
       SetPrivateOp.Factory setPrivateOpFactory,
       @GerritServerConfig Config config) {
     super(retryHelper);
-    this.dbProvider = dbProvider;
-    this.cmUtil = cmUtil;
     this.permissionBackend = permissionBackend;
     this.setPrivateOpFactory = setPrivateOpFactory;
     this.disablePrivateChanges = config.getBoolean("change", null, "disablePrivateChanges", false);
@@ -83,10 +74,9 @@ public class PostPrivate
       return Response.ok("");
     }
 
-    SetPrivateOp op = setPrivateOpFactory.create(cmUtil, true, input);
+    SetPrivateOp op = setPrivateOpFactory.create(true, input);
     try (BatchUpdate u =
-        updateFactory.create(
-            dbProvider.get(), rsrc.getProject(), rsrc.getUser(), TimeUtil.nowTs())) {
+        updateFactory.create(rsrc.getProject(), rsrc.getUser(), TimeUtil.nowTs())) {
       u.addOp(rsrc.getId(), op).execute();
     }
 
@@ -99,13 +89,16 @@ public class PostPrivate
     return new UiAction.Description()
         .setLabel("Mark private")
         .setTitle("Mark change as private")
-        .setVisible(and(!disablePrivateChanges && !change.isPrivate(), canSetPrivate(rsrc)));
+        .setVisible(
+            and(
+                !disablePrivateChanges && !change.isPrivate() && change.isNew(),
+                canSetPrivate(rsrc)));
   }
 
   private BooleanCondition canSetPrivate(ChangeResource rsrc) {
     PermissionBackend.WithUser user = permissionBackend.user(rsrc.getUser());
     return or(
-        rsrc.isUserOwner() && rsrc.getChange().getStatus() != Change.Status.MERGED,
+        rsrc.isUserOwner() && !rsrc.getChange().isMerged(),
         user.testCond(GlobalPermission.ADMINISTRATE_SERVER));
   }
 }

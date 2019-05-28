@@ -35,7 +35,7 @@ def _SafeIndex(l, val):
     return -1
 
 def _AsClassName(fname):
-    fname = [x.path for x in fname.files][0]
+    fname = [x.path for x in fname.files.to_list()][0]
     toks = fname[:-5].split("/")
     findex = -1
     for s in _PREFIXES:
@@ -68,7 +68,6 @@ POST_JDK8_OPTS = [
     # Enforce JDK 8 compatibility on Java 9, see
     # https://docs.oracle.com/javase/9/intl/internationalization-enhancements-jdk-9.htm#JSINT-GUID-AF5AECA7-07C1-4E7D-BC10-BC7E73DC6C7F
     "-Djava.locale.providers=COMPAT,CLDR,SPI",
-    "--add-modules java.activation",
     "--add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED",
 ]
 
@@ -81,8 +80,8 @@ def junit_tests(name, srcs, **kwargs):
     )
     jvm_flags = kwargs.get("jvm_flags", [])
     jvm_flags = jvm_flags + select({
-        "//:java10": POST_JDK8_OPTS,
         "//:java9": POST_JDK8_OPTS,
+        "//:java_next": POST_JDK8_OPTS,
         "//conditions:default": [],
     })
     native.java_test(

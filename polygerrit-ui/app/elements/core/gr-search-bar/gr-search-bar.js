@@ -36,7 +36,12 @@
     'conflicts:',
     'deleted:',
     'delta:',
+    'dir:',
+    'directory:',
+    'ext:',
+    'extension:',
     'file:',
+    'footer:',
     'from:',
     'has:',
     'has:draft',
@@ -65,6 +70,8 @@
     'is:wip',
     'label:',
     'message:',
+    'onlyexts:',
+    'onlyextensions:',
     'owner:',
     'ownerin:',
     'parentproject:',
@@ -99,6 +106,7 @@
 
   Polymer({
     is: 'gr-search-bar',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when a search is committed

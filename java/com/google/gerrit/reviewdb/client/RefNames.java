@@ -14,6 +14,8 @@
 
 package com.google.gerrit.reviewdb.client;
 
+import com.google.gerrit.common.UsedAt;
+
 /** Constants and utilities for Gerrit-specific ref names. */
 public class RefNames {
   public static final String HEAD = "HEAD";
@@ -48,6 +50,9 @@ public class RefNames {
 
   /** Sequence counters in NoteDb. */
   public static final String REFS_SEQUENCES = "refs/sequences/";
+
+  /** NoteDb schema version number. */
+  public static final String REFS_VERSION = "refs/meta/version";
 
   /**
    * Prefix applied to merge commit base nodes.
@@ -134,6 +139,11 @@ public class RefNames {
     return false;
   }
 
+  /** True if the provided ref is in {@code refs/changes/*}. */
+  public static boolean isRefsChanges(String ref) {
+    return ref.startsWith(REFS_CHANGES);
+  }
+
   public static String refsGroups(AccountGroup.UUID groupUuid) {
     return REFS_GROUPS + shardUuid(groupUuid.get());
   }
@@ -190,7 +200,8 @@ public class RefNames {
     return sb;
   }
 
-  private static String shardUuid(String uuid) {
+  @UsedAt(UsedAt.Project.PLUGINS_ALL)
+  public static String shardUuid(String uuid) {
     if (uuid == null || uuid.length() < 2) {
       throw new IllegalArgumentException("UUIDs must consist of at least two characters");
     }
@@ -263,6 +274,24 @@ public class RefNames {
     return REFS_CONFIG.equals(ref);
   }
 
+  /**
+   * Whether the ref is managed by Gerrit. Covers all Gerrit-internal refs like refs/cache-automerge
+   * and refs/meta as well as refs/changes. Does not cover user-created refs like branches or custom
+   * ref namespaces like refs/my-company.
+   */
+  public static boolean isGerritRef(String ref) {
+    return ref.startsWith(REFS_CHANGES)
+        || ref.startsWith(REFS_META)
+        || ref.startsWith(REFS_CACHE_AUTOMERGE)
+        || ref.startsWith(REFS_DRAFT_COMMENTS)
+        || ref.startsWith(REFS_DELETED_GROUPS)
+        || ref.startsWith(REFS_SEQUENCES)
+        || ref.startsWith(REFS_GROUPS)
+        || ref.startsWith(REFS_GROUPNAMES)
+        || ref.startsWith(REFS_USERS)
+        || ref.startsWith(REFS_STARRED_CHANGES);
+  }
+
   static Integer parseShardedRefPart(String name) {
     if (name == null) {
       return null;
@@ -305,7 +334,8 @@ public class RefNames {
     return id;
   }
 
-  static String parseShardedUuidFromRefPart(String name) {
+  @UsedAt(UsedAt.Project.PLUGINS_ALL)
+  public static String parseShardedUuidFromRefPart(String name) {
     if (name == null) {
       return null;
     }
@@ -429,7 +459,7 @@ public class RefNames {
     if (i == 0) {
       return null;
     }
-    return Integer.valueOf(name.substring(i, name.length()));
+    return Integer.valueOf(name.substring(i));
   }
 
   private static StringBuilder newStringBuilder() {

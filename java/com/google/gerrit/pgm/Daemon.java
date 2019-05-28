@@ -15,9 +15,7 @@
 package com.google.gerrit.pgm;
 
 import static com.google.gerrit.common.Version.getVersion;
-import static com.google.gerrit.server.schema.DataSourceProvider.Context.MULTI_USER;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Objects.requireNonNull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
@@ -53,6 +51,7 @@ import com.google.gerrit.pgm.util.LogFileCompressor;
 import com.google.gerrit.pgm.util.RuntimeShutdown;
 import com.google.gerrit.pgm.util.SiteProgram;
 import com.google.gerrit.server.LibModuleLoader;
+import com.google.gerrit.server.LibModuleType;
 import com.google.gerrit.server.ModuleOverloader;
 import com.google.gerrit.server.StartupChecks;
 import com.google.gerrit.server.account.AccountDeactivator;
@@ -89,18 +88,14 @@ import com.google.gerrit.server.mail.SignedTokenEmailTokenVerifier;
 import com.google.gerrit.server.mail.receive.MailReceiver;
 import com.google.gerrit.server.mail.send.SmtpEmailSender;
 import com.google.gerrit.server.mime.MimeUtil2Module;
-import com.google.gerrit.server.notedb.rebuild.NoteDbMigrator;
-import com.google.gerrit.server.notedb.rebuild.OnlineNoteDbMigrator;
 import com.google.gerrit.server.patch.DiffExecutorModule;
 import com.google.gerrit.server.permissions.DefaultPermissionBackendModule;
 import com.google.gerrit.server.plugins.PluginGuiceEnvironment;
 import com.google.gerrit.server.plugins.PluginModule;
 import com.google.gerrit.server.project.DefaultProjectNameLockManager;
 import com.google.gerrit.server.restapi.RestApiModule;
-import com.google.gerrit.server.schema.DataSourceProvider;
-import com.google.gerrit.server.schema.InMemoryAccountPatchReviewStore;
 import com.google.gerrit.server.schema.JdbcAccountPatchReviewStore;
-import com.google.gerrit.server.schema.SchemaVersionCheck;
+import com.google.gerrit.server.schema.NoteDbSchemaVersionCheck;
 import com.google.gerrit.server.securestore.DefaultSecureStore;
 import com.google.gerrit.server.securestore.SecureStore;
 import com.google.gerrit.server.securestore.SecureStoreClassName;
@@ -123,7 +118,6 @@ import com.google.inject.Module;
 import com.google.inject.Provider;
 import com.google.inject.Stage;
 import java.io.IOException;
-import java.lang.Thread.UncaughtExceptionHandler;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -132,7 +126,6 @@ import java.util.List;
 import javax.servlet.http.HttpServletRequest;
 import org.eclipse.jgit.lib.Config;
 import org.kohsuke.args4j.Option;
-import org.kohsuke.args4j.spi.ExplicitBooleanOptionHandler;
 
 /** Run SSH daemon portions of Gerrit. */
 public class Daemon extends SiteProgram {
@@ -180,15 +173,6 @@ public class Daemon extends SiteProgram {
 
   @Option(name = "--stop-only", usage = "Stop the daemon", hidden = true)
   private boolean stopOnly;
-
-  @Option(
-      name = "--migrate-to-note-db",
-      usage = "Automatically migrate changes to NoteDb",
-      handler = ExplicitBooleanOptionHandler.class)
-  private boolean migrateToNoteDb;
-
-  @Option(name = "--trial", usage = "(With --migrate-to-note-db) " + MigrateToNoteDb.TRIAL_USAGE)
-  private boolean trial;
 
   private final LifecycleManager manager = new LifecycleManager();
   private Injector dbInjector;
@@ -249,12 +233,7 @@ public class Daemon extends SiteProgram {
     }
     mustHaveValidSite();
     Thread.setDefaultUncaughtExceptionHandler(
-        new UncaughtExceptionHandler() {
-          @Override
-          public void uncaughtException(Thread t, Throwable e) {
-            logger.atSevere().withCause(e).log("Thread %s threw exception", t.getName());
-          }
-        });
+        (t, e) -> logger.atSevere().withCause(e).log("Thread %s threw exception", t.getName()));
 
     if (runId != null) {
       runFile = getSitePath().resolve("logs").resolve("gerrit.run");
@@ -293,8 +272,6 @@ public class Daemon extends SiteProgram {
       if (inspector) {
         JythonShell shell = new JythonShell();
         shell.set("m", manager);
-        shell.set("ds", dbInjector.getInstance(DataSourceProvider.class));
-        shell.set("schk", dbInjector.getInstance(SchemaVersionCheck.class));
         shell.set("d", this);
         shell.run();
       } else {
@@ -343,7 +320,7 @@ public class Daemon extends SiteProgram {
   @VisibleForTesting
   public void start() throws IOException {
     if (dbInjector == null) {
-      dbInjector = createDbInjector(true /* enableMetrics */, MULTI_USER);
+      dbInjector = createDbInjector(true /* enableMetrics */);
     }
     cfgInjector = createCfgInjector();
     config = cfgInjector.getInstance(Key.get(Config.class, GerritServerConfig.class));
@@ -409,7 +386,7 @@ public class Daemon extends SiteProgram {
 
   private Injector createSysInjector() {
     final List<Module> modules = new ArrayList<>();
-    modules.add(SchemaVersionCheck.module());
+    modules.add(NoteDbSchemaVersionCheck.module());
     modules.add(new DropWizardMetricMaker.RestModule());
     modules.add(new LogFileCompressor.Module());
 
@@ -420,10 +397,7 @@ public class Daemon extends SiteProgram {
     modules.add(new WorkQueue.Module());
     modules.add(new StreamEventsApiListener.Module());
     modules.add(new EventBroker.Module());
-    modules.add(
-        inMemoryTest
-            ? new InMemoryAccountPatchReviewStore.Module()
-            : new JdbcAccountPatchReviewStore.Module(config));
+    modules.add(new JdbcAccountPatchReviewStore.Module(config));
     modules.add(new SysExecutorModule());
     modules.add(new DiffExecutorModule());
     modules.add(new MimeUtil2Module());
@@ -449,9 +423,7 @@ public class Daemon extends SiteProgram {
     }
     modules.add(new SignedTokenEmailTokenVerifier.Module());
     modules.add(new PluginModule());
-    if (VersionManager.getOnlineUpgrade(config)
-        // Schema upgrade is handled by OnlineNoteDbMigrator in this case.
-        && !migrateToNoteDb()) {
+    if (VersionManager.getOnlineUpgrade(config)) {
       modules.add(new OnlineUpgrader.Module());
     }
     modules.add(new RestApiModule());
@@ -485,8 +457,7 @@ public class Daemon extends SiteProgram {
         new AbstractModule() {
           @Override
           protected void configure() {
-            bind(GerritOptions.class)
-                .toInstance(new GerritOptions(config, headless, slave, polyGerritDev));
+            bind(GerritOptions.class).toInstance(new GerritOptions(headless, slave, polyGerritDev));
             if (inMemoryTest) {
               bind(String.class)
                   .annotatedWith(SecureStoreClassName.class)
@@ -502,18 +473,12 @@ public class Daemon extends SiteProgram {
       modules.add(new AccountDeactivator.Module());
       modules.add(new ChangeCleanupRunner.Module());
     }
-    if (migrateToNoteDb()) {
-      modules.add(new OnlineNoteDbMigrator.Module(trial));
-    }
     modules.addAll(testSysModules);
     modules.add(new LocalMergeSuperSetComputation.Module());
     modules.add(new DefaultProjectNameLockManager.Module());
     return cfgInjector.createChildInjector(
-        ModuleOverloader.override(modules, LibModuleLoader.loadModules(cfgInjector)));
-  }
-
-  private boolean migrateToNoteDb() {
-    return migrateToNoteDb || NoteDbMigrator.getAutoMigrate(requireNonNull(config));
+        ModuleOverloader.override(
+            modules, LibModuleLoader.loadModules(cfgInjector, LibModuleType.SYS_MODULE)));
   }
 
   private Module createIndexModule() {

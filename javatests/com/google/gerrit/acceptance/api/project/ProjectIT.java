@@ -31,8 +31,12 @@ import com.google.gerrit.acceptance.GerritConfig;
 import com.google.gerrit.acceptance.GitUtil;
 import com.google.gerrit.acceptance.NoHttpd;
 import com.google.gerrit.acceptance.PushOneCommit;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperations;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
+import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.projects.BranchInput;
+import com.google.gerrit.extensions.api.projects.CommentLinkInfo;
 import com.google.gerrit.extensions.api.projects.ConfigInfo;
 import com.google.gerrit.extensions.api.projects.ConfigInput;
 import com.google.gerrit.extensions.api.projects.DescriptionInput;
@@ -51,7 +55,10 @@ import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.group.SystemGroupBackend;
 import com.google.gerrit.server.index.IndexExecutor;
+import com.google.gerrit.server.project.CommentLinkInfoImpl;
 import com.google.inject.Inject;
+import java.util.HashMap;
+import java.util.Map;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.transport.PushResult;
 import org.eclipse.jgit.transport.RemoteRefUpdate.Status;
@@ -61,7 +68,16 @@ import org.junit.Test;
 
 @NoHttpd
 public class ProjectIT extends AbstractDaemonTest {
+  private static final String BUGZILLA = "bugzilla";
+  private static final String BUGZILLA_LINK = "http://bugzilla.example.com/?id=$2";
+  private static final String BUGZILLA_MATCH = "(bug\\\\s+#?)(\\\\d+)";
+  private static final String JIRA = "jira";
+  private static final String JIRA_LINK = "http://jira.example.com/?id=$2";
+  private static final String JIRA_MATCH = "(jira\\\\s+#?)(\\\\d+)";
+
   @Inject private DynamicSet<ProjectIndexedListener> projectIndexedListeners;
+  @Inject private ProjectOperations projectOperations;
+  @Inject private RequestScopeOperations requestScopeOperations;
 
   @Inject
   @IndexExecutor(BATCH)
@@ -206,14 +222,14 @@ public class ProjectIT extends AbstractDaemonTest {
 
   @Test
   public void createAndDeleteBranch() throws Exception {
-    assertThat(getRemoteHead(project.get(), "foo")).isNull();
+    assertThat(hasHead(project, "foo")).isFalse();
 
     gApi.projects().name(project.get()).branch("foo").create(new BranchInput());
     assertThat(getRemoteHead(project.get(), "foo")).isNotNull();
     projectIndexedCounter.assertNoReindex();
 
     gApi.projects().name(project.get()).branch("foo").delete();
-    assertThat(getRemoteHead(project.get(), "foo")).isNull();
+    assertThat(hasHead(project, "foo")).isFalse();
     projectIndexedCounter.assertNoReindex();
   }
 
@@ -222,7 +238,7 @@ public class ProjectIT extends AbstractDaemonTest {
     grant(project, "refs/*", Permission.PUSH, true);
     projectIndexedCounter.clear();
 
-    assertThat(getRemoteHead(project.get(), "foo")).isNull();
+    assertThat(hasHead(project, "foo")).isFalse();
 
     PushOneCommit.Result r = pushTo("refs/heads/foo");
     r.assertOkStatus();
@@ -231,7 +247,7 @@ public class ProjectIT extends AbstractDaemonTest {
 
     PushResult r2 = GitUtil.pushOne(testRepo, null, "refs/heads/foo", false, true, null);
     assertThat(r2.getRemoteUpdate("refs/heads/foo").getStatus()).isEqualTo(Status.OK);
-    assertThat(getRemoteHead(project.get(), "foo")).isNull();
+    assertThat(hasHead(project, "foo")).isFalse();
     projectIndexedCounter.assertNoReindex();
   }
 
@@ -337,7 +353,7 @@ public class ProjectIT extends AbstractDaemonTest {
   @Test
   public void nonOwnerCannotSetConfig() throws Exception {
     ConfigInput input = createTestConfigInput();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(AuthException.class);
     exception.expectMessage("write refs/meta/config not permitted");
     gApi.projects().name(project.get()).config(input);
@@ -372,7 +388,7 @@ public class ProjectIT extends AbstractDaemonTest {
   @Test
   public void setHeadNotAllowed() throws Exception {
     gApi.projects().name(project.get()).branch("test").create(new BranchInput());
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(AuthException.class);
     exception.expectMessage("not permitted: set HEAD on refs/heads/test");
     gApi.projects().name(project.get()).head("test");
@@ -418,7 +434,7 @@ public class ProjectIT extends AbstractDaemonTest {
 
   @Test
   public void reindexProject() throws Exception {
-    createProject("child", project);
+    projectOperations.newProject().parent(project).create();
     projectIndexedCounter.clear();
 
     gApi.projects().name(allProjects.get()).index(false);
@@ -427,8 +443,8 @@ public class ProjectIT extends AbstractDaemonTest {
 
   @Test
   public void reindexProjectWithChildren() throws Exception {
-    Project.NameKey middle = createProject("middle", project);
-    Project.NameKey leave = createProject("leave", middle);
+    Project.NameKey middle = projectOperations.newProject().parent(project).create();
+    Project.NameKey leave = projectOperations.newProject().parent(middle).create();
     projectIndexedCounter.clear();
 
     gApi.projects().name(project.get()).index(true);
@@ -462,7 +478,7 @@ public class ProjectIT extends AbstractDaemonTest {
   @Test
   @GerritConfig(name = "receive.inheritProjectMaxObjectSizeLimit", value = "true")
   public void maxObjectSizeIsInheritedFromParentProject() throws Exception {
-    Project.NameKey child = createProject(name("child"), project);
+    Project.NameKey child = projectOperations.newProject().parent(project).create();
 
     ConfigInfo info = setMaxObjectSize("100k");
     assertThat(info.maxObjectSizeLimit.value).isEqualTo("102400");
@@ -478,7 +494,7 @@ public class ProjectIT extends AbstractDaemonTest {
 
   @Test
   public void maxObjectSizeIsNotInheritedFromParentProject() throws Exception {
-    Project.NameKey child = createProject(name("child"), project);
+    Project.NameKey child = projectOperations.newProject().parent(project).create();
 
     ConfigInfo info = setMaxObjectSize("100k");
     assertThat(info.maxObjectSizeLimit.value).isEqualTo("102400");
@@ -493,7 +509,7 @@ public class ProjectIT extends AbstractDaemonTest {
 
   @Test
   public void maxObjectSizeOverridesParentProjectWhenNotSetOnParent() throws Exception {
-    Project.NameKey child = createProject(name("child"), project);
+    Project.NameKey child = projectOperations.newProject().parent(project).create();
 
     ConfigInfo info = setMaxObjectSize("0");
     assertThat(info.maxObjectSizeLimit.value).isNull();
@@ -508,7 +524,7 @@ public class ProjectIT extends AbstractDaemonTest {
 
   @Test
   public void maxObjectSizeOverridesParentProjectWhenLower() throws Exception {
-    Project.NameKey child = createProject(name("child"), project);
+    Project.NameKey child = projectOperations.newProject().parent(project).create();
 
     ConfigInfo info = setMaxObjectSize("200k");
     assertThat(info.maxObjectSizeLimit.value).isEqualTo("204800");
@@ -524,7 +540,7 @@ public class ProjectIT extends AbstractDaemonTest {
   @Test
   @GerritConfig(name = "receive.inheritProjectMaxObjectSizeLimit", value = "true")
   public void maxObjectSizeDoesNotOverrideParentProjectWhenHigher() throws Exception {
-    Project.NameKey child = createProject(name("child"), project);
+    Project.NameKey child = projectOperations.newProject().parent(project).create();
 
     ConfigInfo info = setMaxObjectSize("100k");
     assertThat(info.maxObjectSizeLimit.value).isEqualTo("102400");
@@ -541,7 +557,7 @@ public class ProjectIT extends AbstractDaemonTest {
   @Test
   @GerritConfig(name = "receive.maxObjectSizeLimit", value = "200k")
   public void maxObjectSizeIsInheritedFromGlobalConfig() throws Exception {
-    Project.NameKey child = createProject(name("child"), project);
+    Project.NameKey child = projectOperations.newProject().parent(project).create();
 
     ConfigInfo info = getConfig();
     assertThat(info.maxObjectSizeLimit.value).isEqualTo("204800");
@@ -566,7 +582,7 @@ public class ProjectIT extends AbstractDaemonTest {
   @Test
   @GerritConfig(name = "receive.maxObjectSizeLimit", value = "300k")
   public void inheritedMaxObjectSizeOverridesGlobalConfigWhenLower() throws Exception {
-    Project.NameKey child = createProject(name("child"), project);
+    Project.NameKey child = projectOperations.newProject().parent(project).create();
 
     ConfigInfo info = setMaxObjectSize("200k");
     assertThat(info.maxObjectSizeLimit.value).isEqualTo("204800");
@@ -583,7 +599,7 @@ public class ProjectIT extends AbstractDaemonTest {
   @GerritConfig(name = "receive.maxObjectSizeLimit", value = "200k")
   @GerritConfig(name = "receive.inheritProjectMaxObjectSizeLimit", value = "true")
   public void maxObjectSizeDoesNotOverrideGlobalConfigWhenHigher() throws Exception {
-    Project.NameKey child = createProject(name("child"), project);
+    Project.NameKey child = projectOperations.newProject().parent(project).create();
 
     ConfigInfo info = setMaxObjectSize("300k");
     assertThat(info.maxObjectSizeLimit.value).isEqualTo("204800");
@@ -601,6 +617,31 @@ public class ProjectIT extends AbstractDaemonTest {
     exception.expect(ResourceConflictException.class);
     exception.expectMessage("100 foo");
     setMaxObjectSize("100 foo");
+  }
+
+  @Test
+  public void noCommentlinksByDefault() throws Exception {
+    assertThat(getConfig().commentlinks).isEmpty();
+  }
+
+  @Test
+  @GerritConfig(name = "commentlink.bugzilla.match", value = BUGZILLA_MATCH)
+  @GerritConfig(name = "commentlink.bugzilla.link", value = BUGZILLA_LINK)
+  @GerritConfig(name = "commentlink.jira.match", value = JIRA_MATCH)
+  @GerritConfig(name = "commentlink.jira.link", value = JIRA_LINK)
+  public void projectConfigUsesCommentlinksFromGlobalConfig() throws Exception {
+    Map<String, CommentLinkInfo> expected = new HashMap<>();
+    expected.put(BUGZILLA, commentLinkInfo(BUGZILLA, BUGZILLA_MATCH, BUGZILLA_LINK));
+    expected.put(JIRA, commentLinkInfo(JIRA, JIRA_MATCH, JIRA_LINK));
+    assertCommentLinks(getConfig(), expected);
+  }
+
+  private CommentLinkInfo commentLinkInfo(String name, String match, String link) {
+    return new CommentLinkInfoImpl(name, match, link, null /*html*/, null /*enabled*/);
+  }
+
+  private void assertCommentLinks(ConfigInfo actual, Map<String, CommentLinkInfo> expected) {
+    assertThat(actual.commentlinks).containsExactlyEntriesIn(expected);
   }
 
   private ConfigInfo setConfig(Project.NameKey name, ConfigInput input) throws Exception {
@@ -676,5 +717,14 @@ public class ProjectIT extends AbstractDaemonTest {
       assertThat(countsByProject.asMap()).containsExactlyEntriesIn(expected);
       clear();
     }
+  }
+
+  @Nullable
+  protected RevCommit getRemoteHead(String project, String branch) throws Exception {
+    return getRemoteHead(new Project.NameKey(project), branch);
+  }
+
+  boolean hasHead(Project.NameKey k, String b) {
+    return projectOperations.project(k).hasHead(b);
   }
 }

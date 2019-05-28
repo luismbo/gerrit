@@ -17,6 +17,7 @@ package com.google.gerrit.server.git.validators;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.flogger.FluentLogger;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.api.projects.ProjectConfigEntryType;
 import com.google.gerrit.extensions.registration.DynamicMap;
 import com.google.gerrit.extensions.registration.Extension;
@@ -26,7 +27,6 @@ import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.account.AccountProperties;
 import com.google.gerrit.server.config.AllProjectsName;
@@ -44,9 +44,7 @@ import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.project.ProjectConfig;
 import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.query.change.ChangeData;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import java.io.IOException;
 import java.util.List;
 import org.eclipse.jgit.errors.ConfigInvalidException;
@@ -127,6 +125,7 @@ public class MergeValidators {
     private final ProjectCache projectCache;
     private final PermissionBackend permissionBackend;
     private final DynamicMap<ProjectConfigEntry> pluginConfigEntries;
+    private final ProjectConfig.Factory projectConfigFactory;
     private final boolean allowProjectOwnersToChangeParent;
 
     public interface Factory {
@@ -140,12 +139,14 @@ public class MergeValidators {
         ProjectCache projectCache,
         PermissionBackend permissionBackend,
         DynamicMap<ProjectConfigEntry> pluginConfigEntries,
+        ProjectConfig.Factory projectConfigFactory,
         @GerritServerConfig Config config) {
       this.allProjectsName = allProjectsName;
       this.allUsersName = allUsersName;
       this.projectCache = projectCache;
       this.permissionBackend = permissionBackend;
       this.pluginConfigEntries = pluginConfigEntries;
+      this.projectConfigFactory = projectConfigFactory;
       this.allowProjectOwnersToChangeParent =
           config.getBoolean("receive", "allowProjectOwnersToChangeParent", false);
     }
@@ -162,7 +163,7 @@ public class MergeValidators {
       if (RefNames.REFS_CONFIG.equals(destBranch.get())) {
         final Project.NameKey newParent;
         try {
-          ProjectConfig cfg = new ProjectConfig(destProject.getNameKey());
+          ProjectConfig cfg = projectConfigFactory.create(destProject.getNameKey());
           cfg.load(destProject.getNameKey(), repo, commit);
           newParent = cfg.getProject().getParent(allProjectsName);
           final Project.NameKey oldParent = destProject.getProject().getParent(allProjectsName);
@@ -265,18 +266,15 @@ public class MergeValidators {
       AccountMergeValidator create();
     }
 
-    private final Provider<ReviewDb> dbProvider;
     private final AllUsersName allUsersName;
     private final ChangeData.Factory changeDataFactory;
     private final AccountValidator accountValidator;
 
     @Inject
     public AccountMergeValidator(
-        Provider<ReviewDb> dbProvider,
         AllUsersName allUsersName,
         ChangeData.Factory changeDataFactory,
         AccountValidator accountValidator) {
-      this.dbProvider = dbProvider;
       this.allUsersName = allUsersName;
       this.changeDataFactory = changeDataFactory;
       this.accountValidator = accountValidator;
@@ -298,12 +296,12 @@ public class MergeValidators {
 
       ChangeData cd =
           changeDataFactory.create(
-              dbProvider.get(), destProject.getProject().getNameKey(), patchSetId.getParentKey());
+              destProject.getProject().getNameKey(), patchSetId.getParentKey());
       try {
         if (!cd.currentFilePaths().contains(AccountProperties.ACCOUNT_CONFIG)) {
           return;
         }
-      } catch (IOException | OrmException e) {
+      } catch (StorageException e) {
         logger.atSevere().withCause(e).log("Cannot validate account update");
         throw new MergeValidationException("account validation unavailable");
       }

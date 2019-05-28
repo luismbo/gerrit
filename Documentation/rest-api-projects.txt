@@ -1356,25 +1356,6 @@ access to at least branch is checked.
 Ref(ref)::
 The branch for which to check access. This must be given if `perm` is specified.
 
-[[check-access-post]]
-=== Check Access (POST)
-
-This endpoint can also be accessed as a POST request (deprecated). In
-this case, the input for the access checks must be provided in the
-request body inside a link:#access-check-input[AccessCheckInput]
-entity.
-
-.Request
-----
-  POST /projects/MyProject/check.access HTTP/1.0
-  Content-Type: application/json; charset=UTF-8
-
-  {
-    "account": "Kristen.Burns@gerritcodereview.com",
-    "ref": "refs/heads/secret/bla"
-  }
-----
-
 [[index]]
 === Index project
 
@@ -2934,21 +2915,6 @@ The `AccessCheckInfo` entity is the result of an access check.
 |`message`                   |optional|A clarifying message if `status` is not 200.
 |=========================================
 
-[[access-check-input]]
-=== AccessCheckInput
-The `AccessCheckInput` entity is either an account or
-(account, ref) tuple for which we want to check access.
-
-[options="header",cols="1,^1,5"]
-|=========================================
-|Field Name                  ||Description
-|`account`                   ||The account for which to check access
-|`ref`                       |optional|The refname for which to check
-access
-|`permission`                |optional|The ref permission for which to
-check. This defaults to `read`. If given, it `ref` must be given too.
-|=========================================
-
 [[auto_closeable_changes_check_input]]
 === AutoCloseableChangesCheckInput
 The `AutoCloseableChangesCheckInput` entity contains options for running
@@ -3169,9 +3135,6 @@ Not set if the project state is `ACTIVE`.
 Map with the comment link configurations of the project. The name of
 the comment link configuration is mapped to a link:#commentlink-info[
 CommentlinkInfo] entity.
-|`theme`                                   |optional|
-The theme that is configured for the project as a link:#theme-info[
-ThemeInfo] entity.
 |`plugin_config`                           |optional|
 Plugin configuration as map which maps the plugin name to a map of
 parameter names to link:#config-parameter-info[ConfigParameterInfo]
@@ -3660,7 +3623,7 @@ statistics of a Git repository.
 
 [[submit-type-info]]
 === SubmitTypeInfo
-Information about the link:project-configuration.html#submit_type[default submit
+Information about the link:config-project-config.html#submit-type[default submit
 type of a project], taking into account project inheritance.
 
 Valid values for each field are `MERGE_IF_NECESSARY`, `FAST_FORWARD_ONLY`,
@@ -3722,21 +3685,6 @@ specified, the project's `HEAD` will be used.
 as an annotated tag.
 |=========================
 
-
-[[theme-info]]
-=== ThemeInfo
-The `ThemeInfo` entity describes a theme.
-
-[options="header",cols="1,^2,4"]
-|=============================
-|Field Name      ||Description
-|`css`           |optional|
-The path to the `GerritSite.css` file.
-|`header`        |optional|
-The path to the `GerritSiteHeader.html` file.
-|`footer`        |optional|
-The path to the `GerritSiteFooter.html` file.
-|=============================
 
 GERRIT
 ------

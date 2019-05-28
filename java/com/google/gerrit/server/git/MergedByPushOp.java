@@ -35,12 +35,10 @@ import com.google.gerrit.server.update.BatchUpdateOp;
 import com.google.gerrit.server.update.ChangeContext;
 import com.google.gerrit.server.update.Context;
 import com.google.gerrit.server.util.RequestScopePropagator;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
 import java.io.IOException;
-import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import org.eclipse.jgit.lib.Constants;
@@ -106,7 +104,7 @@ public class MergedByPushOp implements BatchUpdateOp {
   }
 
   @Override
-  public boolean updateChange(ChangeContext ctx) throws OrmException, IOException {
+  public boolean updateChange(ChangeContext ctx) throws IOException {
     change = ctx.getChange();
     correctBranch = refName.equals(change.getDest().get());
     if (!correctBranch) {
@@ -120,14 +118,13 @@ public class MergedByPushOp implements BatchUpdateOp {
     } else {
       patchSet =
           requireNonNull(
-              psUtil.get(ctx.getDb(), ctx.getNotes(), psId),
+              psUtil.get(ctx.getNotes(), psId),
               () -> String.format("patch set %s not found", psId));
     }
     info = getPatchSetInfo(ctx);
 
     ChangeUpdate update = ctx.getUpdate(psId);
-    Change.Status status = change.getStatus();
-    if (status == Change.Status.MERGED) {
+    if (change.isMerged()) {
       return true;
     }
     change.setCurrentPatchSet(info);
@@ -151,13 +148,12 @@ public class MergedByPushOp implements BatchUpdateOp {
     ChangeMessage msg =
         ChangeMessagesUtil.newMessage(
             psId, ctx.getUser(), ctx.getWhen(), msgBuf.toString(), ChangeMessagesUtil.TAG_MERGED);
-    cmUtil.addChangeMessage(ctx.getDb(), update, msg);
+    cmUtil.addChangeMessage(update, msg);
 
     PatchSetApproval submitter =
         ApprovalsUtil.newApproval(
             change.currentPatchSetId(), ctx.getUser(), LabelId.legacySubmit(), 1, ctx.getWhen());
     update.putApproval(submitter.getLabel(), submitter.getValue());
-    ctx.getDb().patchSetApprovals().upsert(Collections.singleton(submitter));
 
     return true;
   }
@@ -196,7 +192,7 @@ public class MergedByPushOp implements BatchUpdateOp {
         change, patchSet, ctx.getAccount(), patchSet.getRevision().get(), ctx.getWhen());
   }
 
-  private PatchSetInfo getPatchSetInfo(ChangeContext ctx) throws IOException, OrmException {
+  private PatchSetInfo getPatchSetInfo(ChangeContext ctx) throws IOException {
     RevWalk rw = ctx.getRevWalk();
     RevCommit commit =
         rw.parseCommit(ObjectId.fromString(requireNonNull(patchSet).getRevision().get()));

@@ -14,7 +14,8 @@
 
 package com.google.gerrit.server.restapi.project;
 
-import com.google.common.flogger.FluentLogger;
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
 import com.google.gerrit.extensions.registration.DynamicMap;
 import com.google.gerrit.extensions.restapi.ChildCollection;
 import com.google.gerrit.extensions.restapi.IdString;
@@ -22,6 +23,7 @@ import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.RestView;
 import com.google.gerrit.reviewdb.client.Project;
+import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.index.change.ChangeIndexCollection;
 import com.google.gerrit.server.project.CommitResource;
@@ -30,7 +32,6 @@ import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.project.Reachable;
 import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gerrit.server.query.change.InternalChangeQuery;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -39,14 +40,13 @@ import java.util.List;
 import org.eclipse.jgit.errors.IncorrectObjectTypeException;
 import org.eclipse.jgit.errors.MissingObjectException;
 import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 
 @Singleton
 public class CommitsCollection implements ChildCollection<ProjectResource, CommitResource> {
-  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
-
   private final DynamicMap<RestView<CommitResource>> views;
   private final GitRepositoryManager repoManager;
   private final ChangeIndexCollection indexes;
@@ -105,23 +105,27 @@ public class CommitsCollection implements ChildCollection<ProjectResource, Commi
   }
 
   /** @return true if {@code commit} is visible to the caller. */
-  public boolean canRead(ProjectState state, Repository repo, RevCommit commit) {
+  public boolean canRead(ProjectState state, Repository repo, RevCommit commit) throws IOException {
     Project.NameKey project = state.getNameKey();
-
-    // Look for changes associated with the commit.
-    if (indexes.getSearchIndex() != null) {
-      try {
-        List<ChangeData> changes =
-            queryProvider.get().enforceVisibility(true).byProjectCommit(project, commit);
-        if (!changes.isEmpty()) {
-          return true;
-        }
-      } catch (OrmException e) {
-        logger.atSevere().withCause(e).log(
-            "Cannot look up change for commit %s in %s", commit.name(), project);
-      }
+    if (indexes.getSearchIndex() == null) {
+      // No index in slaves, fall back to scanning refs.
+      return reachable.fromRefs(project, repo, commit, repo.getRefDatabase().getRefs());
     }
 
-    return reachable.fromRefs(project, repo, commit, repo.getAllRefs());
+    // Check first if any change references the commit in question. This is much cheaper than ref
+    // visibility filtering and reachability computation.
+    List<ChangeData> changes =
+        queryProvider.get().enforceVisibility(true).setLimit(1).byProjectCommit(project, commit);
+    if (!changes.isEmpty()) {
+      return true;
+    }
+
+    // If we have already checked change refs using the change index, spare any further checks for
+    // changes.
+    List<Ref> refs =
+        repo.getRefDatabase().getRefs().stream()
+            .filter(r -> !r.getName().startsWith(RefNames.REFS_CHANGES))
+            .collect(toImmutableList());
+    return reachable.fromRefs(project, repo, commit, refs);
   }
 }

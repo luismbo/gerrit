@@ -204,6 +204,7 @@
 
   Polymer({
     is: 'gr-router',
+    _legacyUndefinedCheck: true,
 
     properties: {
       _app: {
@@ -392,6 +393,9 @@
         suffix += '?' + params.querystring;
       } else if (params.edit) {
         suffix += ',edit';
+      }
+      if (params.messageHash) {
+        suffix += params.messageHash;
       }
       if (params.project) {
         const encodedProject = this.encodeURL(params.project, true);
@@ -633,7 +637,7 @@
           return Promise.resolve();
         } else {
           this._redirectToLogin(data.canonicalPath);
-          return Promise.reject();
+          return Promise.reject(new Error());
         }
       });
     },

@@ -29,7 +29,6 @@ import static javax.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Strings;
-import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
@@ -42,7 +41,6 @@ import com.google.gerrit.common.data.LabelTypes;
 import com.google.gerrit.extensions.api.changes.AddReviewerInput;
 import com.google.gerrit.extensions.api.changes.AddReviewerResult;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
-import com.google.gerrit.extensions.api.changes.RecipientType;
 import com.google.gerrit.extensions.api.changes.ReviewInput;
 import com.google.gerrit.extensions.api.changes.ReviewInput.CommentInput;
 import com.google.gerrit.extensions.api.changes.ReviewInput.DraftHandling;
@@ -58,12 +56,12 @@ import com.google.gerrit.extensions.common.FixReplacementInfo;
 import com.google.gerrit.extensions.common.FixSuggestionInfo;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
-import com.google.gerrit.extensions.restapi.MethodNotAllowedException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.Response;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.extensions.restapi.Url;
+import com.google.gerrit.json.OutputFormat;
 import com.google.gerrit.mail.Address;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
@@ -77,14 +75,12 @@ import com.google.gerrit.reviewdb.client.PatchLineComment.Status;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
 import com.google.gerrit.reviewdb.client.RobotComment;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.ChangeMessagesUtil;
 import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.CommentsUtil;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
-import com.google.gerrit.server.OutputFormat;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.PublishCommentUtil;
 import com.google.gerrit.server.ReviewerSet;
@@ -92,7 +88,7 @@ import com.google.gerrit.server.account.AccountResolver;
 import com.google.gerrit.server.change.AddReviewersEmail;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.change.EmailReviewComments;
-import com.google.gerrit.server.change.NotifyUtil;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.change.ReviewerAdder;
 import com.google.gerrit.server.change.ReviewerAdder.ReviewerAddition;
 import com.google.gerrit.server.change.RevisionResource;
@@ -101,7 +97,6 @@ import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.extensions.events.CommentAdded;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.notedb.ChangeUpdate;
-import com.google.gerrit.server.notedb.NotesMigration;
 import com.google.gerrit.server.patch.DiffSummary;
 import com.google.gerrit.server.patch.DiffSummaryKey;
 import com.google.gerrit.server.patch.PatchListCache;
@@ -124,9 +119,7 @@ import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.LabelVote;
 import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gson.Gson;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.Singleton;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -160,7 +153,6 @@ public class PostReview
   private static final Gson GSON = OutputFormat.JSON_COMPACT.newGson();
   private static final int DEFAULT_ROBOT_COMMENT_SIZE_LIMIT_IN_BYTES = 1024 * 1024;
 
-  private final Provider<ReviewDb> db;
   private final ChangeResource.Factory changeResourceFactory;
   private final ChangeData.Factory changeDataFactory;
   private final ApprovalsUtil approvalsUtil;
@@ -174,8 +166,7 @@ public class PostReview
   private final CommentAdded commentAdded;
   private final ReviewerAdder reviewerAdder;
   private final AddReviewersEmail addReviewersEmail;
-  private final NotesMigration migration;
-  private final NotifyUtil notifyUtil;
+  private final NotifyResolver notifyResolver;
   private final Config gerritConfig;
   private final WorkInProgressOp.Factory workInProgressOpFactory;
   private final ProjectCache projectCache;
@@ -184,7 +175,6 @@ public class PostReview
 
   @Inject
   PostReview(
-      Provider<ReviewDb> db,
       RetryHelper retryHelper,
       ChangeResource.Factory changeResourceFactory,
       ChangeData.Factory changeDataFactory,
@@ -199,14 +189,12 @@ public class PostReview
       CommentAdded commentAdded,
       ReviewerAdder reviewerAdder,
       AddReviewersEmail addReviewersEmail,
-      NotesMigration migration,
-      NotifyUtil notifyUtil,
+      NotifyResolver notifyResolver,
       @GerritServerConfig Config gerritConfig,
       WorkInProgressOp.Factory workInProgressOpFactory,
       ProjectCache projectCache,
       PermissionBackend permissionBackend) {
     super(retryHelper);
-    this.db = db;
     this.changeResourceFactory = changeResourceFactory;
     this.changeDataFactory = changeDataFactory;
     this.commentsUtil = commentsUtil;
@@ -220,8 +208,7 @@ public class PostReview
     this.commentAdded = commentAdded;
     this.reviewerAdder = reviewerAdder;
     this.addReviewersEmail = addReviewersEmail;
-    this.migration = migration;
-    this.notifyUtil = notifyUtil;
+    this.notifyResolver = notifyResolver;
     this.gerritConfig = gerritConfig;
     this.workInProgressOpFactory = workInProgressOpFactory;
     this.projectCache = projectCache;
@@ -232,15 +219,15 @@ public class PostReview
   @Override
   protected Response<ReviewResult> applyImpl(
       BatchUpdate.Factory updateFactory, RevisionResource revision, ReviewInput input)
-      throws RestApiException, UpdateException, OrmException, IOException,
-          PermissionBackendException, ConfigInvalidException, PatchListNotAvailableException {
+      throws RestApiException, UpdateException, IOException, PermissionBackendException,
+          ConfigInvalidException, PatchListNotAvailableException {
     return apply(updateFactory, revision, input, TimeUtil.nowTs());
   }
 
   public Response<ReviewResult> apply(
       BatchUpdate.Factory updateFactory, RevisionResource revision, ReviewInput input, Timestamp ts)
-      throws RestApiException, UpdateException, OrmException, IOException,
-          PermissionBackendException, ConfigInvalidException, PatchListNotAvailableException {
+      throws RestApiException, UpdateException, IOException, PermissionBackendException,
+          ConfigInvalidException, PatchListNotAvailableException {
     // Respect timestamp, but truncate at change created-on time.
     ts = Ordering.natural().max(ts, revision.getChange().getCreatedOn());
     if (revision.getEdit().isPresent()) {
@@ -260,19 +247,12 @@ public class PostReview
       checkComments(revision, input.comments);
     }
     if (input.robotComments != null) {
-      if (!migration.readChanges()) {
-        throw new MethodNotAllowedException("robot comments not supported");
-      }
       checkRobotComments(revision, input.robotComments);
     }
 
-    NotifyHandling reviewerNotify = input.notify;
     if (input.notify == null) {
       input.notify = defaultNotify(revision.getChange(), input);
     }
-
-    ListMultimap<RecipientType, Account.Id> accountsToNotify =
-        notifyUtil.resolveAccounts(input.notifyDetails);
 
     Map<String, AddReviewerResult> reviewerJsonResults = null;
     List<ReviewerAddition> reviewerResults = Lists.newArrayList();
@@ -281,15 +261,8 @@ public class PostReview
     if (input.reviewers != null) {
       reviewerJsonResults = Maps.newHashMap();
       for (AddReviewerInput reviewerInput : input.reviewers) {
-        // Prevent individual AddReviewersOps from sending one email each. Instead, we call
-        // batchEmailReviewers at the very end to send out a single email.
-        // TODO(dborowitz): I think this still sends out separate emails if any of input.reviewers
-        // specifies explicit accountsToNotify. Unclear whether that's a good thing.
-        reviewerInput.notify = NotifyHandling.NONE;
-
         ReviewerAddition result =
-            reviewerAdder.prepare(
-                db.get(), revision.getNotes(), revision.getUser(), reviewerInput, true);
+            reviewerAdder.prepare(revision.getNotes(), revision.getUser(), reviewerInput, true);
         reviewerJsonResults.put(reviewerInput.reviewer, result.result);
         if (result.result.error != null) {
           hasError = true;
@@ -312,7 +285,7 @@ public class PostReview
     output.labels = input.labels;
 
     try (BatchUpdate bu =
-        updateFactory.create(db.get(), revision.getChange().getProject(), revision.getUser(), ts)) {
+        updateFactory.create(revision.getChange().getProject(), revision.getUser(), ts)) {
       Account.Id id = revision.getUser().getAccountId();
       boolean ccOrReviewer = false;
       if (input.labels != null && !input.labels.isEmpty()) {
@@ -322,7 +295,7 @@ public class PostReview
       if (!ccOrReviewer) {
         // Check if user was already CCed or reviewing prior to this review.
         ReviewerSet currentReviewers =
-            approvalsUtil.getReviewers(db.get(), revision.getChangeResource().getNotes());
+            approvalsUtil.getReviewers(revision.getChangeResource().getNotes());
         ccOrReviewer = currentReviewers.all().contains(id);
       }
 
@@ -330,6 +303,7 @@ public class PostReview
       // updated set of reviewers. Also keep track of whether the user added
       // themselves as a reviewer or to the CC list.
       for (ReviewerAddition reviewerResult : reviewerResults) {
+        reviewerResult.op.suppressEmail(); // Send a single batch email below.
         bu.addOp(revision.getChange().getId(), reviewerResult.op);
         if (!ccOrReviewer && reviewerResult.result.reviewers != null) {
           for (ReviewerInfo reviewerInfo : reviewerResult.result.reviewers) {
@@ -354,6 +328,7 @@ public class PostReview
         // isn't being explicitly added, and isn't voting on any label.
         // Automatically CC them on this change so they receive replies.
         ReviewerAddition selfAddition = reviewerAdder.ccCurrentUser(revision.getUser(), revision);
+        selfAddition.op.suppressEmail();
         bu.addOp(revision.getChange().getId(), selfAddition.op);
       }
 
@@ -364,49 +339,55 @@ public class PostReview
           return Response.withStatusCode(SC_BAD_REQUEST, output);
         }
 
-        WorkInProgressOp.checkPermissions(
-            permissionBackend, revision.getUser(), revision.getChange());
+        revision
+            .getChangeResource()
+            .permissions()
+            .check(ChangePermission.TOGGLE_WORK_IN_PROGRESS_STATE);
 
         if (input.ready) {
           output.ready = true;
         }
 
-        // Suppress notifications in WorkInProgressOp, we'll take care of
-        // them in this endpoint.
-        WorkInProgressOp.Input wipIn = new WorkInProgressOp.Input();
-        wipIn.notify = NotifyHandling.NONE;
-        bu.addOp(
-            revision.getChange().getId(),
-            workInProgressOpFactory.create(input.workInProgress, wipIn));
+        WorkInProgressOp wipOp =
+            workInProgressOpFactory.create(input.workInProgress, new WorkInProgressOp.Input());
+        wipOp.suppressEmail();
+        bu.addOp(revision.getChange().getId(), wipOp);
       }
 
       // Add the review op.
       bu.addOp(
           revision.getChange().getId(),
-          new Op(projectState, revision.getPatchSet().getId(), input, accountsToNotify));
+          new Op(projectState, revision.getPatchSet().getId(), input));
+
+      // Notify based on ReviewInput, ignoring the notify settings from any AddReviewerInputs.
+      NotifyResolver.Result notify =
+          notifyResolver.resolve(getNotifyHandling(input, output, revision), input.notifyDetails);
+      bu.setNotify(notify);
 
       bu.execute();
 
       // Re-read change to take into account results of the update.
-      ChangeData cd =
-          changeDataFactory.create(db.get(), revision.getProject(), revision.getChange().getId());
+      ChangeData cd = changeDataFactory.create(revision.getProject(), revision.getChange().getId());
       for (ReviewerAddition reviewerResult : reviewerResults) {
         reviewerResult.gatherResults(cd);
       }
 
-      boolean readyForReview =
-          (output.ready != null && output.ready) || !revision.getChange().isWorkInProgress();
       // Sending from AddReviewersOp was suppressed so we can send a single batch email here.
-      batchEmailReviewers(
-          revision.getUser(),
-          revision.getChange(),
-          reviewerResults,
-          reviewerNotify,
-          accountsToNotify,
-          readyForReview);
+      batchEmailReviewers(revision.getUser(), revision.getChange(), reviewerResults, notify);
     }
 
     return Response.ok(output);
+  }
+
+  private NotifyHandling getNotifyHandling(
+      ReviewInput input, ReviewResult output, RevisionResource revision) {
+    if (input.notify != null) {
+      return input.notify;
+    }
+    if ((output.ready != null && output.ready) || !revision.getChange().isWorkInProgress()) {
+      return NotifyHandling.ALL;
+    }
+    return NotifyHandling.NONE;
   }
 
   private NotifyHandling defaultNotify(Change c, ReviewInput in) {
@@ -424,11 +405,12 @@ public class PostReview
     }
 
     if (workInProgress && !c.hasReviewStarted()) {
-      // If review hasn't started we want to minimize recipients, no matter who
-      // the author is.
-      return NotifyHandling.OWNER;
+      // If review hasn't started we want to eliminate notifications, no matter who the author is.
+      return NotifyHandling.NONE;
     }
 
+    // Otherwise, it's either a non-WIP change, or a WIP change where review has started. Notify
+    // everyone.
     return NotifyHandling.ALL;
   }
 
@@ -436,9 +418,7 @@ public class PostReview
       CurrentUser user,
       Change change,
       List<ReviewerAddition> reviewerAdditions,
-      @Nullable NotifyHandling notify,
-      ListMultimap<RecipientType, Account.Id> accountsToNotify,
-      boolean readyForReview) {
+      NotifyResolver.Result notify) {
     List<Account.Id> to = new ArrayList<>();
     List<Account.Id> cc = new ArrayList<>();
     List<Address> toByEmail = new ArrayList<>();
@@ -453,19 +433,11 @@ public class PostReview
       }
     }
     addReviewersEmail.emailReviewers(
-        user.asIdentifiedUser(),
-        change,
-        to,
-        cc,
-        toByEmail,
-        ccByEmail,
-        notify,
-        accountsToNotify,
-        readyForReview);
+        user.asIdentifiedUser(), change, to, cc, toByEmail, ccByEmail, notify);
   }
 
   private RevisionResource onBehalfOf(RevisionResource rev, LabelTypes labelTypes, ReviewInput in)
-      throws BadRequestException, AuthException, UnprocessableEntityException, OrmException,
+      throws BadRequestException, AuthException, UnprocessableEntityException,
           PermissionBackendException, IOException, ConfigInvalidException {
     if (in.labels == null || in.labels.isEmpty()) {
       throw new AuthException(
@@ -476,7 +448,7 @@ public class PostReview
     }
 
     CurrentUser caller = rev.getUser();
-    PermissionBackend.ForChange perm = rev.permissions().database(db);
+    PermissionBackend.ForChange perm = rev.permissions();
     Iterator<Map.Entry<String, Short>> itr = in.labels.entrySet().iterator();
     while (itr.hasNext()) {
       Map.Entry<String, Short> ent = itr.next();
@@ -506,13 +478,9 @@ public class PostReview
           String.format("label required to post review on behalf of \"%s\"", in.onBehalfOf));
     }
 
-    IdentifiedUser reviewer = accountResolver.parseOnBehalfOf(caller, in.onBehalfOf);
+    IdentifiedUser reviewer = accountResolver.resolve(in.onBehalfOf).asUniqueUserOnBehalfOf(caller);
     try {
-      permissionBackend
-          .user(reviewer)
-          .database(db)
-          .change(rev.getNotes())
-          .check(ChangePermission.READ);
+      permissionBackend.user(reviewer).change(rev.getNotes()).check(ChangePermission.READ);
     } catch (AuthException e) {
       throw new UnprocessableEntityException(
           String.format("on_behalf_of account %s cannot see change", reviewer.getAccountId()));
@@ -867,7 +835,6 @@ public class PostReview
     private final ProjectState projectState;
     private final PatchSet.Id psId;
     private final ReviewInput in;
-    private final ListMultimap<RecipientType, Account.Id> accountsToNotify;
 
     private IdentifiedUser user;
     private ChangeNotes notes;
@@ -878,24 +845,19 @@ public class PostReview
     private Map<String, Short> approvals = new HashMap<>();
     private Map<String, Short> oldApprovals = new HashMap<>();
 
-    private Op(
-        ProjectState projectState,
-        PatchSet.Id psId,
-        ReviewInput in,
-        ListMultimap<RecipientType, Account.Id> accountsToNotify) {
+    private Op(ProjectState projectState, PatchSet.Id psId, ReviewInput in) {
       this.projectState = projectState;
       this.psId = psId;
       this.in = in;
-      this.accountsToNotify = requireNonNull(accountsToNotify);
     }
 
     @Override
     public boolean updateChange(ChangeContext ctx)
-        throws OrmException, ResourceConflictException, UnprocessableEntityException, IOException,
+        throws ResourceConflictException, UnprocessableEntityException, IOException,
             PatchListNotAvailableException {
       user = ctx.getIdentifiedUser();
       notes = ctx.getNotes();
-      ps = psUtil.get(ctx.getDb(), ctx.getNotes(), psId);
+      ps = psUtil.get(ctx.getNotes(), psId);
       boolean dirty = false;
       dirty |= insertComments(ctx);
       dirty |= insertRobotComments(ctx);
@@ -905,22 +867,14 @@ public class PostReview
     }
 
     @Override
-    public void postUpdate(Context ctx) throws OrmException {
+    public void postUpdate(Context ctx) {
       if (message == null) {
         return;
       }
-      if (in.notify.compareTo(NotifyHandling.NONE) > 0 || !accountsToNotify.isEmpty()) {
+      NotifyResolver.Result notify = ctx.getNotify(notes.getChangeId());
+      if (notify.shouldNotify()) {
         email
-            .create(
-                in.notify,
-                accountsToNotify,
-                notes,
-                ps,
-                user,
-                message,
-                comments,
-                in.message,
-                labelDelta)
+            .create(notify, notes, ps, user, message, comments, in.message, labelDelta)
             .sendAsync();
       }
       commentAdded.fire(
@@ -934,7 +888,7 @@ public class PostReview
     }
 
     private boolean insertComments(ChangeContext ctx)
-        throws OrmException, UnprocessableEntityException, PatchListNotAvailableException {
+        throws UnprocessableEntityException, PatchListNotAvailableException {
       Map<String, List<CommentInput>> map = in.comments;
       if (map == null) {
         map = Collections.emptyMap();
@@ -989,13 +943,12 @@ public class PostReview
           break;
       }
       ChangeUpdate u = ctx.getUpdate(psId);
-      commentsUtil.putComments(ctx.getDb(), u, Status.PUBLISHED, toPublish);
+      commentsUtil.putComments(u, Status.PUBLISHED, toPublish);
       comments.addAll(toPublish);
       return !toPublish.isEmpty();
     }
 
-    private boolean insertRobotComments(ChangeContext ctx)
-        throws OrmException, PatchListNotAvailableException {
+    private boolean insertRobotComments(ChangeContext ctx) throws PatchListNotAvailableException {
       if (in.robotComments == null) {
         return false;
       }
@@ -1007,7 +960,7 @@ public class PostReview
     }
 
     private List<RobotComment> getNewRobotComments(ChangeContext ctx)
-        throws OrmException, PatchListNotAvailableException {
+        throws PatchListNotAvailableException {
       List<RobotComment> toAdd = new ArrayList<>(in.robotComments.size());
 
       Set<CommentSetEntry> existingIds =
@@ -1076,33 +1029,31 @@ public class PostReview
       return new FixReplacement(fixReplacementInfo.path, range, fixReplacementInfo.replacement);
     }
 
-    private Set<CommentSetEntry> readExistingComments(ChangeContext ctx) throws OrmException {
-      return commentsUtil.publishedByChange(ctx.getDb(), ctx.getNotes()).stream()
+    private Set<CommentSetEntry> readExistingComments(ChangeContext ctx) {
+      return commentsUtil.publishedByChange(ctx.getNotes()).stream()
           .map(CommentSetEntry::create)
           .collect(toSet());
     }
 
-    private Set<CommentSetEntry> readExistingRobotComments(ChangeContext ctx) throws OrmException {
+    private Set<CommentSetEntry> readExistingRobotComments(ChangeContext ctx) {
       return commentsUtil.robotCommentsByChange(ctx.getNotes()).stream()
           .map(CommentSetEntry::create)
           .collect(toSet());
     }
 
-    private Map<String, Comment> changeDrafts(ChangeContext ctx) throws OrmException {
+    private Map<String, Comment> changeDrafts(ChangeContext ctx) {
       Map<String, Comment> drafts = new HashMap<>();
-      for (Comment c :
-          commentsUtil.draftByChangeAuthor(ctx.getDb(), ctx.getNotes(), user.getAccountId())) {
+      for (Comment c : commentsUtil.draftByChangeAuthor(ctx.getNotes(), user.getAccountId())) {
         c.tag = in.tag;
         drafts.put(c.key.uuid, c);
       }
       return drafts;
     }
 
-    private Map<String, Comment> patchSetDrafts(ChangeContext ctx) throws OrmException {
+    private Map<String, Comment> patchSetDrafts(ChangeContext ctx) {
       Map<String, Comment> drafts = new HashMap<>();
       for (Comment c :
-          commentsUtil.draftByPatchSetAuthor(
-              ctx.getDb(), psId, user.getAccountId(), ctx.getNotes())) {
+          commentsUtil.draftByPatchSetAuthor(psId, user.getAccountId(), ctx.getNotes())) {
         drafts.put(c.key.uuid, c);
       }
       return drafts;
@@ -1147,11 +1098,11 @@ public class PostReview
       return previous;
     }
 
-    private boolean isReviewer(ChangeContext ctx) throws OrmException {
+    private boolean isReviewer(ChangeContext ctx) {
       if (ctx.getAccountId().equals(ctx.getChange().getOwner())) {
         return true;
       }
-      ChangeData cd = changeDataFactory.create(db.get(), ctx.getNotes());
+      ChangeData cd = changeDataFactory.create(ctx.getNotes());
       ReviewerSet reviewers = cd.reviewers();
       if (reviewers.byState(REVIEWER).contains(ctx.getAccountId())) {
         return true;
@@ -1160,13 +1111,13 @@ public class PostReview
     }
 
     private boolean updateLabels(ProjectState projectState, ChangeContext ctx)
-        throws OrmException, ResourceConflictException, IOException {
+        throws ResourceConflictException, IOException {
       Map<String, Short> inLabels = firstNonNull(in.labels, Collections.emptyMap());
 
       // If no labels were modified and change is closed, abort early.
       // This avoids trying to record a modified label caused by a user
       // losing access to a label after the change was submitted.
-      if (inLabels.isEmpty() && ctx.getChange().getStatus().isClosed()) {
+      if (inLabels.isEmpty() && ctx.getChange().isClosed()) {
         return false;
       }
 
@@ -1235,14 +1186,6 @@ public class PostReview
 
       forceCallerAsReviewer(projectState, ctx, current, ups, del);
 
-      if (!del.isEmpty()) {
-        ctx.getDb().patchSetApprovals().delete(del);
-      }
-
-      if (!ups.isEmpty()) {
-        ctx.getDb().patchSetApprovals().upsert(ups);
-      }
-
       return !del.isEmpty() || !ups.isEmpty();
     }
 
@@ -1253,11 +1196,11 @@ public class PostReview
         List<PatchSetApproval> ups,
         List<PatchSetApproval> del)
         throws ResourceConflictException {
-      if (ctx.getChange().getStatus().isOpen()) {
+      if (ctx.getChange().isNew()) {
         return; // Not closed, nothing to validate.
       } else if (del.isEmpty() && ups.isEmpty()) {
         return; // No new votes.
-      } else if (ctx.getChange().getStatus() != Change.Status.MERGED) {
+      } else if (!ctx.getChange().isMerged()) {
         throw new ResourceConflictException("change is closed");
       }
 
@@ -1293,11 +1236,8 @@ public class PostReview
         checkState(prev != psa.getValue()); // Should be filtered out above.
         if (prev > psa.getValue()) {
           reduced.add(psa);
-        } else {
-          // Set postSubmit bit in ReviewDb; not required for NoteDb, which sets
-          // it automatically.
-          psa.setPostSubmit(true);
         }
+        // No need to set postSubmit bit, which is set automatically when parsing from NoteDb.
       }
 
       if (!disallowed.isEmpty()) {
@@ -1355,13 +1295,12 @@ public class PostReview
 
     private Map<String, PatchSetApproval> scanLabels(
         ProjectState projectState, ChangeContext ctx, List<PatchSetApproval> del)
-        throws OrmException, IOException {
+        throws IOException {
       LabelTypes labelTypes = projectState.getLabelTypes(ctx.getNotes());
       Map<String, PatchSetApproval> current = new HashMap<>();
 
       for (PatchSetApproval a :
           approvalsUtil.byPatchSetUser(
-              ctx.getDb(),
               ctx.getNotes(),
               psId,
               user.getAccountId(),
@@ -1381,7 +1320,7 @@ public class PostReview
       return current;
     }
 
-    private boolean insertMessage(ChangeContext ctx) throws OrmException {
+    private boolean insertMessage(ChangeContext ctx) {
       String msg = Strings.nullToEmpty(in.message).trim();
 
       StringBuilder buf = new StringBuilder();
@@ -1405,7 +1344,7 @@ public class PostReview
       message =
           ChangeMessagesUtil.newMessage(
               psId, user, ctx.getWhen(), "Patch Set " + psId.get() + ":" + buf, in.tag);
-      cmUtil.addChangeMessage(ctx.getDb(), ctx.getUpdate(psId), message);
+      cmUtil.addChangeMessage(ctx.getUpdate(psId), message);
       return true;
     }
 

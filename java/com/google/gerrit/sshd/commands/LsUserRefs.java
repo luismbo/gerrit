@@ -15,10 +15,11 @@
 package com.google.gerrit.sshd.commands;
 
 import static com.google.gerrit.sshd.CommandMetaData.Mode.MASTER_OR_SLAVE;
-import static org.eclipse.jgit.lib.RefDatabase.ALL;
 
 import com.google.gerrit.common.data.GlobalCapability;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.annotations.RequiresCapability;
+import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
@@ -32,7 +33,6 @@ import com.google.gerrit.server.util.ManualRequestContext;
 import com.google.gerrit.server.util.OneOffRequestContext;
 import com.google.gerrit.sshd.CommandMetaData;
 import com.google.gerrit.sshd.SshCommand;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import java.io.IOException;
 import java.util.Map;
@@ -74,27 +74,26 @@ public class LsUserRefs extends SshCommand {
 
   @Override
   protected void run() throws Failure {
-    Account userAccount;
+    Account.Id userAccountId;
     try {
-      userAccount = accountResolver.find(userName);
-    } catch (OrmException | IOException | ConfigInvalidException e) {
-      throw die(e);
-    }
-    if (userAccount == null) {
-      stdout.print("No single user could be found when searching for: " + userName + '\n');
+      userAccountId = accountResolver.resolve(userName).asUnique().getAccount().getId();
+    } catch (UnprocessableEntityException e) {
+      stdout.println(e.getMessage());
       stdout.flush();
       return;
+    } catch (StorageException | IOException | ConfigInvalidException e) {
+      throw die(e);
     }
 
     Project.NameKey projectName = projectState.getNameKey();
     try (Repository repo = repoManager.openRepository(projectName);
-        ManualRequestContext ctx = requestContext.openAs(userAccount.getId())) {
+        ManualRequestContext ctx = requestContext.openAs(userAccountId)) {
       try {
         Map<String, Ref> refsMap =
             permissionBackend
                 .user(user)
                 .project(projectName)
-                .filter(repo.getRefDatabase().getRefs(ALL), repo, RefFilterOptions.defaults());
+                .filter(repo.getRefDatabase().getRefs(), repo, RefFilterOptions.defaults());
 
         for (String ref : refsMap.keySet()) {
           if (!onlyRefsHeads || ref.startsWith(RefNames.REFS_HEADS)) {
@@ -106,7 +105,7 @@ public class LsUserRefs extends SshCommand {
       }
     } catch (RepositoryNotFoundException e) {
       throw die("'" + projectName + "': not a git archive");
-    } catch (IOException | OrmException e) {
+    } catch (IOException e) {
       throw die("Error opening: '" + projectName);
     }
   }

@@ -24,13 +24,12 @@ import com.google.gerrit.extensions.restapi.Response;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.reviewdb.client.BooleanProjectConfig;
 import com.google.gerrit.reviewdb.client.PatchSet;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.GerritPersonIdent;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.change.ChangeResource;
-import com.google.gerrit.server.change.NotifyUtil;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.change.PatchSetInserter;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.notedb.ChangeNotes;
@@ -44,7 +43,6 @@ import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.CommitMessageUtil;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -68,12 +66,11 @@ public class PutMessage
 
   private final GitRepositoryManager repositoryManager;
   private final Provider<CurrentUser> userProvider;
-  private final Provider<ReviewDb> db;
   private final TimeZone tz;
   private final PatchSetInserter.Factory psInserterFactory;
   private final PermissionBackend permissionBackend;
   private final PatchSetUtil psUtil;
-  private final NotifyUtil notifyUtil;
+  private final NotifyResolver notifyResolver;
   private final ProjectCache projectCache;
 
   @Inject
@@ -81,22 +78,20 @@ public class PutMessage
       RetryHelper retryHelper,
       GitRepositoryManager repositoryManager,
       Provider<CurrentUser> userProvider,
-      Provider<ReviewDb> db,
       PatchSetInserter.Factory psInserterFactory,
       PermissionBackend permissionBackend,
       @GerritPersonIdent PersonIdent gerritIdent,
       PatchSetUtil psUtil,
-      NotifyUtil notifyUtil,
+      NotifyResolver notifyResolver,
       ProjectCache projectCache) {
     super(retryHelper);
     this.repositoryManager = repositoryManager;
     this.userProvider = userProvider;
-    this.db = db;
     this.psInserterFactory = psInserterFactory;
     this.tz = gerritIdent.getTimeZone();
     this.permissionBackend = permissionBackend;
     this.psUtil = psUtil;
-    this.notifyUtil = notifyUtil;
+    this.notifyResolver = notifyResolver;
     this.projectCache = projectCache;
   }
 
@@ -104,8 +99,8 @@ public class PutMessage
   protected Response<String> applyImpl(
       BatchUpdate.Factory updateFactory, ChangeResource resource, CommitMessageInput input)
       throws IOException, RestApiException, UpdateException, PermissionBackendException,
-          OrmException, ConfigInvalidException {
-    PatchSet ps = psUtil.current(db.get(), resource.getNotes());
+          ConfigInvalidException {
+    PatchSet ps = psUtil.current(resource.getNotes());
     if (ps == null) {
       throw new ResourceConflictException("current revision is missing");
     }
@@ -121,11 +116,6 @@ public class PutMessage
         resource.getChange().getKey().get(),
         sanitizedCommitMessage);
 
-    NotifyHandling notify = input.notify;
-    if (notify == null) {
-      notify = resource.getChange().isWorkInProgress() ? NotifyHandling.OWNER : NotifyHandling.ALL;
-    }
-
     try (Repository repository = repositoryManager.openRepository(resource.getProject());
         RevWalk revWalk = new RevWalk(repository);
         ObjectInserter objectInserter = repository.newObjectInserter()) {
@@ -138,8 +128,7 @@ public class PutMessage
 
       Timestamp ts = TimeUtil.nowTs();
       try (BatchUpdate bu =
-          updateFactory.create(
-              db.get(), resource.getChange().getProject(), userProvider.get(), ts)) {
+          updateFactory.create(resource.getChange().getProject(), userProvider.get(), ts)) {
         // Ensure that BatchUpdate will update the same repo
         bu.setRepository(repository, new RevWalk(objectInserter.newReader()), objectInserter);
 
@@ -150,13 +139,22 @@ public class PutMessage
         inserter.setMessage(
             String.format("Patch Set %s: Commit message was updated.", psId.getId()));
         inserter.setDescription("Edit commit message");
-        inserter.setNotify(notify);
-        inserter.setAccountsToNotify(notifyUtil.resolveAccounts(input.notifyDetails));
+        bu.setNotify(resolveNotify(input, resource));
         bu.addOp(resource.getChange().getId(), inserter);
         bu.execute();
       }
     }
     return Response.ok("ok");
+  }
+
+  private NotifyResolver.Result resolveNotify(CommitMessageInput input, ChangeResource resource)
+      throws BadRequestException, ConfigInvalidException, IOException {
+    NotifyHandling notifyHandling = input.notify;
+    if (notifyHandling == null) {
+      notifyHandling =
+          resource.getChange().isWorkInProgress() ? NotifyHandling.OWNER : NotifyHandling.ALL;
+    }
+    return notifyResolver.resolve(notifyHandling, input.notifyDetails);
   }
 
   private ObjectId createCommit(
@@ -177,8 +175,7 @@ public class PutMessage
   }
 
   private void ensureCanEditCommitMessage(ChangeNotes changeNotes)
-      throws AuthException, PermissionBackendException, IOException, ResourceConflictException,
-          OrmException {
+      throws AuthException, PermissionBackendException, IOException, ResourceConflictException {
     if (!userProvider.get().isIdentifiedUser()) {
       throw new AuthException("Authentication required");
     }
@@ -188,7 +185,6 @@ public class PutMessage
     try {
       permissionBackend
           .user(userProvider.get())
-          .database(db.get())
           .change(changeNotes)
           .check(ChangePermission.ADD_PATCH_SET);
       projectCache.checkedGet(changeNotes.getProjectName()).checkStatePermitsWrite();

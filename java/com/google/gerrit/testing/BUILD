@@ -14,6 +14,7 @@ java_library(
     deps = [
         "//java/com/google/gerrit/common:annotations",
         "//java/com/google/gerrit/common:server",
+        "//java/com/google/gerrit/exceptions",
         "//java/com/google/gerrit/extensions:api",
         "//java/com/google/gerrit/gpg",
         "//java/com/google/gerrit/index",
@@ -34,7 +35,6 @@ java_library(
         "//java/com/google/gerrit/server/schema",
         "//java/com/google/gerrit/server/util/time",
         "//lib:guava",
-        "//lib:gwtorm",
         "//lib:h2",
         "//lib:junit",
         "//lib/auto:auto-value",

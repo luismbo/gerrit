@@ -16,23 +16,20 @@ package com.google.gerrit.server.edit;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-import com.google.common.collect.ListMultimap;
-import com.google.gerrit.extensions.api.changes.NotifyHandling;
-import com.google.gerrit.extensions.api.changes.RecipientType;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.client.ChangeKind;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.RestApiException;
-import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.RefNames;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.change.ChangeKindCache;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.change.PatchSetInserter;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.index.change.ChangeIndexer;
@@ -42,7 +39,6 @@ import com.google.gerrit.server.update.BatchUpdateOp;
 import com.google.gerrit.server.update.RepoContext;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -69,7 +65,6 @@ public class ChangeEditUtil {
   private final GitRepositoryManager gitManager;
   private final PatchSetInserter.Factory patchSetInserterFactory;
   private final ChangeIndexer indexer;
-  private final Provider<ReviewDb> db;
   private final Provider<CurrentUser> userProvider;
   private final ChangeKindCache changeKindCache;
   private final PatchSetUtil psUtil;
@@ -79,14 +74,12 @@ public class ChangeEditUtil {
       GitRepositoryManager gitManager,
       PatchSetInserter.Factory patchSetInserterFactory,
       ChangeIndexer indexer,
-      Provider<ReviewDb> db,
       Provider<CurrentUser> userProvider,
       ChangeKindCache changeKindCache,
       PatchSetUtil psUtil) {
     this.gitManager = gitManager;
     this.patchSetInserterFactory = patchSetInserterFactory;
     this.indexer = indexer;
-    this.db = db;
     this.userProvider = userProvider;
     this.changeKindCache = changeKindCache;
     this.psUtil = psUtil;
@@ -152,9 +145,7 @@ public class ChangeEditUtil {
    * @param edit change edit to publish
    * @param notify Notify handling that defines to whom email notifications should be sent after the
    *     change edit is published.
-   * @param accountsToNotify Accounts that should be notified after the change edit is published.
    * @throws IOException
-   * @throws OrmException
    * @throws UpdateException
    * @throws RestApiException
    */
@@ -162,10 +153,9 @@ public class ChangeEditUtil {
       BatchUpdate.Factory updateFactory,
       ChangeNotes notes,
       CurrentUser user,
-      final ChangeEdit edit,
-      NotifyHandling notify,
-      ListMultimap<RecipientType, Account.Id> accountsToNotify)
-      throws IOException, OrmException, RestApiException, UpdateException {
+      ChangeEdit edit,
+      NotifyResolver.Result notify)
+      throws IOException, RestApiException, UpdateException {
     Change change = edit.getChange();
     try (Repository repo = gitManager.openRepository(change.getProject());
         ObjectInserter oi = repo.newObjectInserter();
@@ -178,11 +168,7 @@ public class ChangeEditUtil {
 
       RevCommit squashed = squashEdit(rw, oi, edit.getEditCommit(), basePatchSet);
       PatchSet.Id psId = ChangeUtil.nextPatchSetId(repo, change.currentPatchSetId());
-      PatchSetInserter inserter =
-          patchSetInserterFactory
-              .create(notes, psId, squashed)
-              .setNotify(notify)
-              .setAccountsToNotify(accountsToNotify);
+      PatchSetInserter inserter = patchSetInserterFactory.create(notes, psId, squashed);
 
       StringBuilder message =
           new StringBuilder("Patch Set ").append(inserter.getPatchSetId().get()).append(": ");
@@ -201,9 +187,9 @@ public class ChangeEditUtil {
             .append(".");
       }
 
-      try (BatchUpdate bu =
-          updateFactory.create(db.get(), change.getProject(), user, TimeUtil.nowTs())) {
+      try (BatchUpdate bu = updateFactory.create(change.getProject(), user, TimeUtil.nowTs())) {
         bu.setRepository(repo, rw, oi);
+        bu.setNotify(notify);
         bu.addOp(change.getId(), inserter.setMessage(message.toString()));
         bu.addOp(
             change.getId(),
@@ -223,14 +209,13 @@ public class ChangeEditUtil {
    *
    * @param edit change edit to delete
    * @throws IOException
-   * @throws OrmException
    */
-  public void delete(ChangeEdit edit) throws IOException, OrmException {
+  public void delete(ChangeEdit edit) throws IOException {
     Change change = edit.getChange();
     try (Repository repo = gitManager.openRepository(change.getProject())) {
       deleteRef(repo, edit);
     }
-    indexer.index(db.get(), change);
+    indexer.index(change);
   }
 
   private PatchSet getBasePatchSet(ChangeNotes notes, Ref ref) throws IOException {
@@ -238,9 +223,8 @@ public class ChangeEditUtil {
       int pos = ref.getName().lastIndexOf('/');
       checkArgument(pos > 0, "invalid edit ref: %s", ref.getName());
       String psId = ref.getName().substring(pos + 1);
-      return psUtil.get(
-          db.get(), notes, new PatchSet.Id(notes.getChange().getId(), Integer.parseInt(psId)));
-    } catch (OrmException | NumberFormatException e) {
+      return psUtil.get(notes, new PatchSet.Id(notes.getChange().getId(), Integer.parseInt(psId)));
+    } catch (StorageException | NumberFormatException e) {
       throw new IOException(e);
     }
   }

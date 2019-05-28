@@ -28,6 +28,13 @@
     UNIFIED: 'UNIFIED_DIFF',
   };
 
+  /** @enum {string} */
+  const TimingLabel = {
+    TOTAL: 'Diff Total Render',
+    CONTENT: 'Diff Content Render',
+    SYNTAX: 'Diff Syntax Render',
+  };
+
   const WHITESPACE_IGNORE_NONE = 'IGNORE_NONE';
 
   /**
@@ -45,15 +52,21 @@
     return !!(diff.binary && (isA || isB));
   }
 
+  /** @enum {string} */
+  Gerrit.DiffSide = {
+    LEFT: 'left',
+    RIGHT: 'right',
+  };
+
   /**
    * Wrapper around gr-diff.
    *
    * Webcomponent fetching diffs and related data from restAPI and passing them
    * to the presentational gr-diff for rendering.
    */
-  // TODO(oler): Move all calls to restAPI from gr-diff here.
   Polymer({
     is: 'gr-diff-host',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when the user selects a line.
@@ -84,9 +97,6 @@
       prefs: {
         type: Object,
       },
-      projectConfig: {
-        type: Object,
-      },
       projectName: String,
       displayLine: {
         type: Boolean,
@@ -111,7 +121,10 @@
         type: Boolean,
         value: false,
       },
-      comments: Object,
+      comments: {
+        type: Object,
+        observer: '_commentsChanged',
+      },
       lineWrapping: {
         type: Boolean,
         value: false,
@@ -174,10 +187,34 @@
       },
 
       _loadedWhitespaceLevel: String,
+
+      _parentIndex: {
+        type: Number,
+        computed: '_computeParentIndex(patchRange.*)',
+      },
     },
 
+    behaviors: [
+      Gerrit.PatchSetBehavior,
+    ],
+
     listeners: {
-      'draft-interaction': '_handleDraftInteraction',
+      // These are named inconsistently for a reason:
+      // The create-comment event is fired to indicate that we should
+      // create a comment.
+      // The comment-* events are just notifying that the comments did already
+      // change in some way, and that we should update any models we may want
+      // to keep in sync.
+      'create-comment': '_handleCreateComment',
+      'comment-discard': '_handleCommentDiscard',
+      'comment-update': '_handleCommentUpdate',
+      'comment-save': '_handleCommentSave',
+
+      'render-start': '_handleRenderStart',
+      'render-content': '_handleRenderContent',
+      'render-syntax': '_handleRenderSyntax',
+
+      'normalize-range': '_handleNormalizeRange',
     },
 
     observers: [
@@ -299,9 +336,14 @@
       this._blame = null;
     },
 
-    /** @return {!Array<!HTMLElement>} */
+    /**
+     * The thread elements in this diff, in no particular order.
+     * @return {!Array<!HTMLElement>}
+     */
     getThreadEls() {
-      return this.$.diff.getThreadEls();
+      // Polymer2: querySelectorAll returns NodeList instead of Array.
+      return Array.from(
+          Polymer.dom(this.$.diff).querySelectorAll('.comment-thread'));
     },
 
     /** @param {HTMLElement} el */
@@ -428,6 +470,69 @@
       return isImageDiff(diff);
     },
 
+    _commentsChanged(newComments) {
+      const allComments = [];
+      for (const side of [GrDiffBuilder.Side.LEFT, GrDiffBuilder.Side.RIGHT]) {
+        // This is needed by the threading.
+        for (const comment of newComments[side]) {
+          comment.__commentSide = side;
+        }
+        allComments.push(...newComments[side]);
+      }
+      // Currently, the only way this is ever changed here is when the initial
+      // comments are loaded, so it's okay performance wise to clear the threads
+      // and recreate them. If this changes in future, we might want to reuse
+      // some DOM nodes here.
+      this._clearThreads();
+      const threads = this._createThreads(allComments);
+      for (const thread of threads) {
+        const threadEl = this._createThreadElement(thread);
+        this._attachThreadElement(threadEl);
+      }
+    },
+
+    /**
+     * @param {!Array<!Object>} comments
+     * @return {!Array<!Object>} Threads for the given comments.
+     */
+    _createThreads(comments) {
+      const sortedComments = comments.slice(0).sort((a, b) => {
+        if (b.__draft && !a.__draft ) { return 0; }
+        if (a.__draft && !b.__draft ) { return 1; }
+        return util.parseDate(a.updated) - util.parseDate(b.updated);
+      });
+
+      const threads = [];
+      for (const comment of sortedComments) {
+        // If the comment is in reply to another comment, find that comment's
+        // thread and append to it.
+        if (comment.in_reply_to) {
+          const thread = threads.find(thread =>
+              thread.comments.some(c => c.id === comment.in_reply_to));
+          if (thread) {
+            thread.comments.push(comment);
+            continue;
+          }
+        }
+
+        // Otherwise, this comment starts its own thread.
+        const newThread = {
+          start_datetime: comment.updated,
+          comments: [comment],
+          commentSide: comment.__commentSide,
+          patchNum: comment.patch_set,
+          rootId: comment.id || comment.__draftID,
+          lineNum: comment.line,
+          isOnParent: comment.side === 'PARENT',
+        };
+        if (comment.range) {
+          newThread.range = Object.assign({}, comment.range);
+        }
+        threads.push(newThread);
+      }
+      return threads;
+    },
+
     /**
      * @param {Object} blame
      * @return {boolean}
@@ -445,8 +550,157 @@
           this.patchRange);
     },
 
-    _handleDraftInteraction() {
+    /** @param {CustomEvent} e */
+    _handleCreateComment(e) {
+      const {lineNum, side, patchNum, isOnParent, range} = e.detail;
+      const threadEl = this._getOrCreateThread(patchNum, lineNum, side, range,
+          isOnParent);
+      threadEl.addOrEditDraft(lineNum, range);
+
       this.$.reporting.recordDraftInteraction();
+    },
+
+    /**
+     * Gets or creates a comment thread at a given location.
+     * May provide a range, to get/create a range comment.
+     *
+     * @param {string} patchNum
+     * @param {?number} lineNum
+     * @param {string} commentSide
+     * @param {Gerrit.Range|undefined} range
+     * @param {boolean} isOnParent
+     * @return {!Object}
+     */
+    _getOrCreateThread(patchNum, lineNum, commentSide, range, isOnParent) {
+      let threadEl = this._getThreadEl(lineNum, commentSide, range);
+      if (!threadEl) {
+        threadEl = this._createThreadElement({
+          comments: [],
+          commentSide,
+          patchNum,
+          lineNum,
+          range,
+          isOnParent,
+        });
+        this._attachThreadElement(threadEl);
+      }
+      return threadEl;
+    },
+
+    _attachThreadElement(threadEl) {
+      Polymer.dom(this.$.diff).appendChild(threadEl);
+    },
+
+    _clearThreads() {
+      for (const threadEl of this.getThreadEls()) {
+        const parent = Polymer.dom(threadEl).parentNode;
+        Polymer.dom(parent).removeChild(threadEl);
+      }
+    },
+
+    _createThreadElement(thread) {
+      const threadEl = document.createElement('gr-comment-thread');
+      threadEl.className = 'comment-thread';
+      threadEl.slot = `${thread.commentSide}-${thread.lineNum}`;
+      threadEl.comments = thread.comments;
+      threadEl.commentSide = thread.commentSide;
+      threadEl.isOnParent = !!thread.isOnParent;
+      threadEl.parentIndex = this._parentIndex;
+      threadEl.changeNum = this.changeNum;
+      threadEl.patchNum = thread.patchNum;
+      threadEl.lineNum = thread.lineNum;
+      const rootIdChangedListener = changeEvent => {
+        thread.rootId = changeEvent.detail.value;
+      };
+      threadEl.addEventListener('root-id-changed', rootIdChangedListener);
+      threadEl.path = this.path;
+      threadEl.projectName = this.projectName;
+      threadEl.range = thread.range;
+      const threadDiscardListener = e => {
+        const threadEl = /** @type {!Node} */ (e.currentTarget);
+
+        const parent = Polymer.dom(threadEl).parentNode;
+        Polymer.dom(parent).removeChild(threadEl);
+
+        threadEl.removeEventListener('root-id-changed', rootIdChangedListener);
+        threadEl.removeEventListener('thread-discard', threadDiscardListener);
+      };
+      threadEl.addEventListener('thread-discard', threadDiscardListener);
+      return threadEl;
+    },
+
+    /**
+     * Gets a comment thread element at a given location.
+     * May provide a range, to get a range comment.
+     *
+     * @param {?number} lineNum
+     * @param {string} commentSide
+     * @param {!Gerrit.Range=} range
+     * @return {?Node}
+     */
+    _getThreadEl(lineNum, commentSide, range=undefined) {
+      let line;
+      if (commentSide === GrDiffBuilder.Side.LEFT) {
+        line = {beforeNumber: lineNum};
+      } else if (commentSide === GrDiffBuilder.Side.RIGHT) {
+        line = {afterNumber: lineNum};
+      } else {
+        throw new Error(`Unknown side: ${commentSide}`);
+      }
+      function matchesRange(threadEl) {
+        const threadRange = /** @type {!Gerrit.Range} */(
+            JSON.parse(threadEl.getAttribute('range')));
+        return Gerrit.rangesEqual(threadRange, range);
+      }
+
+      const filteredThreadEls = this._filterThreadElsForLocation(
+          this.getThreadEls(), line, commentSide).filter(matchesRange);
+      return filteredThreadEls.length ? filteredThreadEls[0] : null;
+    },
+
+    /**
+     * @param {!Array<!HTMLElement>} threadEls
+     * @param {!{beforeNumber: (number|string|undefined|null),
+     *           afterNumber: (number|string|undefined|null)}}
+     *     lineInfo
+     * @param {!Gerrit.DiffSide=} side The side (LEFT, RIGHT) for
+     *     which to return the threads.
+     * @return {!Array<!HTMLElement>} The thread elements matching the given
+     *     location.
+     */
+    _filterThreadElsForLocation(threadEls, lineInfo, side) {
+      function matchesLeftLine(threadEl) {
+        return threadEl.getAttribute('comment-side') ==
+            Gerrit.DiffSide.LEFT &&
+            threadEl.getAttribute('line-num') == lineInfo.beforeNumber;
+      }
+      function matchesRightLine(threadEl) {
+        return threadEl.getAttribute('comment-side') ==
+            Gerrit.DiffSide.RIGHT &&
+            threadEl.getAttribute('line-num') == lineInfo.afterNumber;
+      }
+      function matchesFileComment(threadEl) {
+        return threadEl.getAttribute('comment-side') == side &&
+              // line/range comments have 1-based line set, if line is falsy it's
+              // a file comment
+              !threadEl.getAttribute('line-num');
+      }
+
+      // Select the appropriate matchers for the desired side and line
+      // If side is BOTH, we want both the left and right matcher.
+      const matchers = [];
+      if (side !== Gerrit.DiffSide.RIGHT) {
+        matchers.push(matchesLeftLine);
+      }
+      if (side !== Gerrit.DiffSide.LEFT) {
+        matchers.push(matchesRightLine);
+      }
+      if (lineInfo.afterNumber === 'FILE' ||
+          lineInfo.beforeNumber === 'FILE') {
+        matchers.push(matchesFileComment);
+      }
+      return threadEls.filter(threadEl =>
+          matchers.some(matcher => matcher(threadEl)));
     },
 
     /**
@@ -505,6 +759,108 @@
           !noRenderOnPrefsChange) {
         this.reload();
       }
+    },
+
+    /**
+     * @param {Object} patchRangeRecord
+     * @return {number|null}
+     */
+    _computeParentIndex(patchRangeRecord) {
+      return this.isMergeParent(patchRangeRecord.base.basePatchNum) ?
+          this.getParentIndex(patchRangeRecord.base.basePatchNum) : null;
+    },
+
+    _handleCommentSave(e) {
+      const comment = e.detail.comment;
+      const side = e.detail.comment.__commentSide;
+      const idx = this._findDraftIndex(comment, side);
+      this.set(['comments', side, idx], comment);
+      this._handleCommentSaveOrDiscard();
+    },
+
+    _handleCommentDiscard(e) {
+      const comment = e.detail.comment;
+      this._removeComment(comment);
+      this._handleCommentSaveOrDiscard();
+    },
+
+    /**
+     * Closure annotation for Polymer.prototype.push is off. Submitted PR:
+     * https://github.com/Polymer/polymer/pull/4776
+     * but for not supressing annotations.
+     *
+     * @suppress {checkTypes}
+     */
+    _handleCommentUpdate(e) {
+      const comment = e.detail.comment;
+      const side = e.detail.comment.__commentSide;
+      let idx = this._findCommentIndex(comment, side);
+      if (idx === -1) {
+        idx = this._findDraftIndex(comment, side);
+      }
+      if (idx !== -1) { // Update draft or comment.
+        this.set(['comments', side, idx], comment);
+      } else { // Create new draft.
+        this.push(['comments', side], comment);
+      }
+    },
+
+    _handleCommentSaveOrDiscard() {
+      this.dispatchEvent(new CustomEvent('diff-comments-modified',
+          {bubbles: true}));
+    },
+
+    _removeComment(comment) {
+      const side = comment.__commentSide;
+      this._removeCommentFromSide(comment, side);
+    },
+
+    _removeCommentFromSide(comment, side) {
+      let idx = this._findCommentIndex(comment, side);
+      if (idx === -1) {
+        idx = this._findDraftIndex(comment, side);
+      }
+      if (idx !== -1) {
+        this.splice('comments.' + side, idx, 1);
+      }
+    },
+
+    /** @return {number} */
+    _findCommentIndex(comment, side) {
+      if (!comment.id || !this.comments[side]) {
+        return -1;
+      }
+      return this.comments[side].findIndex(item => item.id === comment.id);
+    },
+
+    /** @return {number} */
+    _findDraftIndex(comment, side) {
+      if (!comment.__draftID || !this.comments[side]) {
+        return -1;
+      }
+      return this.comments[side].findIndex(
+          item => item.__draftID === comment.__draftID);
+    },
+
+    _handleRenderStart() {
+      this.$.reporting.time(TimingLabel.TOTAL);
+      this.$.reporting.time(TimingLabel.CONTENT);
+    },
+
+    _handleRenderContent() {
+      this.$.reporting.timeEnd(TimingLabel.CONTENT);
+      this.$.reporting.time(TimingLabel.SYNTAX);
+    },
+
+    _handleRenderSyntax() {
+      this.$.reporting.timeEnd(TimingLabel.SYNTAX);
+      this.$.reporting.timeEnd(TimingLabel.TOTAL);
+    },
+
+    _handleNormalizeRange(event) {
+      this.$.reporting.reportInteraction('normalize-range',
+          `Modified invalid comment range on l. ${event.detail.lineNum}` +
+          ` of the ${event.detail.side} side`);
     },
   });
 })();

@@ -26,7 +26,6 @@ java_library(
         "//java/com/google/gerrit/server/schema",
         "//java/com/google/gerrit/sshd",
         "//lib:guava",
-        "//lib:gwtorm",
         "//lib:servlet-api-3_1",
         "//lib/flogger:api",
         "//lib/guice",

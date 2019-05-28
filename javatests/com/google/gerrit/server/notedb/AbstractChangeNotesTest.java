@@ -28,7 +28,6 @@ import com.google.gerrit.reviewdb.client.Comment;
 import com.google.gerrit.reviewdb.client.CommentRange;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.GerritPersonIdent;
 import com.google.gerrit.server.IdentifiedUser;
@@ -43,7 +42,7 @@ import com.google.gerrit.server.config.AnonymousCowardName;
 import com.google.gerrit.server.config.AnonymousCowardNameProvider;
 import com.google.gerrit.server.config.CanonicalWebUrl;
 import com.google.gerrit.server.config.DefaultUrlFormatter;
-import com.google.gerrit.server.config.DisableReverseDnsLookup;
+import com.google.gerrit.server.config.EnableReverseDnsLookup;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.config.GerritServerId;
 import com.google.gerrit.server.extensions.events.GitReferenceUpdated;
@@ -58,12 +57,9 @@ import com.google.gerrit.testing.GerritBaseTests;
 import com.google.gerrit.testing.InMemoryRepositoryManager;
 import com.google.gerrit.testing.TestChanges;
 import com.google.gerrit.testing.TestTimeUtil;
-import com.google.gwtorm.server.OrmException;
-import com.google.gwtorm.server.SchemaFactory;
 import com.google.inject.Guice;
 import com.google.inject.Inject;
 import com.google.inject.Injector;
-import com.google.inject.TypeLiteral;
 import com.google.inject.util.Providers;
 import java.sql.Timestamp;
 import java.util.TimeZone;
@@ -137,11 +133,11 @@ public abstract class AbstractChangeNotesTest extends GerritBaseTests {
                 install(new GitModule());
 
                 install(new DefaultUrlFormatter.Module());
-                install(NoteDbModule.forTest(testConfig));
+                install(NoteDbModule.forTest());
                 bind(AllUsersName.class).toProvider(AllUsersNameProvider.class);
                 bind(String.class).annotatedWith(GerritServerId.class).toInstance("gerrit");
                 bind(GitRepositoryManager.class).toInstance(repoManager);
-                bind(ProjectCache.class).toProvider(Providers.<ProjectCache>of(null));
+                bind(ProjectCache.class).toProvider(Providers.of(null));
                 bind(Config.class).annotatedWith(GerritServerConfig.class).toInstance(testConfig);
                 bind(String.class)
                     .annotatedWith(AnonymousCowardName.class)
@@ -150,8 +146,8 @@ public abstract class AbstractChangeNotesTest extends GerritBaseTests {
                     .annotatedWith(CanonicalWebUrl.class)
                     .toInstance("http://localhost:8080/");
                 bind(Boolean.class)
-                    .annotatedWith(DisableReverseDnsLookup.class)
-                    .toInstance(Boolean.FALSE);
+                    .annotatedWith(EnableReverseDnsLookup.class)
+                    .toInstance(Boolean.TRUE);
                 bind(Realm.class).to(FakeRealm.class);
                 bind(GroupBackend.class).to(SystemGroupBackend.class).in(SINGLETON);
                 bind(AccountCache.class).toInstance(accountCache);
@@ -160,23 +156,6 @@ public abstract class AbstractChangeNotesTest extends GerritBaseTests {
                     .toInstance(serverIdent);
                 bind(GitReferenceUpdated.class).toInstance(GitReferenceUpdated.DISABLED);
                 bind(MetricMaker.class).to(DisabledMetricMaker.class);
-                bind(ReviewDb.class).toProvider(Providers.<ReviewDb>of(null));
-                MutableNotesMigration migration = MutableNotesMigration.newDisabled();
-                migration.setFrom(NotesMigrationState.FINAL);
-                bind(MutableNotesMigration.class).toInstance(migration);
-                bind(NotesMigration.class).to(MutableNotesMigration.class);
-
-                // Tests don't support ReviewDb at all, but bindings are required via NoteDbModule.
-                bind(new TypeLiteral<SchemaFactory<ReviewDb>>() {})
-                    .toInstance(
-                        () -> {
-                          throw new UnsupportedOperationException();
-                        });
-                bind(ChangeBundleReader.class)
-                    .toInstance(
-                        (db, id) -> {
-                          throw new UnsupportedOperationException();
-                        });
               }
             });
 
@@ -201,7 +180,7 @@ public abstract class AbstractChangeNotesTest extends GerritBaseTests {
 
   protected Change newChange(boolean workInProgress) throws Exception {
     Change c = TestChanges.newChange(project, changeOwner.getAccountId());
-    ChangeUpdate u = newUpdate(c, changeOwner);
+    ChangeUpdate u = newUpdateForNewChange(c, changeOwner);
     u.setChangeId(c.getKey().get());
     u.setBranch(c.getDest().get());
     u.setWorkInProgress(workInProgress);
@@ -217,15 +196,24 @@ public abstract class AbstractChangeNotesTest extends GerritBaseTests {
     return newChange(false);
   }
 
+  protected ChangeUpdate newUpdateForNewChange(Change c, CurrentUser user) throws Exception {
+    return newUpdate(c, user, false);
+  }
+
   protected ChangeUpdate newUpdate(Change c, CurrentUser user) throws Exception {
-    ChangeUpdate update = TestChanges.newUpdate(injector, c, user);
+    return newUpdate(c, user, true);
+  }
+
+  protected ChangeUpdate newUpdate(Change c, CurrentUser user, boolean shouldExist)
+      throws Exception {
+    ChangeUpdate update = TestChanges.newUpdate(injector, c, user, shouldExist);
     update.setPatchSetId(c.currentPatchSetId());
     update.setAllowWriteToNewRef(true);
     return update;
   }
 
-  protected ChangeNotes newNotes(Change c) throws OrmException {
-    return new ChangeNotes(args, c).load();
+  protected ChangeNotes newNotes(Change c) {
+    return new ChangeNotes(args, c, true, null).load();
   }
 
   protected static SubmitRecord submitRecord(

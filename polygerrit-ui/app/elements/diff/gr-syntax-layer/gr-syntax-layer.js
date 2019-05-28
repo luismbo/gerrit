@@ -83,6 +83,7 @@
     'text/x-swift': 'swift',
     'text/x-systemverilog': 'sv',
     'text/x-tcl': 'tcl',
+    'text/x-torque': 'torque',
     'text/x-twig': 'twig',
     'text/x-vb': 'vb',
     'text/x-verilog': 'v',
@@ -128,6 +129,7 @@
 
   Polymer({
     is: 'gr-syntax-layer',
+    _legacyUndefinedCheck: true,
 
     properties: {
       diff: {
@@ -154,6 +156,16 @@
       },
       /** @type {?number} */
       _processHandle: Number,
+      /**
+       * The promise last returned from `process()` while the asynchronous
+       * processing is running - `null` otherwise. Provides a `cancel()`
+       * method that rejects it with `{isCancelled: true}`.
+       * @type {?Object}
+       */
+      _processPromise: {
+        type: Object,
+        value: null,
+      },
       _hljs: Object,
     },
 
@@ -165,9 +177,10 @@
      * Annotation layer method to add syntax annotations to the given element
      * for the given line.
      * @param {!HTMLElement} el
+     * @param {!HTMLElement} lineNumberEl
      * @param {!Object} line (GrDiffLine)
      */
-    annotate(el, line) {
+    annotate(el, lineNumberEl, line) {
       if (!this.enabled) { return; }
 
       // Determine the side.
@@ -197,12 +210,23 @@
       }
     },
 
+    _getLanguage(diffFileMetaInfo) {
+      // The Gerrit API provides only content-type, but for other users of
+      // gr-diff it may be more convenient to specify the language directly.
+      return diffFileMetaInfo.language ||
+          LANGUAGE_MAP[diffFileMetaInfo.content_type];
+    },
+
     /**
      * Start processing symtax for the loaded diff and notify layer listeners
      * as syntax info comes online.
      * @return {Promise}
      */
     process() {
+      // Cancel any still running process() calls, because they append to the
+      // same _baseRanges and _revisionRanges fields.
+      this.cancel();
+
       // Discard existing ranges.
       this._baseRanges = [];
       this._revisionRanges = [];
@@ -211,13 +235,11 @@
         return Promise.resolve();
       }
 
-      this.cancel();
-
       if (this.diff.meta_a) {
-        this._baseLanguage = LANGUAGE_MAP[this.diff.meta_a.content_type];
+        this._baseLanguage = this._getLanguage(this.diff.meta_a);
       }
       if (this.diff.meta_b) {
-        this._revisionLanguage = LANGUAGE_MAP[this.diff.meta_b.content_type];
+        this._revisionLanguage = this._getLanguage(this.diff.meta_b);
       }
       if (!this._baseLanguage && !this._revisionLanguage) {
         return Promise.resolve();
@@ -232,48 +254,54 @@
         lastNotify: {left: 1, right: 1},
       };
 
-      return this._loadHLJS().then(() => {
-        return new Promise(resolve => {
-          const nextStep = () => {
-            this._processHandle = null;
-            this._processNextLine(state);
+      this._processPromise = util.makeCancelable(this._loadHLJS()
+          .then(() => {
+            return new Promise(resolve => {
+              const nextStep = () => {
+                this._processHandle = null;
+                this._processNextLine(state);
 
-            // Move to the next line in the section.
-            state.lineIndex++;
+                // Move to the next line in the section.
+                state.lineIndex++;
 
-            // If the section has been exhausted, move to the next one.
-            if (this._isSectionDone(state)) {
-              state.lineIndex = 0;
-              state.sectionIndex++;
-            }
+                // If the section has been exhausted, move to the next one.
+                if (this._isSectionDone(state)) {
+                  state.lineIndex = 0;
+                  state.sectionIndex++;
+                }
 
-            // If all sections have been exhausted, finish.
-            if (state.sectionIndex >= this.diff.content.length) {
-              resolve();
-              this._notify(state);
-              return;
-            }
+                // If all sections have been exhausted, finish.
+                if (state.sectionIndex >= this.diff.content.length) {
+                  resolve();
+                  this._notify(state);
+                  return;
+                }
 
-            if (state.lineIndex % 100 === 0) {
-              this._notify(state);
-              this._processHandle = this.async(nextStep, ASYNC_DELAY);
-            } else {
-              nextStep.call(this);
-            }
-          };
+                if (state.lineIndex % 100 === 0) {
+                  this._notify(state);
+                  this._processHandle = this.async(nextStep, ASYNC_DELAY);
+                } else {
+                  nextStep.call(this);
+                }
+              };
 
-          this._processHandle = this.async(nextStep, 1);
-        });
-      });
+              this._processHandle = this.async(nextStep, 1);
+            });
+          }));
+      return this._processPromise
+          .finally(() => { this._processPromise = null; });
     },
 
     /**
      * Cancel any asynchronous syntax processing jobs.
      */
     cancel() {
-      if (this._processHandle) {
+      if (this._processHandle != null) {
         this.cancelAsync(this._processHandle);
         this._processHandle = null;
+      }
+      if (this._processPromise) {
+        this._processPromise.cancel();
       }
     },
 
@@ -348,7 +376,8 @@
       // To store the result of the syntax highlighter.
       let result;
 
-      if (this._baseLanguage && baseLine !== undefined) {
+      if (this._baseLanguage && baseLine !== undefined &&
+          this._hljs.getLanguage(this._baseLanguage)) {
         baseLine = this._workaround(this._baseLanguage, baseLine);
         result = this._hljs.highlight(this._baseLanguage, baseLine, true,
             state.baseContext);
@@ -356,7 +385,8 @@
         state.baseContext = result.top;
       }
 
-      if (this._revisionLanguage && revisionLine !== undefined) {
+      if (this._revisionLanguage && revisionLine !== undefined &&
+          this._hljs.getLanguage(this._revisionLanguage)) {
         revisionLine = this._workaround(this._revisionLanguage, revisionLine);
         result = this._hljs.highlight(this._revisionLanguage, revisionLine,
             true, state.revisionContext);

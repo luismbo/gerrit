@@ -20,17 +20,25 @@ import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.TestAccount;
+import com.google.gerrit.acceptance.testsuite.group.GroupOperations;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperations;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.common.ChangeInfo;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.server.project.testing.Util;
+import com.google.inject.Inject;
 import java.util.List;
 import org.eclipse.jgit.internal.storage.dfs.InMemoryRepository;
 import org.eclipse.jgit.junit.TestRepository;
 import org.junit.Test;
 
 public class IndexChangeIT extends AbstractDaemonTest {
+  @Inject private GroupOperations groupOperations;
+  @Inject private ProjectOperations projectOperations;
+  @Inject private RequestScopeOperations requestScopeOperations;
+
   @Test
   public void indexChange() throws Exception {
     String changeId = createChange().getChangeId();
@@ -48,11 +56,12 @@ public class IndexChangeIT extends AbstractDaemonTest {
   public void indexChangeAfterOwnerLosesVisibility() throws Exception {
     // Create a test group with 2 users as members
     TestAccount user2 = accountCreator.user2();
-    String group = createGroup("test");
-    gApi.groups().id(group).addMembers("admin", "user", user2.username);
+    AccountGroup.UUID groupId = groupOperations.newGroup().name("test").create();
+    String group = groupOperations.group(groupId).get().name();
+    gApi.groups().id(group).addMembers("admin", "user", user2.username());
 
     // Create a project and restrict its visibility to the group
-    Project.NameKey p = createProject("p");
+    Project.NameKey p = projectOperations.newProject().create();
     try (ProjectConfigUpdate u = updateProject(p)) {
       Util.allow(
           u.getConfig(),
@@ -65,39 +74,39 @@ public class IndexChangeIT extends AbstractDaemonTest {
 
     // Clone it and push a change as a regular user
     TestRepository<InMemoryRepository> repo = cloneProject(p, user);
-    PushOneCommit push = pushFactory.create(db, user.getIdent(), repo);
+    PushOneCommit push = pushFactory.create(user.newIdent(), repo);
     PushOneCommit.Result result = push.to("refs/for/master");
     result.assertOkStatus();
-    assertThat(result.getChange().change().getOwner()).isEqualTo(user.id);
+    assertThat(result.getChange().change().getOwner()).isEqualTo(user.id());
     String changeId = result.getChangeId();
 
     // User can see the change and it is mergeable
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     List<ChangeInfo> changes = gApi.changes().query(changeId).get();
     assertThat(changes).hasSize(1);
     assertThat(changes.get(0).mergeable).isNotNull();
 
     // Other user can see the change and it is mergeable
-    setApiUser(user2);
+    requestScopeOperations.setApiUser(user2.id());
     changes = gApi.changes().query(changeId).get();
     assertThat(changes).hasSize(1);
     assertThat(changes.get(0).mergeable).isTrue();
 
     // Remove the user from the group so they can no longer see the project
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     gApi.groups().id(group).removeMembers("user");
 
     // User can no longer see the change
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     changes = gApi.changes().query(changeId).get();
     assertThat(changes).isEmpty();
 
     // Reindex the change
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     gApi.changes().id(changeId).index();
 
     // Other user can still see the change and it is still mergeable
-    setApiUser(user2);
+    requestScopeOperations.setApiUser(user2.id());
     changes = gApi.changes().query(changeId).get();
     assertThat(changes).hasSize(1);
     assertThat(changes.get(0).mergeable).isTrue();

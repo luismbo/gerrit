@@ -28,7 +28,6 @@ import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.ChangeMessage;
 import com.google.gerrit.reviewdb.client.PatchSet;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ChangeMessagesUtil;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.account.AccountLoader;
@@ -44,7 +43,6 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -58,7 +56,6 @@ public class DeleteChangeMessage
         ChangeMessageResource, DeleteChangeMessageInput, Response<ChangeMessageInfo>> {
 
   private final Provider<CurrentUser> userProvider;
-  private final Provider<ReviewDb> dbProvider;
   private final PermissionBackend permissionBackend;
   private final ChangeMessagesUtil changeMessagesUtil;
   private final AccountLoader.Factory accountLoaderFactory;
@@ -67,7 +64,6 @@ public class DeleteChangeMessage
   @Inject
   public DeleteChangeMessage(
       Provider<CurrentUser> userProvider,
-      Provider<ReviewDb> dbProvider,
       PermissionBackend permissionBackend,
       ChangeMessagesUtil changeMessagesUtil,
       AccountLoader.Factory accountLoaderFactory,
@@ -75,7 +71,6 @@ public class DeleteChangeMessage
       RetryHelper retryHelper) {
     super(retryHelper);
     this.userProvider = userProvider;
-    this.dbProvider = dbProvider;
     this.permissionBackend = permissionBackend;
     this.changeMessagesUtil = changeMessagesUtil;
     this.accountLoaderFactory = accountLoaderFactory;
@@ -87,18 +82,16 @@ public class DeleteChangeMessage
       BatchUpdate.Factory updateFactory,
       ChangeMessageResource resource,
       DeleteChangeMessageInput input)
-      throws RestApiException, PermissionBackendException, OrmException, UpdateException,
-          IOException {
+      throws RestApiException, PermissionBackendException, UpdateException, IOException {
     CurrentUser user = userProvider.get();
     permissionBackend.user(user).check(GlobalPermission.ADMINISTRATE_SERVER);
 
     String newChangeMessage =
         createNewChangeMessage(user.asIdentifiedUser().getName(), input.reason);
     DeleteChangeMessageOp deleteChangeMessageOp =
-        new DeleteChangeMessageOp(resource.getChangeMessageIndex(), newChangeMessage);
+        new DeleteChangeMessageOp(resource.getChangeMessageId(), newChangeMessage);
     try (BatchUpdate batchUpdate =
-        updateFactory.create(
-            dbProvider.get(), resource.getChangeResource().getProject(), user, TimeUtil.nowTs())) {
+        updateFactory.create(resource.getChangeResource().getProject(), user, TimeUtil.nowTs())) {
       batchUpdate.addOp(resource.getChangeId(), deleteChangeMessageOp).execute();
     }
 
@@ -108,9 +101,8 @@ public class DeleteChangeMessage
   }
 
   private ChangeMessageInfo createUpdatedChangeMessageInfo(Change.Id id, int targetIdx)
-      throws OrmException, PermissionBackendException {
-    List<ChangeMessage> messages =
-        changeMessagesUtil.byChange(dbProvider.get(), notesFactory.createChecked(id));
+      throws PermissionBackendException {
+    List<ChangeMessage> messages = changeMessagesUtil.byChange(notesFactory.createChecked(id));
     ChangeMessage updatedChangeMessage = messages.get(targetIdx);
     AccountLoader accountLoader = accountLoaderFactory.create(true);
     ChangeMessageInfo info = createChangeMessageInfo(updatedChangeMessage, accountLoader);
@@ -136,19 +128,18 @@ public class DeleteChangeMessage
   }
 
   private class DeleteChangeMessageOp implements BatchUpdateOp {
-    private final int targetMessageIdx;
+    private final String targetMessageId;
     private final String newMessage;
 
-    DeleteChangeMessageOp(int targetMessageIdx, String newMessage) {
-      this.targetMessageIdx = targetMessageIdx;
+    DeleteChangeMessageOp(String targetMessageIdx, String newMessage) {
+      this.targetMessageId = targetMessageIdx;
       this.newMessage = newMessage;
     }
 
     @Override
-    public boolean updateChange(ChangeContext ctx) throws OrmException {
+    public boolean updateChange(ChangeContext ctx) {
       PatchSet.Id psId = ctx.getChange().currentPatchSetId();
-      changeMessagesUtil.replaceChangeMessage(
-          ctx.getDb(), ctx.getUpdate(psId), targetMessageIdx, newMessage);
+      changeMessagesUtil.replaceChangeMessage(ctx.getUpdate(psId), targetMessageId, newMessage);
       return true;
     }
   }

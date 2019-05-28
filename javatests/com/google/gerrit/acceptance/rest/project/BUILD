@@ -8,6 +8,7 @@ acceptance_tests(
         ":project",
         ":push_tag_util",
         ":refassert",
+        "//lib/commons:lang",
     ],
 )
 
@@ -33,7 +34,6 @@ java_library(
         "//java/com/google/gerrit/reviewdb:server",
         "//java/com/google/gerrit/server",
         "//lib:guava",
-        "//lib:gwtorm",
         "//lib/truth",
     ],
 )

@@ -28,6 +28,7 @@ import com.google.common.collect.Lists;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.TestAccount;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.GlobalCapability;
 import com.google.gerrit.extensions.api.changes.DeleteChangeMessageInput;
 import com.google.gerrit.extensions.api.changes.ReviewInput;
@@ -40,6 +41,7 @@ import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.server.notedb.ChangeNoteUtil;
 import com.google.gerrit.testing.ConfigSuite;
 import com.google.gerrit.testing.TestTimeUtil;
+import com.google.inject.Inject;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -54,6 +56,8 @@ import org.junit.runner.RunWith;
 
 @RunWith(ConfigSuite.class)
 public class ChangeMessagesIT extends AbstractDaemonTest {
+  @Inject private RequestScopeOperations requestScopeOperations;
+
   private String systemTimeZone;
 
   @Before
@@ -127,6 +131,20 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
   }
 
   @Test
+  public void listChangeMessagesSkippedEmpty() throws Exception {
+    // Change message 1: create a change.
+    PushOneCommit.Result result = createChange();
+    String changeId = result.getChangeId();
+    // Will be a new commit with empty change message on the meta branch.
+    addOneReviewWithEmptyChangeMessage(changeId);
+    // Change Message 2: post a review with message "message 1".
+    addOneReview(changeId, "message");
+
+    List<ChangeMessageInfo> messages = gApi.changes().id(changeId).messages();
+    assertThat(messages).hasSize(2);
+  }
+
+  @Test
   public void getOneChangeMessage() throws Exception {
     int changeNum = createOneChangeWithMultipleChangeMessagesInHistory();
     List<ChangeMessageInfo> messages = new ArrayList<>(gApi.changes().id(changeNum).get().messages);
@@ -139,7 +157,7 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
   @Test
   public void deleteCannotBeAppliedWithoutAdministrateServerCapability() throws Exception {
     int changeNum = createOneChangeWithMultipleChangeMessagesInHistory();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
 
     try {
       deleteOneChangeMessage(changeNum, 0, user, "spam");
@@ -153,7 +171,7 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
   public void deleteCanBeAppliedWithAdministrateServerCapability() throws Exception {
     allowGlobalCapabilities(REGISTERED_USERS, GlobalCapability.ADMINISTRATE_SERVER);
     int changeNum = createOneChangeWithMultipleChangeMessagesInHistory();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     deleteOneChangeMessage(changeNum, 0, user, "spam");
   }
 
@@ -209,25 +227,31 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
   private int createOneChangeWithMultipleChangeMessagesInHistory() throws Exception {
     // Creates the following commit history on the meta branch of the test change.
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     // Commit 1: create a change.
     PushOneCommit.Result result = createChange();
     String changeId = result.getChangeId();
-    // Commit 2: post a review with message "message 1".
-    setApiUser(admin);
+    // Commit 2: post an empty change message.
+    requestScopeOperations.setApiUser(admin.id());
+    addOneReviewWithEmptyChangeMessage(changeId);
+    // Commit 3: post a review with message "message 1".
     addOneReview(changeId, "message 1");
-    // Commit 3: amend a new patch set.
-    setApiUser(user);
+    // Commit 4: amend a new patch set.
+    requestScopeOperations.setApiUser(user.id());
     amendChange(changeId);
-    // Commit 4: post a review with message "message 2".
+    // Commit 5: post a review with message "message 2".
     addOneReview(changeId, "message 2");
-    // Commit 5: amend a new patch set.
+    // Commit 6: amend a new patch set.
     amendChange(changeId);
-    // Commit 6: approve the change.
-    setApiUser(admin);
+    // Commit 7: approve the change.
+    requestScopeOperations.setApiUser(admin.id());
     gApi.changes().id(changeId).current().review(ReviewInput.approve());
-    // commit 7: submit the change.
+    // commit 8: submit the change.
     gApi.changes().id(changeId).current().submit();
+
+    // Verifies there is only 7 change messages although there are 8 commits.
+    List<ChangeMessageInfo> messages = gApi.changes().id(changeId).messages();
+    assertThat(messages).hasSize(7);
 
     return result.getChange().getId().get();
   }
@@ -245,23 +269,24 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
     gApi.changes().id(changeId).current().review(reviewInput);
   }
 
+  private void addOneReviewWithEmptyChangeMessage(String changeId) throws Exception {
+    gApi.changes().id(changeId).current().review(new ReviewInput());
+  }
+
   private void deleteOneChangeMessage(
       int changeNum, int deletedMessageIndex, TestAccount deletedBy, String reason)
       throws Exception {
     List<ChangeMessageInfo> messagesBeforeDeletion = gApi.changes().id(changeNum).messages();
 
     List<CommentInfo> commentsBefore = getChangeSortedComments(changeNum);
-    List<RevCommit> commitsBefore = new ArrayList<>();
-    if (notesMigration.readChanges()) {
-      commitsBefore = getChangeMetaCommitsInReverseOrder(new Change.Id(changeNum));
-    }
+    List<RevCommit> commitsBefore = getChangeMetaCommitsInReverseOrder(new Change.Id(changeNum));
 
     String id = messagesBeforeDeletion.get(deletedMessageIndex).id;
     DeleteChangeMessageInput input = new DeleteChangeMessageInput(reason);
     ChangeMessageInfo info = gApi.changes().id(changeNum).message(id).delete(input);
 
     // Verify the return change message info is as expect.
-    assertThat(info.message).isEqualTo(createNewChangeMessage(deletedBy.fullName, reason));
+    assertThat(info.message).isEqualTo(createNewChangeMessage(deletedBy.fullName(), reason));
     List<ChangeMessageInfo> messagesAfterDeletion = gApi.changes().id(changeNum).messages();
     assertMessagesAfterDeletion(
         messagesBeforeDeletion, messagesAfterDeletion, deletedMessageIndex, deletedBy, reason);
@@ -271,11 +296,8 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
     List<ChangeInfo> changes = gApi.changes().query("message removed").get();
     assertThat(changes.stream().map(c -> c._number).collect(toSet())).contains(changeNum);
 
-    // Verifies states of commits if NoteDb is on.
-    if (notesMigration.readChanges()) {
-      assertMetaCommitsAfterDeletion(
-          commitsBefore, changeNum, deletedMessageIndex, deletedBy, reason);
-    }
+    // Verifies states of commits.
+    assertMetaCommitsAfterDeletion(commitsBefore, changeNum, id, deletedBy, reason);
   }
 
   private void assertMessagesAfterDeletion(
@@ -304,7 +326,7 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
 
       if (i == deletedMessageIndex) {
         assertThat(after.message)
-            .isEqualTo(createNewChangeMessage(deletedBy.fullName, deleteReason));
+            .isEqualTo(createNewChangeMessage(deletedBy.fullName(), deleteReason));
       } else {
         assertThat(after.message).isEqualTo(before.message);
       }
@@ -314,7 +336,7 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
   private void assertMetaCommitsAfterDeletion(
       List<RevCommit> commitsBeforeDeletion,
       int changeNum,
-      int deletedMessageIndex,
+      String deletedMessageId,
       TestAccount deletedBy,
       String deleteReason)
       throws Exception {
@@ -325,7 +347,7 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
     for (int i = 0; i < commitsBeforeDeletion.size(); i++) {
       RevCommit commitBefore = commitsBeforeDeletion.get(i);
       RevCommit commitAfter = commitsAfterDeletion.get(i);
-      if (i == deletedMessageIndex) {
+      if (commitBefore.getId().getName().equals(deletedMessageId)) {
         byte[] rawBefore = commitBefore.getRawBuffer();
         byte[] rawAfter = commitAfter.getRawBuffer();
         Charset encodingBefore = RawParseUtils.parseEncoding(rawBefore);
@@ -368,7 +390,7 @@ public class ChangeMessagesIT extends AbstractDaemonTest {
                 rawAfter,
                 rangeAfter.get().changeMessageStart(),
                 rangeAfter.get().changeMessageEnd() + 1);
-        assertThat(message).isEqualTo(createNewChangeMessage(deletedBy.fullName, deleteReason));
+        assertThat(message).isEqualTo(createNewChangeMessage(deletedBy.fullName(), deleteReason));
       } else {
         assertThat(commitAfter.getFullMessage()).isEqualTo(commitBefore.getFullMessage());
       }

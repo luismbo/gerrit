@@ -16,8 +16,8 @@ package com.google.gerrit.server.account.externalids;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.extensions.proto.ProtoTruth.assertThat;
+import static com.google.gerrit.proto.testing.SerializedClassSubject.assertThatSerializedClass;
 import static com.google.gerrit.server.cache.testing.CacheSerializerTestUtil.byteString;
-import static com.google.gerrit.server.cache.testing.SerializedClassSubject.assertThatSerializedClass;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSetMultimap;
@@ -25,12 +25,13 @@ import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.server.account.externalids.AllExternalIds.Serializer;
 import com.google.gerrit.server.cache.proto.Cache.AllExternalIdsProto;
 import com.google.gerrit.server.cache.proto.Cache.AllExternalIdsProto.ExternalIdProto;
+import com.google.gerrit.testing.GerritBaseTests;
 import com.google.inject.TypeLiteral;
 import java.util.Arrays;
 import org.eclipse.jgit.lib.ObjectId;
 import org.junit.Test;
 
-public class AllExternalIdsTest {
+public class AllExternalIdsTest extends GerritBaseTests {
   @Test
   public void serializeEmptyExternalIds() throws Exception {
     assertRoundTrip(allExternalIds(), AllExternalIdsProto.getDefaultInstance());

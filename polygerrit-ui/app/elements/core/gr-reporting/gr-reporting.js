@@ -69,6 +69,11 @@
     CATEGORY: 'exception',
   };
 
+  const ERROR_DIALOG = {
+    TYPE: 'error',
+    CATEGORY: 'Error Dialog',
+  };
+
   const TIMER = {
     CHANGE_DISPLAYED: 'ChangeDisplayed',
     CHANGE_LOAD_FULL: 'ChangeFullyLoaded',
@@ -139,6 +144,7 @@
   // eslint-disable-next-line prefer-const
   let GrReporting = Polymer({
     is: 'gr-reporting',
+    _legacyUndefinedCheck: true,
 
     properties: {
       category: String,
@@ -191,7 +197,7 @@
       };
       document.dispatchEvent(new CustomEvent(type, {detail}));
       if (opt_noLog) { return; }
-      if (type === ERROR.TYPE) {
+      if (type === ERROR.TYPE && category === ERROR.CATEGORY) {
         console.error(eventValue.error || eventName);
       } else {
         console.log(eventName + (eventValue !== undefined ?
@@ -210,7 +216,7 @@
      *     logged to the JS console.
      */
     cachingReporter(type, category, eventName, eventValue, opt_noLog) {
-      if (type === ERROR.TYPE) {
+      if (type === ERROR.TYPE && category === ERROR.CATEGORY) {
         console.error(eventValue.error || eventName);
       }
       if (this._arePluginsLoaded()) {
@@ -229,10 +235,8 @@
      * User-perceived app start time, should be reported when the app is ready.
      */
     appStarted(hidden) {
-      const startTime =
-          new Date().getTime() - this.performanceTiming.navigationStart;
       this.reporter(TIMING.TYPE, TIMING.CATEGORY_UI_LATENCY,
-          TIMING.APP_STARTED, startTime);
+          TIMING.APP_STARTED, this.now());
       if (hidden) {
         this.reporter(PAGE_VISIBILITY.TYPE, PAGE_VISIBILITY.CATEGORY,
             PAGE_VISIBILITY.STARTED_HIDDEN);
@@ -451,6 +455,11 @@
 
       // Mark the time and reinitialize the timer.
       timer.end().reset();
+    },
+
+    reportErrorDialog(message) {
+      this.reporter(ERROR_DIALOG.TYPE, ERROR_DIALOG.CATEGORY,
+          'ErrorDialog: ' + message);
     },
   });
 

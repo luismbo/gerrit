@@ -15,6 +15,7 @@
 package com.google.gerrit.server.extensions.events;
 
 import com.google.common.flogger.FluentLogger;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.common.AccountInfo;
 import com.google.gerrit.extensions.common.ChangeInfo;
@@ -24,11 +25,11 @@ import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.server.GpgException;
 import com.google.gerrit.server.account.AccountState;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.patch.PatchListNotAvailableException;
 import com.google.gerrit.server.patch.PatchListObjectTooLargeException;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.plugincontext.PluginSetContext;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import java.io.IOException;
@@ -46,7 +47,7 @@ public class RevisionCreated {
             PatchSet patchSet,
             AccountState uploader,
             Timestamp when,
-            NotifyHandling notify) {}
+            NotifyResolver.Result notify) {}
       };
 
   private final PluginSetContext<RevisionCreatedListener> listeners;
@@ -68,7 +69,7 @@ public class RevisionCreated {
       PatchSet patchSet,
       AccountState uploader,
       Timestamp when,
-      NotifyHandling notify) {
+      NotifyResolver.Result notify) {
     if (listeners.isEmpty()) {
       return;
     }
@@ -79,14 +80,14 @@ public class RevisionCreated {
               util.revisionInfo(change.getProject(), patchSet),
               util.accountInfo(uploader),
               when,
-              notify);
+              notify.handling());
       listeners.runEach(l -> l.onRevisionCreated(event));
     } catch (PatchListObjectTooLargeException e) {
       logger.atWarning().log("Couldn't fire event: %s", e.getMessage());
     } catch (PatchListNotAvailableException
         | GpgException
         | IOException
-        | OrmException
+        | StorageException
         | PermissionBackendException e) {
       logger.atSevere().withCause(e).log("Couldn't fire event");
     }

@@ -17,6 +17,7 @@ package com.google.gerrit.acceptance.server.mail;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.Iterables;
+import com.google.gerrit.acceptance.testsuite.account.AccountOperations;
 import com.google.gerrit.extensions.common.ChangeInfo;
 import com.google.gerrit.extensions.common.ChangeMessageInfo;
 import com.google.gerrit.extensions.common.CommentInfo;
@@ -33,6 +34,7 @@ import org.junit.Test;
 
 public class MailProcessorIT extends AbstractMailIT {
   @Inject private MailProcessor mailProcessor;
+  @Inject private AccountOperations accountOperations;
 
   @Test
   public void parseAndPersistChangeMessage() throws Exception {
@@ -163,16 +165,13 @@ public class MailProcessorIT extends AbstractMailIT {
     b.textContent(txt + textFooterForChange(changeInfo._number, ts));
 
     // Set account state to inactive
-    gApi.accounts().id("user").setActive(false);
+    accountOperations.account(user.id()).forUpdate().inactive().update();
 
     mailProcessor.process(b.build());
     comments = gApi.changes().id(changeId).current().commentsAsList();
 
     // Check that comment size has not changed
     assertThat(comments).hasSize(2);
-
-    // Reset
-    gApi.accounts().id("user").setActive(true);
   }
 
   @Test
@@ -190,7 +189,7 @@ public class MailProcessorIT extends AbstractMailIT {
         newPlaintextBody(getChangeUrl(changeInfo) + "/1", "Test Message", null, null, null);
     MailMessage.Builder b =
         messageBuilderWithDefaultFields()
-            .from(user.emailAddress)
+            .from(user.getEmailAddress())
             .textContent(txt + textFooterForChange(changeInfo._number, ts));
 
     sender.clear();
@@ -212,7 +211,7 @@ public class MailProcessorIT extends AbstractMailIT {
         newPlaintextBody(getChangeUrl(changeInfo) + "/1", "Test Message", null, null, null);
     MailMessage.Builder b =
         messageBuilderWithDefaultFields()
-            .from(user.emailAddress)
+            .from(user.getEmailAddress())
             .textContent(txt + textFooterForChange(changeInfo._number, ts));
 
     sender.clear();

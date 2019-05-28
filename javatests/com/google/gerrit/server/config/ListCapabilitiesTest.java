@@ -16,15 +16,18 @@ package com.google.gerrit.server.config;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.gerrit.common.data.GlobalCapability;
 import com.google.gerrit.extensions.annotations.Exports;
 import com.google.gerrit.extensions.config.CapabilityDefinition;
+import com.google.gerrit.extensions.config.PluginProjectPermissionDefinition;
 import com.google.gerrit.extensions.registration.DynamicMap;
-import com.google.gerrit.reviewdb.client.Account.Id;
+import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.restapi.config.ListCapabilities;
 import com.google.gerrit.server.restapi.config.ListCapabilities.CapabilityInfo;
+import com.google.gerrit.testing.GerritBaseTests;
 import com.google.inject.AbstractModule;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
@@ -33,7 +36,7 @@ import java.util.Map;
 import org.junit.Before;
 import org.junit.Test;
 
-public class ListCapabilitiesTest {
+public class ListCapabilitiesTest extends GerritBaseTests {
   private Injector injector;
 
   @Before
@@ -43,8 +46,18 @@ public class ListCapabilitiesTest {
           @Override
           protected void configure() {
             DynamicMap.mapOf(binder(), CapabilityDefinition.class);
+            DynamicMap.mapOf(binder(), PluginProjectPermissionDefinition.class);
             bind(CapabilityDefinition.class)
-                .annotatedWith(Exports.named("printHello"))
+                .annotatedWith(Exports.named("foo"))
+                .toInstance(
+                    new CapabilityDefinition() {
+                      @Override
+                      public String getDescription() {
+                        return "Print Hello";
+                      }
+                    });
+            bind(CapabilityDefinition.class)
+                .annotatedWith(Exports.named("bar"))
                 .toInstance(
                     new CapabilityDefinition() {
                       @Override
@@ -68,10 +81,11 @@ public class ListCapabilitiesTest {
       assertThat(m.get(id).name).isNotNull();
     }
 
-    String pluginCapability = "gerrit-printHello";
-    assertThat(m).containsKey(pluginCapability);
-    assertThat(m.get(pluginCapability).id).isEqualTo(pluginCapability);
-    assertThat(m.get(pluginCapability).name).isEqualTo("Print Hello");
+    for (String pluginCapability : ImmutableSet.of("gerrit-foo", "gerrit-bar")) {
+      assertThat(m).containsKey(pluginCapability);
+      assertThat(m.get(pluginCapability).id).isEqualTo(pluginCapability);
+      assertThat(m.get(pluginCapability).name).isEqualTo("Print Hello");
+    }
   }
 
   @Singleton
@@ -87,7 +101,7 @@ public class ListCapabilitiesTest {
     }
 
     @Override
-    public WithUser absentUser(Id id) {
+    public WithUser absentUser(Account.Id id) {
       throw new UnsupportedOperationException();
     }
 

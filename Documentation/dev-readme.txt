@@ -93,6 +93,7 @@ To create more accounts on your development instance:
 .  Click 'become' in the upper right corner.
 .  Select 'Switch User'.
 .  Register a new account.
+.  link:user-upload.html#ssh[Configure your SSH key].
 
 Use the `ssh` protocol to clone from and push to the local server. For
 example, to clone a repository that you've created through the admin
@@ -186,27 +187,6 @@ interfaces (including HTTP and SSH) are available.
 
 CAUTION: When using the Inspector, be careful not to modify the internal state
 of the system.
-
-=== Querying the database
-
-The embedded H2 database can be queried and updated from the command line. If
-the daemon is not running, run:
-
-----
-  $(bazel info output_base)/external/local_jdk/bin/java \
-     -jar bazel-bin/gerrit.war gsql -d ../gerrit_testsite -s
-----
-
-NOTE: To learn why using `java -jar` isn't sufficient, see
-<<special_bazel_java_version,this explanation>>.
-
-Alternatively, if the daemon is running and the database is in use, use an
-administrator user account to connect over SSH:
-
-----
-  ssh -p 29418 user@localhost gerrit gsql
-----
-
 
 == Switching between branches
 

@@ -30,7 +30,6 @@ import com.google.gerrit.server.git.MergeTip;
 import com.google.gerrit.server.project.NoSuchChangeException;
 import com.google.gerrit.server.update.ChangeContext;
 import com.google.gerrit.server.update.RepoContext;
-import com.google.gwtorm.server.OrmException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -91,14 +90,14 @@ public class CherryPick extends SubmitStrategy {
 
     @Override
     protected void updateRepoImpl(RepoContext ctx)
-        throws IntegrationException, IOException, OrmException, MethodNotAllowedException {
+        throws IntegrationException, IOException, MethodNotAllowedException {
       // If there is only one parent, a cherry-pick can be done by taking the
       // delta relative to that one parent and redoing that on the current merge
       // tip.
       args.rw.parseBody(toMerge);
       psId =
-          ChangeUtil.nextPatchSetIdFromChangeRefsMap(
-              ctx.getRepoView().getRefs(getId().toRefPrefix()),
+          ChangeUtil.nextPatchSetIdFromChangeRefs(
+              ctx.getRepoView().getRefs(getId().toRefPrefix()).keySet(),
               toMerge.change().currentPatchSetId());
       RevCommit mergeTip = args.mergeTip.getCurrentTip();
       args.rw.parseBody(mergeTip);
@@ -147,8 +146,7 @@ public class CherryPick extends SubmitStrategy {
     }
 
     @Override
-    public PatchSet updateChangeImpl(ChangeContext ctx)
-        throws OrmException, NoSuchChangeException, IOException {
+    public PatchSet updateChangeImpl(ChangeContext ctx) throws NoSuchChangeException, IOException {
       if (newCommit == null && toMerge.getStatusCode() == SKIPPED_IDENTICAL_TREE) {
         return null;
       }
@@ -158,15 +156,14 @@ public class CherryPick extends SubmitStrategy {
               String.format(
                   "no new commit produced by CherryPick of %s, expected to fail fast",
                   toMerge.change().getId()));
-      PatchSet prevPs = args.psUtil.current(ctx.getDb(), ctx.getNotes());
+      PatchSet prevPs = args.psUtil.current(ctx.getNotes());
       PatchSet newPs =
           args.psUtil.insert(
-              ctx.getDb(),
               ctx.getRevWalk(),
               ctx.getUpdate(psId),
               psId,
               newCommit,
-              prevPs != null ? prevPs.getGroups() : ImmutableList.<String>of(),
+              prevPs != null ? prevPs.getGroups() : ImmutableList.of(),
               null,
               null);
       ctx.getChange().setCurrentPatchSet(patchSetInfo);

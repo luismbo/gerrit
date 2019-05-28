@@ -24,16 +24,13 @@ import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.MoreObjects;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Streams;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.FooterConstants;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.LabelTypes;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
-import com.google.gerrit.extensions.api.changes.RecipientType;
 import com.google.gerrit.extensions.client.ReviewerState;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.RestApiException;
@@ -45,7 +42,6 @@ import com.google.gerrit.reviewdb.client.ChangeMessage;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
 import com.google.gerrit.reviewdb.client.PatchSetInfo;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.ChangeMessagesUtil;
 import com.google.gerrit.server.PatchSetUtil;
@@ -72,7 +68,6 @@ import com.google.gerrit.server.update.Context;
 import com.google.gerrit.server.update.InsertChangeOp;
 import com.google.gerrit.server.update.RepoContext;
 import com.google.gerrit.server.util.RequestScopePropagator;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.assistedinject.Assisted;
 import java.io.IOException;
@@ -124,8 +119,6 @@ public class ChangeInserter implements InsertChangeOp {
   private boolean workInProgress;
   private List<String> groups = Collections.emptyList();
   private boolean validate = true;
-  private NotifyHandling notify = NotifyHandling.ALL;
-  private ListMultimap<RecipientType, Account.Id> accountsToNotify = ImmutableListMultimap.of();
   private Map<String, Short> approvals;
   private RequestScopePropagator requestScopePropagator;
   private boolean fireRevisionCreated;
@@ -256,17 +249,6 @@ public class ChangeInserter implements InsertChangeOp {
     return this;
   }
 
-  public ChangeInserter setNotify(NotifyHandling notify) {
-    this.notify = notify;
-    return this;
-  }
-
-  public ChangeInserter setAccountsToNotify(
-      ListMultimap<RecipientType, Account.Id> accountsToNotify) {
-    this.accountsToNotify = requireNonNull(accountsToNotify);
-    return this;
-  }
-
   public ChangeInserter setReviewersAndCcs(
       Iterable<Account.Id> reviewers, Iterable<Account.Id> ccs) {
     return setReviewersAndCcsAsStrings(
@@ -386,10 +368,8 @@ public class ChangeInserter implements InsertChangeOp {
 
   @Override
   public boolean updateChange(ChangeContext ctx)
-      throws RestApiException, OrmException, IOException, PermissionBackendException,
-          ConfigInvalidException {
+      throws RestApiException, IOException, PermissionBackendException, ConfigInvalidException {
     change = ctx.getChange(); // Use defensive copy created by ChangeControl.
-    ReviewDb db = ctx.getDb();
     patchSetInfo =
         patchSetInfoFactory.get(ctx.getRevWalk(), ctx.getRevWalk().parseCommit(commitId), psId);
     ctx.getChange().setCurrentPatchSet(patchSetInfo);
@@ -412,14 +392,7 @@ public class ChangeInserter implements InsertChangeOp {
     }
     patchSet =
         psUtil.insert(
-            ctx.getDb(),
-            ctx.getRevWalk(),
-            update,
-            psId,
-            commitId,
-            newGroups,
-            pushCert,
-            patchSetDescription);
+            ctx.getRevWalk(), update, psId, commitId, newGroups, pushCert, patchSetDescription);
 
     /* TODO: fixStatus is used here because the tests
      * (byStatusClosed() in AbstractQueryChangesTest)
@@ -432,8 +405,7 @@ public class ChangeInserter implements InsertChangeOp {
     update.fixStatus(change.getStatus());
 
     reviewerAdditions =
-        reviewerAdder.prepare(
-            ctx.getDb(), ctx.getNotes(), ctx.getUser(), getReviewerInputs(), true);
+        reviewerAdder.prepare(ctx.getNotes(), ctx.getUser(), getReviewerInputs(), true);
     Optional<ReviewerAddition> reviewerError = reviewerAdditions.getFailures().stream().findFirst();
     if (reviewerError.isPresent()) {
       throw new UnprocessableEntityException(reviewerError.get().result.error);
@@ -442,7 +414,7 @@ public class ChangeInserter implements InsertChangeOp {
 
     LabelTypes labelTypes = projectState.getLabelTypes();
     approvalsUtil.addApprovalsForNewPatchSet(
-        db, update, labelTypes, patchSet, ctx.getUser(), approvals);
+        update, labelTypes, patchSet, ctx.getUser(), approvals);
 
     // Check if approvals are changing in with this update. If so, add current user to reviewers.
     // Note that this is done separately as addReviewers is filtering out the change owner as
@@ -459,7 +431,7 @@ public class ChangeInserter implements InsertChangeOp {
               patchSet.getCreatedOn(),
               message,
               ChangeMessagesUtil.uploadedPatchSetTag(workInProgress));
-      cmUtil.addChangeMessage(db, update, changeMessage);
+      cmUtil.addChangeMessage(update, changeMessage);
     }
     return true;
   }
@@ -467,7 +439,8 @@ public class ChangeInserter implements InsertChangeOp {
   @Override
   public void postUpdate(Context ctx) throws Exception {
     reviewerAdditions.postUpdate(ctx);
-    if (sendMail && (notify != NotifyHandling.NONE || !accountsToNotify.isEmpty())) {
+    NotifyResolver.Result notify = ctx.getNotify(change.getId());
+    if (sendMail && notify.shouldNotify()) {
       Runnable sender =
           new Runnable() {
             @Override
@@ -478,7 +451,6 @@ public class ChangeInserter implements InsertChangeOp {
                 cm.setFrom(change.getOwner());
                 cm.setPatchSet(patchSet, patchSetInfo);
                 cm.setNotify(notify);
-                cm.setAccountsToNotify(accountsToNotify);
                 cm.addReviewers(
                     reviewerAdditions.flattenResults(AddReviewersOp.Result::addedReviewers).stream()
                         .map(PatchSetApproval::getAccountId)

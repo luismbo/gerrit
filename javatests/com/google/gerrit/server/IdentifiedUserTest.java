@@ -25,12 +25,13 @@ import com.google.gerrit.server.account.Realm;
 import com.google.gerrit.server.config.AnonymousCowardName;
 import com.google.gerrit.server.config.AnonymousCowardNameProvider;
 import com.google.gerrit.server.config.CanonicalWebUrl;
-import com.google.gerrit.server.config.DisableReverseDnsLookup;
+import com.google.gerrit.server.config.EnableReverseDnsLookup;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.group.SystemGroupBackend;
 import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gerrit.testing.ConfigSuite;
 import com.google.gerrit.testing.FakeAccountCache;
+import com.google.gerrit.testing.GerritBaseTests;
 import com.google.inject.AbstractModule;
 import com.google.inject.Guice;
 import com.google.inject.Inject;
@@ -44,7 +45,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 @RunWith(ConfigSuite.class)
-public class IdentifiedUserTest {
+public class IdentifiedUserTest extends GerritBaseTests {
   @ConfigSuite.Parameter public Config config;
 
   private IdentifiedUser identifiedUser;
@@ -80,8 +81,8 @@ public class IdentifiedUserTest {
           @Override
           protected void configure() {
             bind(Boolean.class)
-                .annotatedWith(DisableReverseDnsLookup.class)
-                .toInstance(Boolean.FALSE);
+                .annotatedWith(EnableReverseDnsLookup.class)
+                .toInstance(Boolean.TRUE);
             bind(Config.class).annotatedWith(GerritServerConfig.class).toInstance(config);
             bind(String.class)
                 .annotatedWith(AnonymousCowardName.class)

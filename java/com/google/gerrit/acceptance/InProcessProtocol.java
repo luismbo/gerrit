@@ -21,14 +21,12 @@ import com.google.gerrit.extensions.registration.DynamicSet;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.AccessPath;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.RemotePeer;
 import com.google.gerrit.server.RequestCleanup;
 import com.google.gerrit.server.config.GerritRequestModule;
-import com.google.gerrit.server.config.RequestScopedReviewDbProvider;
 import com.google.gerrit.server.git.DefaultAdvertiseRefsHook;
 import com.google.gerrit.server.git.ReceivePackInitializer;
 import com.google.gerrit.server.git.TransferConfig;
@@ -39,13 +37,13 @@ import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackend.RefFilterOptions;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.permissions.ProjectPermission;
+import com.google.gerrit.server.plugincontext.PluginSetContext;
 import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.util.RequestContext;
 import com.google.gerrit.server.util.RequestScopePropagator;
 import com.google.gerrit.server.util.ThreadLocalRequestContext;
 import com.google.gerrit.server.util.ThreadLocalRequestScopePropagator;
-import com.google.gwtorm.server.SchemaFactory;
 import com.google.inject.AbstractModule;
 import com.google.inject.Inject;
 import com.google.inject.Key;
@@ -55,7 +53,6 @@ import com.google.inject.Provider;
 import com.google.inject.Provides;
 import com.google.inject.Scope;
 import com.google.inject.servlet.RequestScoped;
-import com.google.inject.util.Providers;
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.util.HashMap;
@@ -122,10 +119,8 @@ class InProcessProtocol extends TestProtocol<Context> {
 
   private static class Propagator extends ThreadLocalRequestScopePropagator<Context> {
     @Inject
-    Propagator(
-        ThreadLocalRequestContext local,
-        Provider<RequestScopedReviewDbProvider> dbProviderProvider) {
-      super(REQUEST, current, local, dbProviderProvider);
+    Propagator(ThreadLocalRequestContext local) {
+      super(REQUEST, current, local);
     }
 
     @Override
@@ -150,12 +145,9 @@ class InProcessProtocol extends TestProtocol<Context> {
    * request.
    */
   static class Context implements RequestContext {
-    private static final Key<RequestScopedReviewDbProvider> DB_KEY =
-        Key.get(RequestScopedReviewDbProvider.class);
     private static final Key<RequestCleanup> RC_KEY = Key.get(RequestCleanup.class);
     private static final Key<CurrentUser> USER_KEY = Key.get(CurrentUser.class);
 
-    private final SchemaFactory<ReviewDb> schemaFactory;
     private final IdentifiedUser.GenericFactory userFactory;
     private final Account.Id accountId;
     private final Project.NameKey project;
@@ -163,17 +155,12 @@ class InProcessProtocol extends TestProtocol<Context> {
     private final Map<Key<?>, Object> map;
 
     Context(
-        SchemaFactory<ReviewDb> schemaFactory,
-        IdentifiedUser.GenericFactory userFactory,
-        Account.Id accountId,
-        Project.NameKey project) {
-      this.schemaFactory = schemaFactory;
+        IdentifiedUser.GenericFactory userFactory, Account.Id accountId, Project.NameKey project) {
       this.userFactory = userFactory;
       this.accountId = accountId;
       this.project = project;
       map = new HashMap<>();
       cleanup = new RequestCleanup();
-      map.put(DB_KEY, new RequestScopedReviewDbProvider(schemaFactory, Providers.of(cleanup)));
       map.put(RC_KEY, cleanup);
 
       IdentifiedUser user = userFactory.create(accountId);
@@ -182,17 +169,12 @@ class InProcessProtocol extends TestProtocol<Context> {
     }
 
     private Context newContinuingContext() {
-      return new Context(schemaFactory, userFactory, accountId, project);
+      return new Context(userFactory, accountId, project);
     }
 
     @Override
     public CurrentUser getUser() {
       return get(USER_KEY, null);
-    }
-
-    @Override
-    public Provider<ReviewDb> getReviewDbProvider() {
-      return get(DB_KEY, null);
     }
 
     private synchronized <T> T get(Key<T> key, Provider<T> creator) {
@@ -208,7 +190,7 @@ class InProcessProtocol extends TestProtocol<Context> {
 
   private static class Upload implements UploadPackFactory<Context> {
     private final TransferConfig transferConfig;
-    private final DynamicSet<UploadPackInitializer> uploadPackInitializers;
+    private final PluginSetContext<UploadPackInitializer> uploadPackInitializers;
     private final DynamicSet<PreUploadHook> preUploadHooks;
     private final UploadValidators.Factory uploadValidatorsFactory;
     private final ThreadLocalRequestContext threadContext;
@@ -218,7 +200,7 @@ class InProcessProtocol extends TestProtocol<Context> {
     @Inject
     Upload(
         TransferConfig transferConfig,
-        DynamicSet<UploadPackInitializer> uploadPackInitializers,
+        PluginSetContext<UploadPackInitializer> uploadPackInitializers,
         DynamicSet<PreUploadHook> preUploadHooks,
         UploadValidators.Factory uploadValidatorsFactory,
         ThreadLocalRequestContext threadContext,
@@ -267,9 +249,7 @@ class InProcessProtocol extends TestProtocol<Context> {
       List<PreUploadHook> hooks = Lists.newArrayList(preUploadHooks);
       hooks.add(uploadValidatorsFactory.create(projectState.getProject(), repo, "localhost-test"));
       up.setPreUploadHook(PreUploadHookChain.newChain(hooks));
-      for (UploadPackInitializer initializer : uploadPackInitializers) {
-        initializer.init(req.project, up);
-      }
+      uploadPackInitializers.runEach(initializer -> initializer.init(req.project, up));
       return up;
     }
   }
@@ -279,7 +259,7 @@ class InProcessProtocol extends TestProtocol<Context> {
     private final ProjectCache projectCache;
     private final AsyncReceiveCommits.Factory factory;
     private final TransferConfig config;
-    private final DynamicSet<ReceivePackInitializer> receivePackInitializers;
+    private final PluginSetContext<ReceivePackInitializer> receivePackInitializers;
     private final DynamicSet<PostReceiveHook> postReceiveHooks;
     private final ThreadLocalRequestContext threadContext;
     private final PermissionBackend permissionBackend;
@@ -290,7 +270,7 @@ class InProcessProtocol extends TestProtocol<Context> {
         ProjectCache projectCache,
         AsyncReceiveCommits.Factory factory,
         TransferConfig config,
-        DynamicSet<ReceivePackInitializer> receivePackInitializers,
+        PluginSetContext<ReceivePackInitializer> receivePackInitializers,
         DynamicSet<PostReceiveHook> postReceiveHooks,
         ThreadLocalRequestContext threadContext,
         PermissionBackend permissionBackend) {
@@ -339,9 +319,8 @@ class InProcessProtocol extends TestProtocol<Context> {
         rp.setTimeout(config.getTimeout());
         rp.setMaxObjectSizeLimit(config.getMaxObjectSizeLimit());
 
-        for (ReceivePackInitializer initializer : receivePackInitializers) {
-          initializer.init(projectState.getNameKey(), rp);
-        }
+        receivePackInitializers.runEach(
+            initializer -> initializer.init(projectState.getNameKey(), rp));
 
         rp.setPostReceiveHook(PostReceiveHookChain.newChain(Lists.newArrayList(postReceiveHooks)));
         return rp;

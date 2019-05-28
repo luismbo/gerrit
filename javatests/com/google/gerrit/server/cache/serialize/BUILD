@@ -6,8 +6,9 @@ junit_tests(
     deps = [
         "//java/com/google/gerrit/server/cache/serialize",
         "//java/com/google/gerrit/server/cache/testing",
+        "//java/com/google/gerrit/testing:gerrit-test-util",
+        "//java/com/google/gwtorm",
         "//lib:guava",
-        "//lib:gwtorm",
         "//lib:junit",
         "//lib:protobuf",
         "//lib/auto:auto-value",
@@ -16,5 +17,6 @@ junit_tests(
         "//lib/truth",
         "//lib/truth:truth-proto-extension",
         "//proto:cache_java_proto",
+        "//proto/testing:test_java_proto",
     ],
 )

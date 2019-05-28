@@ -23,10 +23,12 @@ that ultimately timed out
 === Pushes
 
 * `receivecommits/changes`: histogram of number of changes processed
-in a single upload, split up by update type (new change created,
-existing changed updated, change autoclosed).
+in a single upload, split up by update type (change created/updated,
+change autoclosed).
 * `receivecommits/latency`: latency per change for processing a push,
 split up by update type (create+replace, and autoclose)
+* `receivecommits/push_latency`: total latency for processing a push,
+split up by update type (create+replace, autoclose, normal)
 * `receivecommits/timeout`: number of timeouts during push processing.
 
 === Process
@@ -106,10 +108,6 @@ Each queue provides the following metrics:
 * `sshd/sessions/created`: Rate of new SSH sessions.
 * `sshd/sessions/authentication_failures`: Rate of SSH authentication failures.
 
-=== SQL connections
-
-* `sql/connection_pool/connections`: SQL database connections.
-
 === Topics
 
 * `topic/cross_project_submit`: number of cross-project topic submissions.
@@ -140,9 +138,6 @@ excluding reindexing
 * `notedb/stage_update_latency`: Latency for staging updates to NoteDb by table.
 * `notedb/read_latency`: NoteDb read latency by table.
 * `notedb/parse_latency`: NoteDb parse latency by table.
-* `notedb/auto_rebuild_latency`: NoteDb auto-rebuilding latency by table.
-* `notedb/auto_rebuild_failure_count`: NoteDb auto-rebuilding attempts that
-failed by table.
 * `notedb/external_id_update_count`: Total number of external ID updates.
 * `notedb/read_all_external_ids_latency`: Latency for reading all
 external ID's from NoteDb.
@@ -176,6 +171,10 @@ suggestion.
 
 * `plugin/latency`: Latency for plugin invocation.
 * `plugin/error_count`: Number of plugin errors.
+
+=== Group
+
+* `group/guess_relevant_groups_latency`: Latency for guessing relevant groups.
 
 === Replication Plugin
 

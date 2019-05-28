@@ -19,7 +19,6 @@ junit_tests(
         "//java/com/google/gerrit/server/schema",
         "//java/com/google/gerrit/testing:gerrit-test-util",
         "//lib:guava",
-        "//lib:gwtorm",
         "//lib/bouncycastle:bcpg",
         "//lib/bouncycastle:bcpg-neverlink",
         "//lib/bouncycastle:bcprov",

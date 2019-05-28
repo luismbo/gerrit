@@ -15,10 +15,8 @@
 package com.google.gerrit.metrics.proc;
 
 import com.google.common.base.Strings;
-import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableSet;
 import com.google.gerrit.common.Version;
-import com.google.gerrit.metrics.CallbackMetric;
 import com.google.gerrit.metrics.CallbackMetric0;
 import com.google.gerrit.metrics.CallbackMetric1;
 import com.google.gerrit.metrics.Description;
@@ -75,12 +73,7 @@ public class ProcMetricModule extends MetricModule {
           "proc/cpu/usage",
           Double.class,
           new Description("CPU time used by the process").setCumulative().setUnit(Units.SECONDS),
-          new Supplier<Double>() {
-            @Override
-            public Double get() {
-              return provider.getProcessCpuTime() / 1e9;
-            }
-          });
+          () -> provider.getProcessCpuTime() / 1e9);
     }
 
     if (provider.getOpenFileDescriptorCount() != -1) {
@@ -135,7 +128,7 @@ public class ProcMetricModule extends MetricModule {
 
     MemoryMXBean memory = ManagementFactory.getMemoryMXBean();
     metrics.newTrigger(
-        ImmutableSet.<CallbackMetric<?>>of(
+        ImmutableSet.of(
             heapCommitted, heapUsed, nonHeapCommitted, nonHeapUsed, objectPendingFinalizationCount),
         () -> {
           try {

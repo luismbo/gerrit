@@ -6,7 +6,7 @@
 To build Gerrit from source, you need:
 
 * A Linux or macOS system (Windows is not supported at this time)
-* A JDK for Java 8|9|10
+* A JDK for Java 8|9|10|11|...
 * Python 2 or 3
 * Node.js
 * link:https://www.bazel.io/versions/master/docs/install.html[Bazel]
@@ -14,31 +14,66 @@ To build Gerrit from source, you need:
 * zip, unzip
 * gcc
 
-[[Java 10 support]]
-Java 10 is supported through vanilla java toolchain
+[[java]]
+=== Java
+
+[[java-10]]
+==== Java 10 support
+
+Java 10 (and newer) is supported through vanilla java toolchain
 link:https://docs.bazel.build/versions/master/toolchains.html[Bazel option].
-To build Gerrit with Java 10, specify vanilla java toolchain and provide
-path to Java 10 home:
+To build Gerrit with Java 10 and newer, specify vanilla java toolchain and
+provide the path to JDK home:
 
 ```
-  $ bazel build --host_javabase=:absolute_javabase \
+  $ bazel build \
     --define=ABSOLUTE_JAVABASE=<path-to-java-10> \
-    --define=USE_ABSOLUTE_JAVABASE=true \
-    --host_java_toolchain=//:toolchain_vanilla \
-    --java_toolchain=//:toolchain_vanilla \
+    --host_javabase=@bazel_tools//tools/jdk:absolute_javabase \
+    --host_java_toolchain=@bazel_tools//tools/jdk:toolchain_vanilla \
+    --java_toolchain=@bazel_tools//tools/jdk:toolchain_vanilla \
     :release
 ```
 
-Note that the following options must be added to `container.javaOptions`
-in `$gerrit_site/etc/gerrit.config` to run Gerrit with Java 10:
+To run the tests, `--javabase` option must be passed as well, because
+bazel test runs the test using the target javabase:
+
+```
+  $ bazel test \
+    --define=ABSOLUTE_JAVABASE=<path-to-java-10> \
+    --javabase=@bazel_tools//tools/jdk:absolute_javabase \
+    --host_javabase=@bazel_tools//tools/jdk:absolute_javabase \
+    --host_java_toolchain=@bazel_tools//tools/jdk:toolchain_vanilla \
+    --java_toolchain=@bazel_tools//tools/jdk:toolchain_vanilla \
+    //...
+```
+
+To avoid passing all those options on every Bazel build invocation,
+they could be added to ~/.bazelrc resource file:
+
+```
+$ cat << EOF > ~/.bazelrc
+> build --define=ABSOLUTE_JAVABASE=<path-to-java-10>
+> build --javabase=@bazel_tools//tools/jdk:absolute_javabase
+> build --host_javabase=@bazel_tools//tools/jdk:absolute_javabase
+> build --host_java_toolchain=@bazel_tools//tools/jdk:toolchain_vanilla
+> build --java_toolchain=@bazel_tools//tools/jdk:toolchain_vanilla
+> EOF
+```
+
+Now, invoking Bazel with just `bazel build :release` would include
+all those options.
+
+Note that the follow option must be added to `container.javaOptions`
+in `$gerrit_site/etc/gerrit.config` to run Gerrit with Java 10|11|...:
 
 ```
 [container]
-  javaOptions = --add-modules java.activation
   javaOptions = --add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED
 ```
 
-[[Java 9 support]]
+[[java-9]]
+==== Java 9 support
+
 Java 9 is supported through alternative java toolchain
 link:https://docs.bazel.build/versions/master/toolchains.html[Bazel option].
 The Java 9 support is backwards compatible. Java 8 is still the default.
@@ -51,13 +86,12 @@ To build Gerrit with Java 9, specify JDK 9 java toolchain:
       :release
 ```
 
-Note that the following option must be added to `container.javaOptions`
+Note that the follow option must be added to `container.javaOptions`
 in `$gerrit_site/etc/gerrit.config` to run Gerrit with Java 9:
 
 ```
 [container]
-  javaOptions = --add-modules java.activation \
-      --add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED
+  javaOptions = --add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED
 ```
 
 [[build]]
@@ -65,7 +99,7 @@ in `$gerrit_site/etc/gerrit.config` to run Gerrit with Java 9:
 
 === Gerrit Development WAR File
 
-To build the Gerrit web application that includes the PolyGerrit UI:
+To build the Gerrit web application:
 
 ----
   bazel build gerrit
@@ -84,8 +118,8 @@ The output executable WAR will be placed in:
 [[release]]
 === Gerrit Release WAR File
 
-To build the Gerrit web application that includes the GWT UI, the
-PolyGerrit UI, core plugins and documentation:
+To build the Gerrit web application that includes the PolyGerrit UI,
+core plugins and documentation:
 
 ----
   bazel build release
@@ -99,7 +133,7 @@ The output executable WAR will be placed in:
 
 === Headless Mode
 
-To build Gerrit in headless mode, i.e. without the PolyGerrit and GWT
+To build Gerrit in headless mode, i.e. without the PolyGerrit UI:
 Web UI:
 
 ----
@@ -114,7 +148,7 @@ The output executable WAR will be placed in:
 
 === Extension and Plugin API JAR Files
 
-To build the extension, plugin and GWT API JAR files:
+To build the extension, plugin and acceptance-framework JAR files:
 
 ----
   bazel build api
@@ -127,7 +161,8 @@ Java docs will be placed in:
   bazel-genfiles/api.zip
 ----
 
-Install {extension,plugin,gwt}-api to the local maven repository:
+Install {extension,plugin,acceptance-framework}-api to the local
+maven repository:
 
 ----
   tools/maven/api.sh install
@@ -256,31 +291,6 @@ To run a specific test group, e.g. the rest-account test group:
 
 ----
   bazel test //javatests/com/google/gerrit/acceptance/rest/account:rest_account
-----
-
-To run the tests against NoteDb backend with write
-to NoteDb, but not read from it:
-
-----
-  bazel test --test_env=GERRIT_NOTEDB=WRITE //...
-----
-
-Write and read from NoteDb:
-
-----
-  bazel test --test_env=GERRIT_NOTEDB=READ_WRITE //...
-----
-
-Primary storage NoteDb:
-
-----
-  bazel test --test_env=GERRIT_NOTEDB=PRIMARY //...
-----
-
-Primary storage NoteDb and ReviewDb disabled:
-
-----
-  bazel test --test_env=GERRIT_NOTEDB=ON //...
 ----
 
 To run only tests that do not use SSH:
@@ -530,6 +540,43 @@ Finally, add the new binary to the build process:
 
 To use the binary from the Bazel build, you need to use the `run_npm_binary.py`
 wrapper script. For an example, see the use of `crisper` in `tools/bzl/js.bzl`.
+
+
+
+[[RBE]]
+== Google Remote Build Support
+
+The Bazel build can be used with Google's Remote Build Execution.
+
+
+This needs the following setup steps:
+
+```
+gcloud auth application-default login
+gcloud services enable remotebuildexecution.googleapis.com  --project=${PROJECT}
+```
+
+Create a worker pool. The instances should have at least 4 CPUs each
+for adequate performance.
+
+```
+gcloud alpha remote-build-execution worker-pools create default \
+    --project=${PROJECT} \
+    --instance=default_instance \
+    --worker-count=50 \
+    --machine-type=n1-highcpu-4 \
+    --disk-size=200
+```
+
+To use RBE, execute
+
+```
+bazel test --config=remote \
+    --remote_instance_name=projects/${PROJECT}/instances/default_instance \
+    javatests/...
+```
+
+
 
 
 GERRIT

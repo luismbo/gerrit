@@ -95,7 +95,7 @@ public class Init extends BaseInit {
   }
 
   public Init(Path sitePath) {
-    super(sitePath, true, true, new WarDistribution(), null);
+    super(sitePath, true, new WarDistribution(), null);
     batchMode = true;
     noAutoStart = true;
   }
@@ -144,7 +144,9 @@ public class Init extends BaseInit {
         });
     modules.add(new GerritServerConfigModule());
     Guice.createInjector(modules).injectMembers(this);
-    reindexProjects();
+    if (!run.flags.cfg.getBoolean("container", "slave", false)) {
+      reindexProjects();
+    }
     start(run);
   }
 
@@ -190,7 +192,7 @@ public class Init extends BaseInit {
 
   @Override
   protected List<String> getSkippedDownloads() {
-    return skippedDownloads != null ? skippedDownloads : Collections.<String>emptyList();
+    return skippedDownloads != null ? skippedDownloads : Collections.emptyList();
   }
 
   @Override

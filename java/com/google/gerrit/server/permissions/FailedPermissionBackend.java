@@ -14,10 +14,10 @@
 
 package com.google.gerrit.server.permissions;
 
+import com.google.gerrit.extensions.api.access.CoreOrPluginProjectPermission;
 import com.google.gerrit.extensions.api.access.GlobalOrPluginPermission;
 import com.google.gerrit.extensions.conditions.BooleanCondition;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.permissions.PermissionBackend.ForChange;
 import com.google.gerrit.server.permissions.PermissionBackend.ForProject;
@@ -25,7 +25,6 @@ import com.google.gerrit.server.permissions.PermissionBackend.ForRef;
 import com.google.gerrit.server.permissions.PermissionBackend.RefFilterOptions;
 import com.google.gerrit.server.permissions.PermissionBackend.WithUser;
 import com.google.gerrit.server.query.change.ChangeData;
-import com.google.inject.Provider;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
@@ -115,11 +114,6 @@ public class FailedPermissionBackend {
     }
 
     @Override
-    public ForProject database(Provider<ReviewDb> db) {
-      return this;
-    }
-
-    @Override
     public String resourcePath() {
       throw new UnsupportedOperationException(
           "FailedPermissionBackend is not scoped to a resource");
@@ -131,18 +125,18 @@ public class FailedPermissionBackend {
     }
 
     @Override
-    public void check(ProjectPermission perm) throws PermissionBackendException {
+    public void check(CoreOrPluginProjectPermission perm) throws PermissionBackendException {
       throw new PermissionBackendException(message, cause);
     }
 
     @Override
-    public Set<ProjectPermission> test(Collection<ProjectPermission> permSet)
+    public <T extends CoreOrPluginProjectPermission> Set<T> test(Collection<T> permSet)
         throws PermissionBackendException {
       throw new PermissionBackendException(message, cause);
     }
 
     @Override
-    public BooleanCondition testCond(ProjectPermission perm) {
+    public BooleanCondition testCond(CoreOrPluginProjectPermission perm) {
       throw new UnsupportedOperationException(
           "FailedPermissionBackend does not support conditions");
     }
@@ -161,11 +155,6 @@ public class FailedPermissionBackend {
     FailedRef(String message, Throwable cause) {
       this.message = message;
       this.cause = cause;
-    }
-
-    @Override
-    public ForRef database(Provider<ReviewDb> db) {
-      return this;
     }
 
     @Override
@@ -214,11 +203,6 @@ public class FailedPermissionBackend {
     FailedChange(String message, Throwable cause) {
       this.message = message;
       this.cause = cause;
-    }
-
-    @Override
-    public ForChange database(Provider<ReviewDb> db) {
-      return this;
     }
 
     @Override

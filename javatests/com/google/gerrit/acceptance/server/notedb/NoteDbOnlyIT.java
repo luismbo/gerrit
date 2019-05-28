@@ -16,7 +16,6 @@ package com.google.gerrit.acceptance.server.notedb;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth8.assertThat;
-import static com.google.common.truth.TruthJUnit.assume;
 import static com.google.gerrit.extensions.client.ListChangesOption.MESSAGES;
 import static java.util.stream.Collectors.toList;
 
@@ -56,7 +55,6 @@ import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevSort;
 import org.eclipse.jgit.revwalk.RevWalk;
-import org.junit.Before;
 import org.junit.Test;
 
 public class NoteDbOnlyIT extends AbstractDaemonTest {
@@ -70,14 +68,8 @@ public class NoteDbOnlyIT extends AbstractDaemonTest {
 
   @Inject private RetryHelper retryHelper;
 
-  @Before
-  public void setUp() throws Exception {
-    assume().that(notesMigration.disableChangeReviewDb()).isTrue();
-  }
-
   @Test
   public void updateChangeFailureRollsBackRefUpdate() throws Exception {
-    assume().that(notesMigration.disableChangeReviewDb()).isTrue();
     PushOneCommit.Result r = createChange();
     Change.Id id = r.getChange().getId();
 
@@ -149,7 +141,6 @@ public class NoteDbOnlyIT extends AbstractDaemonTest {
 
   @Test
   public void retryOnLockFailureWithAtomicUpdates() throws Exception {
-    assume().that(notesMigration.disableChangeReviewDb()).isTrue();
     PushOneCommit.Result r = createChange();
     Change.Id id = r.getChange().getId();
     String master = "refs/heads/master";
@@ -198,8 +189,8 @@ public class NoteDbOnlyIT extends AbstractDaemonTest {
   @Test
   public void missingChange() throws Exception {
     Change.Id changeId = new Change.Id(1234567);
-    assertNoSuchChangeException(() -> notesFactory.create(db, project, changeId));
-    assertNoSuchChangeException(() -> notesFactory.createChecked(db, project, changeId));
+    assertNoSuchChangeException(() -> notesFactory.create(project, changeId));
+    assertNoSuchChangeException(() -> notesFactory.createChecked(project, changeId));
   }
 
   private void assertNoSuchChangeException(Callable<?> callable) throws Exception {
@@ -285,7 +276,7 @@ public class NoteDbOnlyIT extends AbstractDaemonTest {
   }
 
   private BatchUpdate newBatchUpdate(BatchUpdate.Factory buf) {
-    return buf.create(db, project, identifiedUserFactory.create(user.getId()), TimeUtil.nowTs());
+    return buf.create(project, identifiedUserFactory.create(user.id()), TimeUtil.nowTs());
   }
 
   private Optional<ObjectId> getRef(String name) throws Exception {

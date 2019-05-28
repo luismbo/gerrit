@@ -18,6 +18,8 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
+import com.google.gerrit.extensions.api.access.CoreOrPluginProjectPermission;
 import com.google.gerrit.extensions.conditions.BooleanCondition;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.reviewdb.client.Account;
@@ -30,6 +32,7 @@ import com.google.gerrit.server.permissions.PermissionBackend.RefFilterOptions;
 import com.google.gerrit.server.permissions.PermissionBackendCondition;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.permissions.ProjectPermission;
+import com.google.gerrit.testing.GerritBaseTests;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
@@ -38,7 +41,7 @@ import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.junit.Test;
 
-public class UiActionsTest {
+public class UiActionsTest extends GerritBaseTests {
 
   private static class FakeForProject extends ForProject {
     private boolean allowValueQueries = true;
@@ -54,19 +57,29 @@ public class UiActionsTest {
     }
 
     @Override
-    public void check(ProjectPermission perm) throws AuthException, PermissionBackendException {
+    public void check(CoreOrPluginProjectPermission perm)
+        throws AuthException, PermissionBackendException {
       throw new UnsupportedOperationException("not implemented");
     }
 
     @Override
-    public Set<ProjectPermission> test(Collection<ProjectPermission> permSet)
+    public <T extends CoreOrPluginProjectPermission> Set<T> test(Collection<T> permSet)
         throws PermissionBackendException {
       assertThat(allowValueQueries).isTrue();
-      return ImmutableSet.of(ProjectPermission.READ);
+      Set<T> ok = Sets.newHashSetWithExpectedSize(permSet.size());
+      for (T perm : permSet) {
+        // Allow ProjectPermission.READ, if it was requested in the input permSet. This implies
+        // that permSet has type Collection<ProjectPermission>, otherwise no permission would
+        // compare equal to READ.
+        if (perm.equals(ProjectPermission.READ)) {
+          ok.add(perm);
+        }
+      }
+      return ok;
     }
 
     @Override
-    public BooleanCondition testCond(ProjectPermission perm) {
+    public BooleanCondition testCond(CoreOrPluginProjectPermission perm) {
       return new PermissionBackendCondition.ForProject(this, perm, fakeUser());
     }
 

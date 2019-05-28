@@ -34,14 +34,13 @@ import com.google.common.collect.Maps;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.restapi.RestApiException;
+import com.google.gerrit.git.LockFailureException;
 import com.google.gerrit.metrics.Counter1;
 import com.google.gerrit.metrics.Description;
 import com.google.gerrit.metrics.Field;
 import com.google.gerrit.metrics.Histogram1;
 import com.google.gerrit.metrics.MetricMaker;
 import com.google.gerrit.server.config.GerritServerConfig;
-import com.google.gerrit.server.git.LockFailureException;
-import com.google.gerrit.server.notedb.NotesMigration;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import java.time.Duration;
@@ -69,7 +68,8 @@ public class RetryHelper {
     ACCOUNT_UPDATE,
     CHANGE_UPDATE,
     GROUP_UPDATE,
-    INDEX_QUERY
+    INDEX_QUERY,
+    PLUGIN_UPDATE
   }
 
   /**
@@ -141,7 +141,6 @@ public class RetryHelper {
     return options().build();
   }
 
-  private final NotesMigration migration;
   private final Metrics metrics;
   private final BatchUpdate.Factory updateFactory;
   private final Map<ActionType, Duration> defaultTimeouts;
@@ -149,27 +148,18 @@ public class RetryHelper {
   @Nullable private final Consumer<RetryerBuilder<?>> overwriteDefaultRetryerStrategySetup;
 
   @Inject
-  RetryHelper(
-      @GerritServerConfig Config cfg,
-      Metrics metrics,
-      NotesMigration migration,
-      ReviewDbBatchUpdate.AssistedFactory reviewDbBatchUpdateFactory,
-      NoteDbBatchUpdate.AssistedFactory noteDbBatchUpdateFactory) {
-    this(cfg, metrics, migration, reviewDbBatchUpdateFactory, noteDbBatchUpdateFactory, null);
+  RetryHelper(@GerritServerConfig Config cfg, Metrics metrics, BatchUpdate.Factory updateFactory) {
+    this(cfg, metrics, updateFactory, null);
   }
 
   @VisibleForTesting
   public RetryHelper(
       @GerritServerConfig Config cfg,
       Metrics metrics,
-      NotesMigration migration,
-      ReviewDbBatchUpdate.AssistedFactory reviewDbBatchUpdateFactory,
-      NoteDbBatchUpdate.AssistedFactory noteDbBatchUpdateFactory,
+      BatchUpdate.Factory updateFactory,
       @Nullable Consumer<RetryerBuilder<?>> overwriteDefaultRetryerStrategySetup) {
     this.metrics = metrics;
-    this.migration = migration;
-    this.updateFactory =
-        new BatchUpdate.Factory(migration, reviewDbBatchUpdateFactory, noteDbBatchUpdateFactory);
+    this.updateFactory = updateFactory;
 
     Duration defaultTimeout =
         Duration.ofMillis(
@@ -229,16 +219,6 @@ public class RetryHelper {
   public <T> T execute(ChangeAction<T> changeAction, Options opts)
       throws RestApiException, UpdateException {
     try {
-      if (!migration.disableChangeReviewDb()) {
-        // Either we aren't full-NoteDb, or the underlying ref storage doesn't support atomic
-        // transactions. Either way, retrying a partially-failed operation is not idempotent, so
-        // don't do it automatically. Let the end user decide whether they want to retry.
-        return executeWithTimeoutCount(
-            ActionType.CHANGE_UPDATE,
-            () -> changeAction.call(updateFactory),
-            RetryerBuilder.<T>newBuilder().build());
-      }
-
       return execute(
           ActionType.CHANGE_UPDATE,
           () -> changeAction.call(updateFactory),

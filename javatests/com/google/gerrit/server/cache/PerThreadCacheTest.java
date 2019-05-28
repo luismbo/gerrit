@@ -16,14 +16,11 @@ package com.google.gerrit.server.cache;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import com.google.gerrit.testing.GerritBaseTests;
 import java.util.function.Supplier;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
-public class PerThreadCacheTest {
-  @Rule public ExpectedException exception = ExpectedException.none();
-
+public class PerThreadCacheTest extends GerritBaseTests {
   @Test
   public void key_respectsClass() {
     assertThat(PerThreadCache.Key.create(String.class))

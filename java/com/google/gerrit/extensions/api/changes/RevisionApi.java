@@ -15,6 +15,7 @@
 package com.google.gerrit.extensions.api.changes;
 
 import com.google.common.collect.ListMultimap;
+import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.client.SubmitType;
 import com.google.gerrit.extensions.common.ActionInfo;
 import com.google.gerrit.extensions.common.ApprovalInfo;
@@ -36,7 +37,9 @@ import java.util.Set;
 
 public interface RevisionApi {
   @Deprecated
-  void delete() throws RestApiException;
+  default void delete() {
+    throw new UnsupportedOperationException("draft workflow is discontinued");
+  }
 
   String description() throws RestApiException;
 
@@ -44,22 +47,32 @@ public interface RevisionApi {
 
   ReviewResult review(ReviewInput in) throws RestApiException;
 
-  void submit() throws RestApiException;
+  default void submit() throws RestApiException {
+    SubmitInput in = new SubmitInput();
+    submit(in);
+  }
 
   void submit(SubmitInput in) throws RestApiException;
 
-  BinaryResult submitPreview() throws RestApiException;
+  default BinaryResult submitPreview() throws RestApiException {
+    return submitPreview("zip");
+  }
 
   BinaryResult submitPreview(String format) throws RestApiException;
 
   @Deprecated
-  void publish() throws RestApiException;
+  default void publish() {
+    throw new UnsupportedOperationException("draft workflow is discontinued");
+  }
 
   ChangeApi cherryPick(CherryPickInput in) throws RestApiException;
 
   CherryPickChangeInfo cherryPickAsInfo(CherryPickInput in) throws RestApiException;
 
-  ChangeApi rebase() throws RestApiException;
+  default ChangeApi rebase() throws RestApiException {
+    RebaseInput in = new RebaseInput();
+    return rebase(in);
+  }
 
   ChangeApi rebase(RebaseInput in) throws RestApiException;
 
@@ -71,9 +84,11 @@ public interface RevisionApi {
 
   Set<String> reviewed() throws RestApiException;
 
-  Map<String, FileInfo> files() throws RestApiException;
+  default Map<String, FileInfo> files() throws RestApiException {
+    return files(null);
+  }
 
-  Map<String, FileInfo> files(String base) throws RestApiException;
+  Map<String, FileInfo> files(@Nullable String base) throws RestApiException;
 
   Map<String, FileInfo> files(int parentNum) throws RestApiException;
 
@@ -170,30 +185,13 @@ public interface RevisionApi {
    * interface.
    */
   class NotImplemented implements RevisionApi {
-    @Deprecated
-    @Override
-    public void delete() throws RestApiException {
-      throw new NotImplementedException();
-    }
-
     @Override
     public ReviewResult review(ReviewInput in) throws RestApiException {
       throw new NotImplementedException();
     }
 
     @Override
-    public void submit() throws RestApiException {
-      throw new NotImplementedException();
-    }
-
-    @Override
     public void submit(SubmitInput in) throws RestApiException {
-      throw new NotImplementedException();
-    }
-
-    @Deprecated
-    @Override
-    public void publish() throws RestApiException {
       throw new NotImplementedException();
     }
 
@@ -204,11 +202,6 @@ public interface RevisionApi {
 
     @Override
     public CherryPickChangeInfo cherryPickAsInfo(CherryPickInput in) throws RestApiException {
-      throw new NotImplementedException();
-    }
-
-    @Override
-    public ChangeApi rebase() throws RestApiException {
       throw new NotImplementedException();
     }
 
@@ -254,11 +247,6 @@ public interface RevisionApi {
 
     @Override
     public Map<String, FileInfo> files(int parentNum) throws RestApiException {
-      throw new NotImplementedException();
-    }
-
-    @Override
-    public Map<String, FileInfo> files() throws RestApiException {
       throw new NotImplementedException();
     }
 
@@ -349,11 +337,6 @@ public interface RevisionApi {
 
     @Override
     public SubmitType submitType() throws RestApiException {
-      throw new NotImplementedException();
-    }
-
-    @Override
-    public BinaryResult submitPreview() throws RestApiException {
       throw new NotImplementedException();
     }
 

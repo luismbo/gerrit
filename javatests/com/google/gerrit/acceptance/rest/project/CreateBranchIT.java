@@ -21,8 +21,8 @@ import static com.google.gerrit.server.group.SystemGroupBackend.ANONYMOUS_USERS;
 import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS;
 
 import com.google.gerrit.acceptance.AbstractDaemonTest;
-import com.google.gerrit.acceptance.GerritConfig;
 import com.google.gerrit.acceptance.RestResponse;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.projects.BranchApi;
 import com.google.gerrit.extensions.api.projects.BranchInfo;
@@ -34,10 +34,13 @@ import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.RefNames;
+import com.google.inject.Inject;
 import org.junit.Before;
 import org.junit.Test;
 
 public class CreateBranchIT extends AbstractDaemonTest {
+  @Inject private RequestScopeOperations requestScopeOperations;
+
   private Branch.NameKey testBranch;
 
   @Before
@@ -60,7 +63,7 @@ public class CreateBranchIT extends AbstractDaemonTest {
 
   @Test
   public void createBranch_Forbidden() throws Exception {
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertCreateFails(testBranch, AuthException.class, "not permitted: create on refs/heads/test");
   }
 
@@ -78,7 +81,7 @@ public class CreateBranchIT extends AbstractDaemonTest {
   @Test
   public void createBranchByProjectOwner() throws Exception {
     grantOwner();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertCreateSucceeds(testBranch);
   }
 
@@ -92,7 +95,7 @@ public class CreateBranchIT extends AbstractDaemonTest {
   public void createBranchByProjectOwnerCreateReferenceBlocked_Forbidden() throws Exception {
     grantOwner();
     blockCreateReference();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertCreateFails(testBranch, AuthException.class, "not permitted: create on refs/heads/test");
   }
 
@@ -110,13 +113,12 @@ public class CreateBranchIT extends AbstractDaemonTest {
     allow(allUsers, RefNames.REFS_USERS + "*", Permission.PUSH, REGISTERED_USERS);
     assertCreateFails(
         new Branch.NameKey(allUsers, RefNames.refsUsers(new Account.Id(1))),
-        RefNames.refsUsers(admin.getId()),
+        RefNames.refsUsers(admin.id()),
         ResourceConflictException.class,
         "Not allowed to create user branch.");
   }
 
   @Test
-  @GerritConfig(name = "noteDb.groups.write", value = "true")
   public void createGroupBranch_Conflict() throws Exception {
     allow(allUsers, RefNames.REFS_GROUPS + "*", Permission.CREATE, REGISTERED_USERS);
     allow(allUsers, RefNames.REFS_GROUPS + "*", Permission.PUSH, REGISTERED_USERS);

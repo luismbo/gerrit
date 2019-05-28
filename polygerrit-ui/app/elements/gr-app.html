@@ -15,16 +15,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 <script>
-  // This must be set prior to loading Polymer for the first time.
-  if (localStorage.getItem('USE_SHADOW_DOM') === 'true') {
-    window.Polymer = {
-      dom: 'shadow',
-      passiveTouchGestures: true,
-    };
-  } else if (!window.Polymer) {
-    window.Polymer = {
-      passiveTouchGestures: true,
-    };
+  if (!window.POLYMER2) {
+    // This must be set prior to loading Polymer for the first time.
+    if (localStorage.getItem('USE_SHADOW_DOM') === 'true') {
+      window.Polymer = {
+        dom: 'shadow',
+        passiveTouchGestures: true,
+      };
+    } else if (!window.Polymer) {
+      window.Polymer = {
+        passiveTouchGestures: true,
+      };
+    }
   }
   // Needed for JSCompiler to understand it's global.
   // eslint-disable-next-line no-unused-vars, prefer-const
@@ -34,6 +36,7 @@ limitations under the License.
 
 <link rel="import" href="../bower_components/polymer/polymer.html">
 <link rel="import" href="../bower_components/polymer-resin/standalone/polymer-resin.html">
+<link rel="import" href="../bower_components/polymer/lib/legacy/legacy-data-mixin.html">
 <link rel="import" href="../behaviors/safe-types-behavior/safe-types-behavior.html">
 <script>
   security.polymer_resin.install({
@@ -42,6 +45,7 @@ limitations under the License.
     safeTypesBridge: Gerrit.SafeTypes.safeTypesBridge,
   });
 </script>
+<script src="../bower_components/moment/moment.js"></script>
 
 <link rel="import" href="../behaviors/base-url-behavior/base-url-behavior.html">
 <link rel="import" href="../behaviors/keyboard-shortcut-behavior/keyboard-shortcut-behavior.html">
@@ -58,6 +62,7 @@ limitations under the License.
 <link rel="import" href="./core/gr-navigation/gr-navigation.html">
 <link rel="import" href="./core/gr-reporting/gr-reporting.html">
 <link rel="import" href="./core/gr-router/gr-router.html">
+<link rel="import" href="./core/gr-smart-search/gr-smart-search.html">
 <link rel="import" href="./diff/gr-diff-view/gr-diff-view.html">
 <link rel="import" href="./edit/gr-editor-view/gr-editor-view.html">
 <link rel="import" href="./plugins/gr-endpoint-decorator/gr-endpoint-decorator.html">
@@ -151,10 +156,16 @@ limitations under the License.
       <gr-main-header
           id="mainHeader"
           search-query="{{params.query}}"
-          class$="[[_computeShadowClass(_isShadowDom)]]">
+          class$="[[_computeShadowClass(_isShadowDom)]]"
+          on-mobile-search="_mobileSearchToggle">
       </gr-main-header>
     </gr-fixed-panel>
     <main>
+      <gr-smart-search
+          id="search"
+          search-query="{{params.query}}"
+          hidden="[[!mobileSearch]]">
+      </gr-smart-search>
       <template is="dom-if" if="[[_showChangeListView]]" restamp="true">
         <gr-change-list-view
             params="[[params]]"
@@ -221,10 +232,6 @@ limitations under the License.
         <a class="feedback"
             href$="[[_feedbackUrl]]"
             rel="noopener" target="_blank">Send feedback</a>
-        <template is="dom-if" if="[[_computeShowGwtUiLink(_serverConfig)]]">
-          |
-          <a id="gwtLink" href$="[[computeGwtUrl(_path)]]" rel="external">Switch to Old UI</a>
-        </template>
         | Press &ldquo;?&rdquo; for keyboard shortcuts
       </div>
     </footer>

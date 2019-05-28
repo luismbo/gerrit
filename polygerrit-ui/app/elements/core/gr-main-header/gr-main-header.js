@@ -71,6 +71,7 @@
 
   Polymer({
     is: 'gr-main-header',
+    _legacyUndefinedCheck: true,
 
     hostAttributes: {
       role: 'banner',
@@ -324,6 +325,11 @@
 
     _generateSettingsLink() {
       return this.getBaseUrl() + '/settings/';
+    },
+
+    _onMobileSearchTap(e) {
+      e.preventDefault();
+      this.fire('mobile-search', null, {bubbles: false});
     },
   });
 })();

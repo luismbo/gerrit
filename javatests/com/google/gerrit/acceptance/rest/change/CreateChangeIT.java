@@ -15,7 +15,6 @@
 package com.google.gerrit.acceptance.rest.change;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.TruthJUnit.assume;
 import static com.google.gerrit.common.data.Permission.READ;
 import static com.google.gerrit.reviewdb.client.RefNames.changeMetaRef;
 import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS;
@@ -28,6 +27,7 @@ import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.PushOneCommit.Result;
 import com.google.gerrit.acceptance.RestResponse;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.extensions.api.changes.ChangeApi;
 import com.google.gerrit.extensions.api.changes.CherryPickInput;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
@@ -48,9 +48,11 @@ import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
+import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.submit.ChangeAlreadyMergedException;
 import com.google.gerrit.testing.FakeEmailSender.Message;
 import com.google.gerrit.testing.TestTimeUtil;
+import com.google.inject.Inject;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +67,8 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 public class CreateChangeIT extends AbstractDaemonTest {
+  @Inject private RequestScopeOperations requestScopeOperations;
+
   @BeforeClass
   public static void setTimeForTesting() {
     TestTimeUtil.resetWithClockStep(1, SECONDS);
@@ -150,18 +154,18 @@ public class CreateChangeIT extends AbstractDaemonTest {
 
   @Test
   public void notificationsOnChangeCreation() throws Exception {
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     watch(project.get());
 
     // check that watcher is notified
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     assertCreateSucceeds(newChangeInput(ChangeStatus.NEW));
 
     List<Message> messages = sender.getMessages();
     assertThat(messages).hasSize(1);
     Message m = messages.get(0);
-    assertThat(m.rcpt()).containsExactly(user.emailAddress);
-    assertThat(m.body()).contains(admin.fullName + " has uploaded this change for review.");
+    assertThat(m.rcpt()).containsExactly(user.getEmailAddress());
+    assertThat(m.body()).contains(admin.fullName() + " has uploaded this change for review.");
 
     // check that watcher is not notified if notify=NONE
     sender.clear();
@@ -180,7 +184,7 @@ public class CreateChangeIT extends AbstractDaemonTest {
       assertThat(message)
           .contains(
               String.format(
-                  "%sAdministrator <%s>", SIGNED_OFF_BY_TAG, admin.getIdent().getEmailAddress()));
+                  "%sAdministrator <%s>", SIGNED_OFF_BY_TAG, admin.newIdent().getEmailAddress()));
     } finally {
       setSignedOffByFooter(false);
     }
@@ -201,7 +205,7 @@ public class CreateChangeIT extends AbstractDaemonTest {
       assertThat(message)
           .contains(
               String.format(
-                  "%sAdministrator <%s>", SIGNED_OFF_BY_TAG, admin.getIdent().getEmailAddress()));
+                  "%sAdministrator <%s>", SIGNED_OFF_BY_TAG, admin.newIdent().getEmailAddress()));
     } finally {
       setSignedOffByFooter(false);
     }
@@ -265,19 +269,7 @@ public class CreateChangeIT extends AbstractDaemonTest {
   }
 
   @Test
-  public void createChangeOnInvisibleBranchFails() throws Exception {
-    changeInTwoBranches("invisible-branch", "a.txt", "branchB", "b.txt");
-    block(project, "refs/heads/invisible-branch", READ, REGISTERED_USERS);
-
-    ChangeInput in = newChangeInput(ChangeStatus.NEW);
-    in.branch = "invisible-branch";
-    assertCreateFails(in, ResourceNotFoundException.class, "");
-  }
-
-  @Test
   public void noteDbCommit() throws Exception {
-    assume().that(notesMigration.readChanges()).isTrue();
-
     ChangeInfo c = assertCreateSucceeds(newChangeInput(ChangeStatus.NEW));
     try (Repository repo = repoManager.openRepository(project);
         RevWalk rw = new RevWalk(repo)) {
@@ -287,7 +279,7 @@ public class CreateChangeIT extends AbstractDaemonTest {
       assertThat(commit.getShortMessage()).isEqualTo("Create change");
 
       PersonIdent expectedAuthor =
-          changeNoteUtil.newIdent(getAccount(admin.id), c.created, serverIdent.get());
+          changeNoteUtil.newIdent(getAccount(admin.id()), c.created, serverIdent.get());
       assertThat(commit.getAuthorIdent()).isEqualTo(expectedAuthor);
 
       assertThat(commit.getCommitterIdent())
@@ -455,6 +447,30 @@ public class CreateChangeIT extends AbstractDaemonTest {
     assertThat(revInfo.commit.message).isEqualTo(input.message + "\n");
   }
 
+  @Test
+  public void createChangeOnExistingBranchNotPermitted() throws Exception {
+    createBranch(new Branch.NameKey(project, "foo"));
+    blockRead("refs/heads/*");
+    requestScopeOperations.setApiUser(user.id());
+    ChangeInput input = newChangeInput(ChangeStatus.NEW);
+    input.branch = "foo";
+
+    assertCreateFails(input, ResourceNotFoundException.class, "ref refs/heads/foo not found");
+  }
+
+  @Test
+  public void createChangeOnNonExistingBranchNotPermitted() throws Exception {
+    blockRead("refs/heads/*");
+    requestScopeOperations.setApiUser(user.id());
+    ChangeInput input = newChangeInput(ChangeStatus.NEW);
+    input.branch = "foo";
+    // sets this option to be true to make sure permission check happened before this option could
+    // be considered.
+    input.newBranch = true;
+
+    assertCreateFails(input, ResourceNotFoundException.class, "ref refs/heads/foo not found");
+  }
+
   private ChangeInput newChangeInput(ChangeStatus status) {
     ChangeInput in = new ChangeInput();
     in.project = project.get();
@@ -468,12 +484,20 @@ public class CreateChangeIT extends AbstractDaemonTest {
   private ChangeInfo assertCreateSucceeds(ChangeInput in) throws Exception {
     ChangeInfo out = gApi.changes().create(in).get();
     assertThat(out.project).isEqualTo(in.project);
-    assertThat(out.branch).isEqualTo(in.branch);
+    assertThat(RefNames.fullName(out.branch)).isEqualTo(RefNames.fullName(in.branch));
     assertThat(out.subject).isEqualTo(in.subject.split("\n")[0]);
     assertThat(out.topic).isEqualTo(in.topic);
     assertThat(out.status).isEqualTo(in.status);
-    assertThat(out.isPrivate).isEqualTo(in.isPrivate);
-    assertThat(out.workInProgress).isEqualTo(in.workInProgress);
+    if (in.isPrivate) {
+      assertThat(out.isPrivate).isTrue();
+    } else {
+      assertThat(out.isPrivate).isNull();
+    }
+    if (in.workInProgress) {
+      assertThat(out.workInProgress).isTrue();
+    } else {
+      assertThat(out.workInProgress).isNull();
+    }
     assertThat(out.revisions).hasSize(1);
     assertThat(out.submitted).isNull();
     assertThat(in.status).isEqualTo(ChangeStatus.NEW);
@@ -490,12 +514,12 @@ public class CreateChangeIT extends AbstractDaemonTest {
 
   // TODO(davido): Expose setting of account preferences in the API
   private void setSignedOffByFooter(boolean value) throws Exception {
-    RestResponse r = adminRestSession.get("/accounts/" + admin.email + "/preferences");
+    RestResponse r = adminRestSession.get("/accounts/" + admin.email() + "/preferences");
     r.assertOK();
     GeneralPreferencesInfo i = newGson().fromJson(r.getReader(), GeneralPreferencesInfo.class);
     i.signedOffBy = value;
 
-    r = adminRestSession.put("/accounts/" + admin.email + "/preferences", i);
+    r = adminRestSession.put("/accounts/" + admin.email() + "/preferences", i);
     r.assertOK();
     GeneralPreferencesInfo o = newGson().fromJson(r.getReader(), GeneralPreferencesInfo.class);
 
@@ -505,7 +529,7 @@ public class CreateChangeIT extends AbstractDaemonTest {
       assertThat(o.signedOffBy).isNull();
     }
 
-    resetCurrentApiUser();
+    requestScopeOperations.resetCurrentApiUser();
   }
 
   private ChangeInput newMergeChangeInput(String targetBranch, String sourceRef, String strategy) {
@@ -539,7 +563,7 @@ public class CreateChangeIT extends AbstractDaemonTest {
     // create a initial commit in master
     Result initialCommit =
         pushFactory
-            .create(db, user.getIdent(), testRepo, "initial commit", "readme.txt", "initial commit")
+            .create(user.newIdent(), testRepo, "initial commit", "readme.txt", "initial commit")
             .to("refs/heads/master");
     initialCommit.assertOkStatus();
 
@@ -550,13 +574,13 @@ public class CreateChangeIT extends AbstractDaemonTest {
     // create a commit in branchA
     Result changeA =
         pushFactory
-            .create(db, user.getIdent(), testRepo, "change A", fileA, "A content")
+            .create(user.newIdent(), testRepo, "change A", fileA, "A content")
             .to("refs/heads/" + branchA);
     changeA.assertOkStatus();
 
     // create a commit in branchB
     PushOneCommit commitB =
-        pushFactory.create(db, user.getIdent(), testRepo, "change B", fileB, "B content");
+        pushFactory.create(user.newIdent(), testRepo, "change B", fileB, "B content");
     commitB.setParent(initialCommit.getCommit());
     Result changeB = commitB.to("refs/heads/" + branchB);
     changeB.assertOkStatus();

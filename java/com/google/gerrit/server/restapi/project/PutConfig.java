@@ -47,6 +47,7 @@ import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.project.ProjectConfig;
 import com.google.gerrit.server.project.ProjectResource;
 import com.google.gerrit.server.project.ProjectState;
+import com.google.gerrit.server.project.ProjectState.Factory;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -54,7 +55,6 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.regex.Pattern;
 import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.errors.RepositoryNotFoundException;
@@ -77,20 +77,22 @@ public class PutConfig implements RestModifyView<ProjectResource, ConfigInput> {
   private final DynamicMap<RestView<ProjectResource>> views;
   private final Provider<CurrentUser> user;
   private final PermissionBackend permissionBackend;
+  private final ProjectConfig.Factory projectConfigFactory;
 
   @Inject
   PutConfig(
       @EnableSignedPush boolean serverEnableSignedPush,
       Provider<MetaDataUpdate.User> metaDataUpdateFactory,
       ProjectCache projectCache,
-      ProjectState.Factory projectStateFactory,
+      Factory projectStateFactory,
       DynamicMap<ProjectConfigEntry> pluginConfigEntries,
       PluginConfigFactory cfgFactory,
       AllProjectsName allProjects,
       UiActions uiActions,
       DynamicMap<RestView<ProjectResource>> views,
       Provider<CurrentUser> user,
-      PermissionBackend permissionBackend) {
+      PermissionBackend permissionBackend,
+      ProjectConfig.Factory projectConfigFactory) {
     this.serverEnableSignedPush = serverEnableSignedPush;
     this.metaDataUpdateFactory = metaDataUpdateFactory;
     this.projectCache = projectCache;
@@ -102,6 +104,7 @@ public class PutConfig implements RestModifyView<ProjectResource, ConfigInput> {
     this.views = views;
     this.user = user;
     this.permissionBackend = permissionBackend;
+    this.projectConfigFactory = projectConfigFactory;
   }
 
   @Override
@@ -122,7 +125,7 @@ public class PutConfig implements RestModifyView<ProjectResource, ConfigInput> {
     }
 
     try (MetaDataUpdate md = metaDataUpdateFactory.get().create(projectName)) {
-      ProjectConfig projectConfig = ProjectConfig.read(md);
+      ProjectConfig projectConfig = projectConfigFactory.read(md);
       Project p = projectConfig.getProject();
 
       p.setDescription(Strings.emptyToNull(input.description));
@@ -164,7 +167,7 @@ public class PutConfig implements RestModifyView<ProjectResource, ConfigInput> {
         throw new ResourceConflictException("Cannot update " + projectName);
       }
 
-      ProjectState state = projectStateFactory.create(ProjectConfig.read(md));
+      ProjectState state = projectStateFactory.create(projectConfigFactory.read(md));
       return new ConfigInfoImpl(
           serverEnableSignedPush,
           state,
@@ -188,10 +191,10 @@ public class PutConfig implements RestModifyView<ProjectResource, ConfigInput> {
       ProjectConfig projectConfig,
       Map<String, Map<String, ConfigValue>> pluginConfigValues)
       throws BadRequestException {
-    for (Entry<String, Map<String, ConfigValue>> e : pluginConfigValues.entrySet()) {
+    for (Map.Entry<String, Map<String, ConfigValue>> e : pluginConfigValues.entrySet()) {
       String pluginName = e.getKey();
       PluginConfig cfg = projectConfig.getPluginConfig(pluginName);
-      for (Entry<String, ConfigValue> v : e.getValue().entrySet()) {
+      for (Map.Entry<String, ConfigValue> v : e.getValue().entrySet()) {
         ProjectConfigEntry projectConfigEntry = pluginConfigEntries.get(pluginName, v.getKey());
         if (projectConfigEntry != null) {
           if (!PARAMETER_NAME_PATTERN.matcher(v.getKey()).matches()) {

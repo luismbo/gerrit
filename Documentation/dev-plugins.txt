@@ -322,10 +322,10 @@ from the Section.Factory rather than from an injected Config object.
 
 Plugins' InitSteps are executed during the "Gerrit Plugin init" phase, after
 the extraction of the plugins embedded in the distribution .war file into
-`$GERRIT_SITE/plugins` and before the DB Schema initialization or upgrade.
+`$GERRIT_SITE/plugins` and before the site initialization or upgrade.
 
-A plugin's InitStep cannot refer to Gerrit's DB Schema or any other Gerrit
-runtime objects injected at startup.
+A plugin's InitStep cannot refer to any Gerrit runtime objects injected at
+startup.
 
 [source,java]
 ----
@@ -452,7 +452,7 @@ its own custom event class derived from
 ----
 import com.google.gerrit.common.EventDispatcher;
 import com.google.gerrit.extensions.registration.DynamicItem;
-import com.google.gwtorm.server.OrmException;
+import com.google.exceptions.StorageException;
 import com.google.inject.Inject;
 
 class MyPlugin {
@@ -466,7 +466,7 @@ class MyPlugin {
   private void postEvent(MyPluginEvent event) {
     try {
       eventDispatcher.get().postEvent(event);
-    } catch (OrmException e) {
+    } catch (StorageException e) {
       // error handling
     }
   }
@@ -715,10 +715,9 @@ definition which creates a `MyPredicate`:
 
 [source,java]
 ----
-@Singleton
 public class SampleOperator
     implements ChangeQueryBuilder.ChangeOperatorFactory {
-  public static class MyPredicate extends OperatorChangePredicate<ChangeData> {
+  public static class MyPredicate extends PostFilterPredicate<ChangeData> {
     ...
   }
 
@@ -748,7 +747,6 @@ A sample `ChangeHasOperandFactory` class implementing, and registering, a
 new `has:sample_pluginName` operand is shown below:
 
 ====
-  @Singleton
   public class SampleHasOperand implements ChangeHasOperandFactory {
     public static class Module extends AbstractModule {
       @Override
@@ -798,56 +796,112 @@ public class SshModule extends AbstractModule {
   }
 ----
 
+=== Calling Command Options ===
+
+Within an OptionHandler, during the processing of an option, plugins can
+provide and call extra parameters on the current command during parsing
+simulating as if they had been passed from the command line originally.
+
+To call additional parameters from within an option handler, instantiate
+the com.google.gerrit.util.cli.CmdLineParser.Parameters class with the
+existing parameters, and then call callParameters() with the additional
+parameters to be parsed. OptionHandlers may optionally pass this class to
+other methods which may then both parse/consume more parameters and call
+additional parameters.
+
+When calling command options not provided by your plugin, there is always
+a risk that the options may not exist, perhaps because the options being
+called are to be provided by another plugin, and said plugin is not
+currently installed. To protect againt this situation, it is possible to
+define an option as being dependent on other options using the
+@RequiresOptions() annotation. If the required options are not all not
+currently present, then the dependent option will not be available or
+visible in the help.
+
+The example below shows a plugin that adds a "--special" option (perhaps
+for use with the Query command) that calls (and requires) the
+"--format json" option.
+
+[source, java]
+----
+public class JsonOutputOptionHandler<T> extends OptionHandler<T> {
+  protected com.google.gerrit.util.cli.CmdLineParser.MyParser myParser;
+
+  public JsonOutputOptionHandler(CmdLineParser parser, OptionDef option, Setter<? super T> setter) {
+    super(parser, option, setter);
+    myParser = (com.google.gerrit.util.cli.CmdLineParser.MyParser) owner;
+  }
+
+  @Override
+  public int parseArguments(org.kohsuke.args4j.spi.Parameters params) throws CmdLineException {
+    new Parameters(params, myParser).callParameters("--format", "json");
+    setter.addValue(true);
+    return 0; // we didn't consume any additional args
+  }
+
+  @Override
+  public String getDefaultMetaVariable() {
+   ...
+  }
+}
+
+@RequiresOptions("--format")
+@Option(
+  name = "--special",
+  usage = "ouptut results using json",
+  handler = JsonOutputOptionHandler.class
+)
+boolean json;
+----
+
 [[query_attributes]]
-=== Query Attributes ===
+=== Change Attributes ===
 
-Plugins can provide additional attributes to be returned in Gerrit queries by
-implementing the ChangeAttributeFactory interface and registering it to the
-ChangeQueryProcessor.ChangeAttributeFactory class in the plugin module's
-'configure()' method. The new attribute(s) will be output under a "plugin"
-attribute in the change query output. This can be further controlled with an
-option registered in the Http and Ssh modules' 'configure*()' methods.
+Plugins can provide additional attributes to be returned from the Get Change and
+Query Change APIs by implementing implementing the `ChangeAttributeFactory`
+interface and adding it to the `DynamicSet` in the plugin module's `configure()`
+method. The new attribute(s) will be output under a `plugin` attribute in the
+change output. This can be further controlled by registering a class containing
+@Option declarations as a `DynamicBean`, annotated with the with HTTP/SSH
+commands on which the options should be available.
 
-The example below shows a plugin that adds two attributes ('exampleName' and
-'changeValue'), to the change query output, when the query command is provided
-the --myplugin-name--all option.
+The example below shows a plugin that adds two attributes (`exampleName` and
+`changeValue`), to the change query output, when the query command is provided
+the `--myplugin-name--all` option.
 
 [source, java]
 ----
 public class Module extends AbstractModule {
   @Override
   protected void configure() {
-    bind(ChangeAttributeFactory.class)
-        .annotatedWith(Exports.named("example"))
+    // Register attribute factory.
+    DynamicSet.bind(binder(), ChangeAttributeFactory.class)
         .to(AttributeFactory.class);
+
+    // Register options for GET /changes/X/change and /changes/X/detail.
+    bind(DynamicBean.class)
+        .annotatedWith(Exports.named(GetChange.class))
+        .to(MyChangeOptions.class);
+
+    // Register options for GET /changes/?q=...
+    bind(DynamicBean.class)
+        .annotatedWith(Exports.named(QueryChanges.class))
+        .to(MyChangeOptions.class);
+
+    // Register options for ssh gerrit query.
+    bind(DynamicBean.class)
+        .annotatedWith(Exports.named(Query.class))
+        .to(MyChangeOptions.class);
   }
 }
 
-public class MyQueryOptions implements DynamicBean {
+public class MyChangeOptions implements DynamicBean {
   @Option(name = "--all", usage = "Include plugin output")
   public boolean all = false;
 }
 
-public static class HttpModule extends HttpPluginModule {
-  @Override
-  protected void configureServlets() {
-    bind(DynamicBean.class)
-        .annotatedWith(Exports.named(QueryChanges.class))
-        .to(MyQueryOptions.class);
-  }
-}
-
-public static class SshModule extends PluginCommandModule {
-  @Override
-  protected void configureCommands() {
-    bind(DynamicBean.class)
-        .annotatedWith(Exports.named(Query.class))
-        .to(MyQueryOptions.class);
-  }
-}
-
 public class AttributeFactory implements ChangeAttributeFactory {
-  protected MyQueryOptions options;
+  protected MyChangeOptions options;
 
   public class PluginAttribute extends PluginDefinedInfo {
     public String exampleName;
@@ -860,9 +914,9 @@ public class AttributeFactory implements ChangeAttributeFactory {
   }
 
   @Override
-  public PluginDefinedInfo create(ChangeData c, ChangeQueryProcessor qp, String plugin) {
+  public PluginDefinedInfo create(ChangeData c, BeanProvider bp, String plugin) {
     if (options == null) {
-      options = (MyQueryOptions) qp.getDynamicBean(plugin);
+      options = (MyChangeOptions) bp.getDynamicBean(plugin);
     }
     if (options.all) {
       return new PluginAttribute(c);
@@ -889,6 +943,23 @@ Output:
       }
    ],
     ...
+}
+
+curl http://localhost:8080/changes/1?myplugin-name--all
+
+Output:
+
+{
+  "_number": 1,
+  ...
+  "plugins": [
+    {
+      "name": "myplugin-name",
+      "example_name": "Attribute Example",
+      "change_value": "1"
+    }
+  ],
+  ...
 }
 ----
 
@@ -1299,7 +1370,7 @@ this can be specified by setting `scope = CapabilityScope.CORE`:
 [[panels]]
 === Panels
 
-GWT plugins can contribute panels to Gerrit screens.
+UI plugins can contribute panels to Gerrit screens.
 
 Gerrit screens define extension points where plugins can add GWT
 panels with custom controls:
@@ -1512,9 +1583,8 @@ public Object apply(RevisionResource rcrs, Input in) {
   // schedule a build
   [...]
   // update change
-  ReviewDb db = dbProvider.get();
   try (BatchUpdate bu = batchUpdateFactory.create(
-      db, project.getNameKey(), user, TimeUtil.nowTs())) {
+      project.getNameKey(), user, TimeUtil.nowTs())) {
     bu.addOp(change.getId(), new BatchUpdate.Op() {
       @Override
       public boolean updateChange(ChangeContext ctx) {
@@ -1874,317 +1944,6 @@ public class MyTopMenuExtension implements TopMenu {
 }
 ----
 
-
-[[gwt_ui_extension]]
-== GWT UI Extension
-Plugins can extend the Gerrit UI with own GWT code.
-
-A GWT plugin must contain a GWT module file, e.g. `HelloPlugin.gwt.xml`,
-that bundles together all the configuration settings of the GWT plugin:
-
-[source,xml]
-----
-<?xml version="1.0" encoding="UTF-8"?>
-<module rename-to="hello_gwt_plugin">
-  <!-- Inherit the core Web Toolkit stuff. -->
-  <inherits name="com.google.gwt.user.User"/>
-  <!-- Other module inherits -->
-  <inherits name="com.google.gerrit.Plugin"/>
-  <inherits name="com.google.gwt.http.HTTP"/>
-  <!-- Using GWT built-in themes adds a number of static -->
-  <!-- resources to the plugin. No theme inherits lines were -->
-  <!-- added in order to make this plugin as simple as possible -->
-  <!-- Specify the app entry point class. -->
-  <entry-point class="${package}.client.HelloPlugin"/>
-  <stylesheet src="hello.css"/>
-</module>
-----
-
-The GWT module must inherit `com.google.gerrit.Plugin` and
-`com.google.gwt.http.HTTP`.
-
-To register the GWT module a `GwtPlugin` needs to be bound.
-
-If no Guice modules are declared in the manifest, the GWT plugin may
-use auto-registration by using the `@Listen` annotation:
-
-[source,java]
-----
-@Listen
-public class MyExtension extends GwtPlugin {
-  public MyExtension() {
-    super("hello_gwt_plugin");
-  }
-}
-----
-
-Otherwise the binding must be done in an `HttpModule`:
-
-[source,java]
-----
-public class HttpModule extends ServletModule {
-
-  @Override
-  protected void configureServlets() {
-    DynamicSet.bind(binder(), WebUiPlugin.class)
-        .toInstance(new GwtPlugin("hello_gwt_plugin"));
-  }
-}
-----
-
-The HTTP module above must be declared in the `pom.xml` for Maven
-driven plugins:
-
-[source,xml]
-----
-<manifestEntries>
-  <Gerrit-HttpModule>com.googlesource.gerrit.plugins.myplugin.HttpModule</Gerrit-HttpModule>
-</manifestEntries>
-----
-
-The name that is provided to the `GwtPlugin` must match the GWT
-module name compiled into the plugin. The name of the GWT module
-can be explicitly set in the GWT module XML file by specifying
-the `rename-to` attribute on the module. It is important that the
-module name be unique across all plugins installed on the server,
-as the module name determines the JavaScript namespace used by the
-compiled plugin code.
-
-[source,xml]
-----
-<module rename-to="hello_gwt_plugin">
-----
-
-The actual GWT code must be implemented in a class that extends
-`com.google.gerrit.plugin.client.PluginEntryPoint`:
-
-[source,java]
-----
-public class HelloPlugin extends PluginEntryPoint {
-
-  @Override
-  public void onPluginLoad() {
-    // Create the dialog box
-    final DialogBox dialogBox = new DialogBox();
-
-    // The content of the dialog comes from a User specified Preference
-    dialogBox.setText("Hello from GWT Gerrit UI plugin");
-    dialogBox.setAnimationEnabled(true);
-    Button closeButton = new Button("Close");
-    VerticalPanel dialogVPanel = new VerticalPanel();
-    dialogVPanel.setWidth("100%");
-    dialogVPanel.setHorizontalAlignment(VerticalPanel.ALIGN_CENTER);
-    dialogVPanel.add(closeButton);
-
-    closeButton.addClickHandler(new ClickHandler() {
-      public void onClick(ClickEvent event) {
-        dialogBox.hide();
-      }
-    });
-
-    // Set the contents of the Widget
-    dialogBox.setWidget(dialogVPanel);
-
-    RootPanel rootPanel = RootPanel.get(HelloMenu.MENU_ID);
-    rootPanel.getElement().removeAttribute("href");
-    rootPanel.addDomHandler(new ClickHandler() {
-        @Override
-        public void onClick(ClickEvent event) {
-          dialogBox.center();
-          dialogBox.show();
-        }
-    }, ClickEvent.getType());
-  }
-}
-----
-
-This class must be set as entry point in the GWT module:
-
-[source,xml]
-----
-<entry-point class="${package}.client.HelloPlugin"/>
-----
-
-In addition this class must be defined as module in the `pom.xml` for the
-`gwt-maven-plugin` and the `webappDirectory` option of `gwt-maven-plugin`
-must be set to `${project.build.directory}/classes/static`:
-
-[source,xml]
-----
-<plugin>
-  <groupId>org.codehaus.mojo</groupId>
-  <artifactId>gwt-maven-plugin</artifactId>
-  <version>2.7.0</version>
-  <configuration>
-    <module>com.googlesource.gerrit.plugins.myplugin.HelloPlugin</module>
-    <disableClassMetadata>true</disableClassMetadata>
-    <disableCastChecking>true</disableCastChecking>
-    <webappDirectory>${project.build.directory}/classes/static</webappDirectory>
-  </configuration>
-  <executions>
-    <execution>
-      <goals>
-        <goal>compile</goal>
-      </goals>
-    </execution>
-  </executions>
-</plugin>
-----
-
-To attach a GWT widget defined by the plugin to the Gerrit core UI
-`com.google.gwt.user.client.ui.RootPanel` can be used to manipulate the
-Gerrit core widgets:
-
-[source,java]
-----
-RootPanel rootPanel = RootPanel.get(HelloMenu.MENU_ID);
-rootPanel.getElement().removeAttribute("href");
-rootPanel.addDomHandler(new ClickHandler() {
-  @Override
-  public void onClick(ClickEvent event) {
-    dialogBox.center();
-    dialogBox.show();
-  }
-}, ClickEvent.getType());
-----
-
-GWT plugins can come with their own css file. This css file must have a
-unique name and must be registered in the GWT module:
-
-[source,xml]
-----
-<stylesheet src="hello.css"/>
-----
-
-If a GWT plugin wants to invoke the Gerrit REST API it can use
-`com.google.gerrit.plugin.client.rpc.RestApi` to construct the URL
-path and to trigger the REST calls.
-
-Example for invoking a Gerrit core REST endpoint:
-
-[source,java]
-----
-new RestApi("projects").id(projectName).view("description")
-    .put("new description", new AsyncCallback<JavaScriptObject>() {
-
-  @Override
-  public void onSuccess(JavaScriptObject result) {
-    // TODO
-  }
-
-  @Override
-  public void onFailure(Throwable caught) {
-    // never invoked
-  }
-});
-----
-
-Example for invoking a REST endpoint defined by a plugin:
-
-[source,java]
-----
-new RestApi("projects").id(projectName).view("myplugin", "myview")
-    .get(new AsyncCallback<JavaScriptObject>() {
-
-  @Override
-  public void onSuccess(JavaScriptObject result) {
-    // TODO
-  }
-
-  @Override
-  public void onFailure(Throwable caught) {
-    // never invoked
-  }
-});
-----
-
-The `onFailure(Throwable)` of the provided callback is never invoked.
-If an error occurs, it is shown in an error dialog.
-
-In order to be able to do REST calls the GWT module must inherit
-`com.google.gwt.json.JSON`:
-
-[source,xml]
-----
-<inherits name="com.google.gwt.json.JSON"/>
-----
-
-[[screen]]
-== Add Screen
-A link:#gwt_ui_extension[GWT plugin] can link:#top-menu-extensions[add
-a menu item] that opens a screen that is implemented by the plugin.
-This way plugin screens can be fully integrated into the Gerrit UI.
-
-Example menu item:
-[source,java]
-----
-public class MyMenu implements TopMenu {
-  private final List<MenuEntry> menuEntries;
-
-  @Inject
-  public MyMenu(@PluginName String name) {
-    menuEntries = new ArrayList<>();
-    menuEntries.add(new MenuEntry("My Menu", Collections.singletonList(
-      new MenuItem("My Screen", "#/x/" + name + "/my-screen", ""))));
-  }
-
-  @Override
-  public List<MenuEntry> getEntries() {
-    return menuEntries;
-  }
-}
-----
-
-Example screen:
-[source,java]
-----
-public class MyPlugin extends PluginEntryPoint {
-  @Override
-  public void onPluginLoad() {
-    Plugin.get().screen("my-screen", new Screen.EntryPoint() {
-      @Override
-      public void onLoad(Screen screen) {
-        screen.add(new InlineLabel("My Screen");
-        screen.show();
-      }
-    });
-  }
-}
-----
-
-[[user-settings-screen]]
-== Add User Settings Screen
-
-A link:#gwt_ui_extension[GWT plugin] can implement a user settings
-screen that is integrated into the Gerrit user settings menu.
-
-Example settings screen:
-[source,java]
-----
-public class MyPlugin extends PluginEntryPoint {
-  @Override
-  public void onPluginLoad() {
-    Plugin.get().settingsScreen("my-preferences", "My Preferences",
-        new Screen.EntryPoint() {
-          @Override
-          public void onLoad(Screen screen) {
-            screen.setPageTitle("Settings");
-            screen.add(new InlineLabel("My Preferences"));
-            screen.show();
-          }
-    });
-  }
-}
-----
-
-By defining an link:config-gerrit.html#urlAlias[urlAlias] Gerrit
-administrators can map plugin screens into the Gerrit URL namespace or
-even replace Gerrit screens by plugin screens.
-
-Plugins may also programatically add URL aliases in the preferences of
-of a user. This way certain screens can be replaced for certain users.
-E.g. the plugin may offer a user preferences setting for choosing a
-screen that then sets/unsets a URL alias for the user.
 
 [[settings-screen]]
 == Plugin Settings Screen
@@ -2800,6 +2559,39 @@ class MyCommandInterceptor implements SshCreateCommandInterceptor {
     return pluginName + " mycommand";
 ----
 
+[[ssh-command-execution-interception]]
+== SSH Command Execution Interception
+Gerrit provides an extension point that enables plugins to check and
+prevent an SSH command from being run.
+
+[source, java]
+----
+import com.google.gerrit.sshd.SshExecuteCommandInterceptor;
+
+@Singleton
+public class SshExecuteCommandInterceptorImpl implements SshExecuteCommandInterceptor {
+  private final Provider<SshSession> sessionProvider;
+
+  @Inject
+  SshExecuteCommandInterceptorImpl(Provider<SshSession> sessionProvider) {
+    this.sessionProvider = sessionProvider;
+  }
+
+  @Override
+  public boolean accept(String command, List<String> arguments) {
+    if (command.startsWith("gerrit") && !"10.1.2.3".equals(sessionProvider.get().getRemoteAddressAsString())) {
+      return false;
+    }
+    return true;
+  }
+}
+----
+
+And then declare it in your SSH module:
+[source, java]
+----
+  DynamicSet.bind(binder(), SshExecuteCommandInterceptor.class).to(SshExecuteCommandInterceptorImpl.class);
+----
 
 [[pre-submit-evaluator]]
 == Pre-submit Validation Plugins
@@ -2907,40 +2699,6 @@ public class MyPluginModule extends AbstractModule {
 }
 ----
 
-[[ssh-command-execution-interception]]
-== SSH Command Execution Interception
-Gerrit provides an extension point that enables plugins to check and
-prevent an SSH command from being run.
-
-[source, java]
-----
-import com.google.gerrit.sshd.SshExecuteCommandInterceptor;
-
-@Singleton
-public class SshExecuteCommandInterceptorImpl implements SshExecuteCommandInterceptor {
-  private final Provider<SshSession> sessionProvider;
-
-  @Inject
-  SshExecuteCommandInterceptorImpl(Provider<SshSession> sessionProvider) {
-    this.sessionProvider = sessionProvider;
-  }
-
-  @Override
-  public boolean accept(String command, List<String> arguments) {
-    if (command.startsWith("gerrit") && !"10.1.2.3".equals(sessionProvider.get().getRemoteAddressAsString())) {
-      return false;
-    }
-    return true;
-  }
-}
-----
-
-And then declare it in your SSH module:
-[source, java]
-----
-  DynamicSet.bind(binder(), SshExecuteCommandInterceptor.class).to(SshExecuteCommandInterceptorImpl.class);
-----
-
 Plugin authors should also consider binding their SubmitRule using a `Gerrit-BatchModule`.
 See link:dev-plugins.html[Batch runtime] for more informations.
 
@@ -2953,6 +2711,94 @@ The `SubmitRequirement` class allows rules to communicate what the user needs
 to change in order to be compliant. These requirements should be kept once they
 are met, but marked as `OK`. If the requirements were not displayed, reviewers
 would need to use their precious time to manually check that they were met.
+
+[[quota-enforcer]]
+== Quota Enforcer
+
+Gerrit provides an extension point that allows a plugin to enforce quota.
+link:quota.html[This documentation page] has a list of all quota requests that
+Gerrit core issues. Plugins can choose to respond to all or just a subset of
+requests. Some implementations might want to keep track of user quota in buckets,
+others might just check against instance or project state to enforce limits on how
+many projects can be created or how large a repository can become.
+
+Checking against instance state can be racy for concurrent requests as the server does not
+refill tokens if the action fails in a later stage (e.g. database failure). If
+plugins want to guarantee an absolute maximum on a resource, they have to do their own
+book-keeping.
+
+[source, java]
+----
+import com.google.server.quota.QuotaEnforcer;
+
+class ProjectLimiter implements QuotaEnforcer {
+  private final long maxNumberOfProjects = 100;
+  @Override
+  QuotaResponse requestTokens(String quotaGroup, QuotaRequestContext ctx, long numTokens) {
+    if (!"/projects/create".equals(quotaGroup)) {
+      return QuotaResponse.noOp();
+    }
+    // No deduction because we always check against the instance state (racy but fine for
+    // this plugin)
+    if (currentNumberOfProjects() + numTokens > maxNumberOfProjects) {
+      return QuotaResponse.error("too many projects");
+    }
+    return QuotaResponse.ok();
+  }
+
+  @Override
+  QuotaResponse dryRun(String quotaGroup, QuotaRequestContext ctx, long numTokens) {
+    // Since we are not keeping any state in this enforcer, we can simply call requestTokens().
+    return requestTokens(quotaGroup, ctx, numTokens);
+  }
+
+  void refill(String quotaGroup, QuotaRequestContext ctx, long numTokens) {
+    // No-op
+  }
+}
+----
+
+[source, java]
+----
+import com.google.server.quota.QuotaEnforcer;
+
+class ApiQpsEnforcer implements QuotaEnforcer {
+  // AutoRefillingPerUserBuckets is a imaginary bucket implementation that could be based on
+  // a loading cache or a commonly used bucketing algorithm.
+  private final AutoRefillingPerUserBuckets<CurrentUser, Long> buckets;
+  @Override
+  QuotaResponse requestTokens(String quotaGroup, QuotaRequestContext ctx, long numTokens) {
+    if (!quotaGroup.startsWith("/restapi/")) {
+      return QuotaResponse.noOp();
+    }
+    boolean success = buckets.deduct(ctx.user(), numTokens);
+    if (!success) {
+      return QuotaResponse.error("user sent too many qps, please wait for 5 minutes");
+    }
+    return QuotaResponse.ok();
+  }
+
+  @Override
+  QuotaResponse dryRun(String quotaGroup, QuotaRequestContext ctx, long numTokens) {
+    if (!quotaGroup.startsWith("/restapi/")) {
+      return QuotaResponse.noOp();
+    }
+    boolean success = buckets.checkOnly(ctx.user(), numTokens);
+    if (!success) {
+      return QuotaResponse.error("user sent too many qps, please wait for 5 minutes");
+    }
+    return QuotaResponse.ok();
+  }
+
+  @Override
+  void refill(String quotaGroup, QuotaRequestContext ctx, long numTokens) {
+    if (!quotaGroup.startsWith("/restapi/")) {
+      return;
+    }
+    buckets.add(ctx.user(), numTokens);
+  }
+}
+----
 
 
 == SEE ALSO

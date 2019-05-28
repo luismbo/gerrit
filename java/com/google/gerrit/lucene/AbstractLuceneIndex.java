@@ -20,6 +20,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Sets;
 import com.google.common.flogger.FluentLogger;
@@ -30,6 +31,7 @@ import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.gerrit.common.Nullable;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.index.FieldDef;
 import com.google.gerrit.index.FieldType;
 import com.google.gerrit.index.Index;
@@ -38,18 +40,14 @@ import com.google.gerrit.index.Schema;
 import com.google.gerrit.index.Schema.Values;
 import com.google.gerrit.index.query.DataSource;
 import com.google.gerrit.index.query.FieldBundle;
+import com.google.gerrit.index.query.ListResultSet;
+import com.google.gerrit.index.query.ResultSet;
 import com.google.gerrit.server.config.SitePaths;
 import com.google.gerrit.server.index.IndexUtils;
 import com.google.gerrit.server.logging.LoggingContextAwareExecutorService;
 import com.google.gerrit.server.logging.LoggingContextAwareScheduledExecutorService;
-import com.google.gwtorm.server.OrmException;
-import com.google.gwtorm.server.ResultSet;
 import java.io.IOException;
 import java.sql.Timestamp;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -215,7 +213,7 @@ public abstract class AbstractLuceneIndex<K, V> implements Index<K, V> {
   }
 
   @Override
-  public void markReady(boolean ready) throws IOException {
+  public void markReady(boolean ready) {
     IndexUtils.setReady(sitePaths, name, schema.getVersion(), ready);
   }
 
@@ -289,8 +287,12 @@ public abstract class AbstractLuceneIndex<K, V> implements Index<K, V> {
   }
 
   @Override
-  public void deleteAll() throws IOException {
-    writer.deleteAll();
+  public void deleteAll() {
+    try {
+      writer.deleteAll();
+    } catch (IOException e) {
+      throw new StorageException(e);
+    }
   }
 
   public IndexWriter getWriter() {
@@ -488,49 +490,33 @@ public abstract class AbstractLuceneIndex<K, V> implements Index<K, V> {
     }
 
     @Override
-    public ResultSet<V> read() throws OrmException {
+    public ResultSet<V> read() {
       return readImpl(AbstractLuceneIndex.this::fromDocument);
     }
 
     @Override
-    public ResultSet<FieldBundle> readRaw() throws OrmException {
+    public ResultSet<FieldBundle> readRaw() {
       return readImpl(AbstractLuceneIndex.this::toFieldBundle);
     }
 
-    private <T> ResultSet<T> readImpl(Function<Document, T> mapper) throws OrmException {
+    private <T> ResultSet<T> readImpl(Function<Document, T> mapper) {
       IndexSearcher searcher = null;
       try {
         searcher = acquire();
         int realLimit = opts.start() + opts.limit();
         TopFieldDocs docs = searcher.search(query, realLimit, sort);
-        List<T> result = new ArrayList<>(docs.scoreDocs.length);
+        ImmutableList.Builder<T> b = ImmutableList.builderWithExpectedSize(docs.scoreDocs.length);
         for (int i = opts.start(); i < docs.scoreDocs.length; i++) {
           ScoreDoc sd = docs.scoreDocs[i];
           Document doc = searcher.doc(sd.doc, opts.fields());
           T mapperResult = mapper.apply(doc);
           if (mapperResult != null) {
-            result.add(mapperResult);
+            b.add(mapperResult);
           }
         }
-        final List<T> r = Collections.unmodifiableList(result);
-        return new ResultSet<T>() {
-          @Override
-          public Iterator<T> iterator() {
-            return r.iterator();
-          }
-
-          @Override
-          public List<T> toList() {
-            return r;
-          }
-
-          @Override
-          public void close() {
-            // Do nothing.
-          }
-        };
+        return new ListResultSet<>(b.build());
       } catch (IOException e) {
-        throw new OrmException(e);
+        throw new StorageException(e);
       } finally {
         if (searcher != null) {
           try {

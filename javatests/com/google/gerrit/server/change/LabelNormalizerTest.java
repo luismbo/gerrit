@@ -24,16 +24,14 @@ import static org.junit.Assert.assertEquals;
 import com.google.common.collect.ImmutableList;
 import com.google.gerrit.common.data.AccessSection;
 import com.google.gerrit.common.data.LabelType;
+import com.google.gerrit.extensions.api.GerritApi;
+import com.google.gerrit.extensions.common.ChangeInfo;
+import com.google.gerrit.extensions.common.ChangeInput;
 import com.google.gerrit.lifecycle.LifecycleManager;
 import com.google.gerrit.reviewdb.client.Account;
-import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.LabelId;
-import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
-import com.google.gerrit.reviewdb.client.PatchSetInfo;
-import com.google.gerrit.reviewdb.server.ReviewDb;
-import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.account.AccountManager;
 import com.google.gerrit.server.account.AuthRequest;
@@ -45,16 +43,13 @@ import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.project.ProjectConfig;
 import com.google.gerrit.server.schema.SchemaCreator;
-import com.google.gerrit.server.util.RequestContext;
 import com.google.gerrit.server.util.ThreadLocalRequestContext;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gerrit.testing.InMemoryDatabase;
+import com.google.gerrit.testing.GerritBaseTests;
 import com.google.gerrit.testing.InMemoryModule;
 import com.google.inject.Guice;
 import com.google.inject.Inject;
 import com.google.inject.Injector;
-import com.google.inject.Provider;
-import com.google.inject.util.Providers;
 import java.util.List;
 import org.eclipse.jgit.lib.Repository;
 import org.junit.After;
@@ -62,21 +57,21 @@ import org.junit.Before;
 import org.junit.Test;
 
 /** Unit tests for {@link LabelNormalizer}. */
-public class LabelNormalizerTest {
+public class LabelNormalizerTest extends GerritBaseTests {
   @Inject private AccountManager accountManager;
   @Inject private AllProjectsName allProjects;
   @Inject private GitRepositoryManager repoManager;
   @Inject private IdentifiedUser.GenericFactory userFactory;
-  @Inject private InMemoryDatabase schemaFactory;
   @Inject private LabelNormalizer norm;
   @Inject private MetaDataUpdate.User metaDataUpdateFactory;
   @Inject private ProjectCache projectCache;
   @Inject private SchemaCreator schemaCreator;
   @Inject protected ThreadLocalRequestContext requestContext;
   @Inject private ChangeNotes.Factory changeNotesFactory;
+  @Inject private ProjectConfig.Factory projectConfigFactory;
+  @Inject private GerritApi gApi;
 
   private LifecycleManager lifecycle;
-  private ReviewDb db;
   private Account.Id userId;
   private IdentifiedUser user;
   private Change change;
@@ -90,23 +85,11 @@ public class LabelNormalizerTest {
     lifecycle.add(injector);
     lifecycle.start();
 
-    db = schemaFactory.open();
-    schemaCreator.create(db);
+    schemaCreator.create();
     userId = accountManager.authenticate(AuthRequest.forUser("user")).getAccountId();
     user = userFactory.create(userId);
 
-    requestContext.setContext(
-        new RequestContext() {
-          @Override
-          public CurrentUser getUser() {
-            return user;
-          }
-
-          @Override
-          public Provider<ReviewDb> getReviewDbProvider() {
-            return Providers.of(db);
-          }
-        });
+    requestContext.setContext(() -> user);
 
     configureProject();
     setUpChange();
@@ -126,18 +109,14 @@ public class LabelNormalizerTest {
   }
 
   private void setUpChange() throws Exception {
-    change =
-        new Change(
-            new Change.Key("Iabcd1234abcd1234abcd1234abcd1234abcd1234"),
-            new Change.Id(1),
-            userId,
-            new Branch.NameKey(allProjects, "refs/heads/master"),
-            TimeUtil.nowTs());
-    PatchSetInfo ps = new PatchSetInfo(new PatchSet.Id(change.getId(), 1));
-    ps.setSubject("Test change");
-    change.setCurrentPatchSet(ps);
-    db.changes().insert(ImmutableList.of(change));
-    notes = changeNotesFactory.createChecked(db, change);
+    ChangeInput input = new ChangeInput();
+    input.project = allProjects.get();
+    input.branch = "master";
+    input.newBranch = true;
+    input.subject = "Test change";
+    ChangeInfo info = gApi.changes().create(input).get();
+    notes = changeNotesFactory.createChecked(allProjects, new Change.Id(info._number));
+    change = notes.getChange();
   }
 
   @After
@@ -146,10 +125,6 @@ public class LabelNormalizerTest {
       lifecycle.stop();
     }
     requestContext.setContext(null);
-    if (db != null) {
-      db.close();
-    }
-    InMemoryDatabase.drop(schemaFactory);
   }
 
   @Test
@@ -198,7 +173,7 @@ public class LabelNormalizerTest {
 
   private ProjectConfig loadAllProjects() throws Exception {
     try (Repository repo = repoManager.openRepository(allProjects)) {
-      ProjectConfig pc = new ProjectConfig(allProjects);
+      ProjectConfig pc = projectConfigFactory.create(allProjects);
       pc.load(repo);
       return pc;
     }
@@ -225,6 +200,6 @@ public class LabelNormalizerTest {
   }
 
   private static List<PatchSetApproval> list(PatchSetApproval... psas) {
-    return ImmutableList.<PatchSetApproval>copyOf(psas);
+    return ImmutableList.copyOf(psas);
   }
 }

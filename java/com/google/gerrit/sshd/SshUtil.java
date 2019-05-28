@@ -30,8 +30,6 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.InvalidKeySpecException;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.sshd.common.SshException;
-import org.apache.sshd.common.future.CloseFuture;
-import org.apache.sshd.common.future.SshFutureListener;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
 import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
 import org.apache.sshd.server.session.ServerSession;
@@ -127,7 +125,7 @@ public class SshUtil {
       // session, record a login event in the log and add
       // a close listener to record a logout event.
       //
-      Context ctx = sshScope.newContext(null, sd, null);
+      Context ctx = sshScope.newContext(sd, null);
       Context old = sshScope.set(ctx);
       try {
         sshLog.onLogin();
@@ -136,16 +134,13 @@ public class SshUtil {
       }
 
       session.addCloseFutureListener(
-          new SshFutureListener<CloseFuture>() {
-            @Override
-            public void operationComplete(CloseFuture future) {
-              final Context ctx = sshScope.newContext(null, sd, null);
-              final Context old = sshScope.set(ctx);
-              try {
-                sshLog.onLogout();
-              } finally {
-                sshScope.set(old);
-              }
+          future -> {
+            final Context ctx1 = sshScope.newContext(sd, null);
+            final Context old1 = sshScope.set(ctx1);
+            try {
+              sshLog.onLogout();
+            } finally {
+              sshScope.set(old1);
             }
           });
     }

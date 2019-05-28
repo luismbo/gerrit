@@ -15,28 +15,24 @@
 package com.google.gerrit.acceptance.rest.change;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.TruthJUnit.assume;
 import static com.google.gerrit.acceptance.GitUtil.getChangeId;
 import static com.google.gerrit.acceptance.GitUtil.pushHead;
 import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
 import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.TestAccount;
 import com.google.gerrit.acceptance.TestProjectInput;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.client.ChangeStatus;
 import com.google.gerrit.extensions.client.InheritableBoolean;
 import com.google.gerrit.extensions.client.SubmitType;
 import com.google.gerrit.extensions.common.ChangeInfo;
-import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.reviewdb.client.Branch;
-import com.google.gerrit.reviewdb.client.Change;
-import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.server.change.TestSubmitInput;
 import com.google.gerrit.server.project.testing.Util;
+import com.google.inject.Inject;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
@@ -44,6 +40,7 @@ import org.eclipse.jgit.revwalk.RevWalk;
 import org.junit.Test;
 
 public abstract class AbstractSubmitByRebase extends AbstractSubmit {
+  @Inject private RequestScopeOperations requestScopeOperations;
 
   @Override
   protected abstract SubmitType getSubmitType();
@@ -73,8 +70,9 @@ public abstract class AbstractSubmitByRebase extends AbstractSubmit {
     submitWithRebase(user);
   }
 
-  private void submitWithRebase(TestAccount submitter) throws Exception {
-    setApiUser(submitter);
+  protected ImmutableList<PushOneCommit.Result> submitWithRebase(TestAccount submitter)
+      throws Exception {
+    requestScopeOperations.setApiUser(submitter.id());
     RevCommit initialHead = getRemoteHead();
     PushOneCommit.Result change = createChange("Change 1", "a.txt", "content");
     submit(change.getChangeId());
@@ -90,8 +88,8 @@ public abstract class AbstractSubmitByRebase extends AbstractSubmit {
     assertCurrentRevision(change2.getChangeId(), 2, headAfterSecondSubmit);
     assertSubmitter(change2.getChangeId(), 1, submitter);
     assertSubmitter(change2.getChangeId(), 2, submitter);
-    assertPersonEquals(admin.getIdent(), headAfterSecondSubmit.getAuthorIdent());
-    assertPersonEquals(submitter.getIdent(), headAfterSecondSubmit.getCommitterIdent());
+    assertPersonEquals(admin.newIdent(), headAfterSecondSubmit.getAuthorIdent());
+    assertPersonEquals(submitter.newIdent(), headAfterSecondSubmit.getCommitterIdent());
 
     assertRefUpdatedEvents(
         initialHead, headAfterFirstSubmit, headAfterFirstSubmit, headAfterSecondSubmit);
@@ -100,6 +98,7 @@ public abstract class AbstractSubmitByRebase extends AbstractSubmit {
         headAfterFirstSubmit.name(),
         change2.getChangeId(),
         headAfterSecondSubmit.name());
+    return ImmutableList.of(change, change2);
   }
 
   @Test
@@ -180,7 +179,7 @@ public abstract class AbstractSubmitByRebase extends AbstractSubmit {
     PushOneCommit.Result change1 = createChange("Added a", "a.txt", "");
 
     PushOneCommit change2Push =
-        pushFactory.create(db, admin.getIdent(), testRepo, "Merge to master", "m.txt", "");
+        pushFactory.create(admin.newIdent(), testRepo, "Merge to master", "m.txt", "");
     change2Push.setParents(ImmutableList.of(initialHead, change1.getCommit()));
     PushOneCommit.Result change2 = change2Push.to("refs/for/master");
 
@@ -240,80 +239,6 @@ public abstract class AbstractSubmitByRebase extends AbstractSubmit {
 
     assertRefUpdatedEvents(initialHead, headAfterFirstSubmit);
     assertChangeMergedEvents(change.getChangeId(), headAfterFirstSubmit.name());
-  }
-
-  @Test
-  public void repairChangeStateAfterFailure() throws Exception {
-    // In NoteDb-only mode, repo and meta updates are atomic (at least in InMemoryRepository).
-    assume().that(notesMigration.disableChangeReviewDb()).isFalse();
-
-    RevCommit initialHead = getRemoteHead();
-    PushOneCommit.Result change = createChange("Change 1", "a.txt", "content");
-    submit(change.getChangeId());
-
-    RevCommit headAfterFirstSubmit = getRemoteHead();
-    testRepo.reset(initialHead);
-    PushOneCommit.Result change2 = createChange("Change 2", "b.txt", "other content");
-    Change.Id id2 = change2.getChange().getId();
-    TestSubmitInput failInput = new TestSubmitInput();
-    failInput.failAfterRefUpdates = true;
-    submit(
-        change2.getChangeId(),
-        failInput,
-        ResourceConflictException.class,
-        "Failing after ref updates");
-    RevCommit headAfterFailedSubmit = getRemoteHead();
-
-    // Bad: ref advanced but change wasn't updated.
-    PatchSet.Id psId1 = new PatchSet.Id(id2, 1);
-    PatchSet.Id psId2 = new PatchSet.Id(id2, 2);
-    ChangeInfo info = gApi.changes().id(id2.get()).get();
-    assertThat(info.status).isEqualTo(ChangeStatus.NEW);
-    assertThat(info.revisions.get(info.currentRevision)._number).isEqualTo(1);
-    assertThat(getPatchSet(psId2)).isNull();
-
-    ObjectId rev2;
-    try (Repository repo = repoManager.openRepository(project);
-        RevWalk rw = new RevWalk(repo)) {
-      ObjectId rev1 = repo.exactRef(psId1.toRefName()).getObjectId();
-      assertThat(rev1).isNotNull();
-
-      rev2 = repo.exactRef(psId2.toRefName()).getObjectId();
-      assertThat(rev2).isNotNull();
-      assertThat(rev2).isNotEqualTo(rev1);
-      assertThat(rw.parseCommit(rev2).getParent(0)).isEqualTo(headAfterFirstSubmit);
-
-      assertThat(repo.exactRef("refs/heads/master").getObjectId()).isEqualTo(rev2);
-    }
-
-    submit(change2.getChangeId());
-    RevCommit headAfterSecondSubmit = getRemoteHead();
-    assertThat(headAfterSecondSubmit).isEqualTo(headAfterFailedSubmit);
-
-    // Change status and patch set entities were updated, and branch tip stayed
-    // the same.
-    info = gApi.changes().id(id2.get()).get();
-    assertThat(info.status).isEqualTo(ChangeStatus.MERGED);
-    assertThat(info.revisions.get(info.currentRevision)._number).isEqualTo(2);
-    PatchSet ps2 = getPatchSet(psId2);
-    assertThat(ps2).isNotNull();
-    assertThat(ps2.getRevision().get()).isEqualTo(rev2.name());
-    assertThat(Iterables.getLast(info.messages).message)
-        .isEqualTo(
-            "Change has been successfully rebased and submitted as "
-                + rev2.name()
-                + " by Administrator");
-
-    try (Repository repo = repoManager.openRepository(project)) {
-      assertThat(repo.exactRef("refs/heads/master").getObjectId()).isEqualTo(rev2);
-    }
-
-    assertRefUpdatedEvents(initialHead, headAfterFirstSubmit);
-    assertChangeMergedEvents(
-        change.getChangeId(),
-        headAfterFirstSubmit.name(),
-        change2.getChangeId(),
-        headAfterSecondSubmit.name());
   }
 
   protected RevCommit parse(ObjectId id) throws Exception {

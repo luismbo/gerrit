@@ -18,6 +18,7 @@ import com.google.common.collect.Lists;
 import com.google.common.flogger.FluentLogger;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
+import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.common.FileInfo;
 import com.google.gerrit.extensions.registration.DynamicMap;
 import com.google.gerrit.extensions.restapi.AuthException;
@@ -33,7 +34,6 @@ import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.change.AccountPatchReviewStore;
@@ -49,7 +49,6 @@ import com.google.gerrit.server.patch.PatchListNotAvailableException;
 import com.google.gerrit.server.patch.PatchListObjectTooLargeException;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.plugincontext.PluginItemContext;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -113,7 +112,6 @@ public class Files implements ChildCollection<RevisionResource, FileResource> {
     @Option(name = "-q")
     String query;
 
-    private final Provider<ReviewDb> db;
     private final Provider<CurrentUser> self;
     private final FileInfoJson fileInfoJson;
     private final Revisions revisions;
@@ -124,7 +122,6 @@ public class Files implements ChildCollection<RevisionResource, FileResource> {
 
     @Inject
     ListFiles(
-        Provider<ReviewDb> db,
         Provider<CurrentUser> self,
         FileInfoJson fileInfoJson,
         Revisions revisions,
@@ -132,7 +129,6 @@ public class Files implements ChildCollection<RevisionResource, FileResource> {
         PatchListCache patchListCache,
         PatchSetUtil psUtil,
         PluginItemContext<AccountPatchReviewStore> accountPatchReviewStore) {
-      this.db = db;
       this.self = self;
       this.fileInfoJson = fileInfoJson;
       this.revisions = revisions;
@@ -149,7 +145,7 @@ public class Files implements ChildCollection<RevisionResource, FileResource> {
 
     @Override
     public Response<?> apply(RevisionResource resource)
-        throws AuthException, BadRequestException, ResourceNotFoundException, OrmException,
+        throws AuthException, BadRequestException, ResourceNotFoundException,
             RepositoryNotFoundException, IOException, PatchListNotAvailableException,
             PermissionBackendException {
       checkOptions();
@@ -226,8 +222,7 @@ public class Files implements ChildCollection<RevisionResource, FileResource> {
       }
     }
 
-    private Collection<String> reviewed(RevisionResource resource)
-        throws AuthException, OrmException {
+    private Collection<String> reviewed(RevisionResource resource) throws AuthException {
       CurrentUser user = self.get();
       if (!(user.isIdentifiedUser())) {
         throw new AuthException("Authentication required");
@@ -236,9 +231,7 @@ public class Files implements ChildCollection<RevisionResource, FileResource> {
       Account.Id userId = user.getAccountId();
       PatchSet patchSetId = resource.getPatchSet();
       Optional<PatchSetWithReviewedFiles> o;
-      o =
-          accountPatchReviewStore.call(
-              s -> s.findReviewed(patchSetId.getId(), userId), OrmException.class);
+      o = accountPatchReviewStore.call(s -> s.findReviewed(patchSetId.getId(), userId));
 
       if (o.isPresent()) {
         PatchSetWithReviewedFiles res = o.get();
@@ -260,14 +253,14 @@ public class Files implements ChildCollection<RevisionResource, FileResource> {
 
     private List<String> copy(
         Set<String> paths, PatchSet.Id old, RevisionResource resource, Account.Id userId)
-        throws IOException, PatchListNotAvailableException, OrmException {
+        throws IOException, PatchListNotAvailableException {
       Project.NameKey project = resource.getChange().getProject();
       try (Repository git = gitManager.openRepository(project);
           ObjectReader reader = git.newObjectReader();
           RevWalk rw = new RevWalk(reader);
           TreeWalk tw = new TreeWalk(reader)) {
         Change change = resource.getChange();
-        PatchSet patchSet = psUtil.get(db.get(), resource.getNotes(), old);
+        PatchSet patchSet = psUtil.get(resource.getNotes(), old);
         if (patchSet == null) {
           throw new PatchListNotAvailableException(
               String.format(
@@ -321,8 +314,7 @@ public class Files implements ChildCollection<RevisionResource, FileResource> {
         }
 
         accountPatchReviewStore.run(
-            s -> s.markReviewed(resource.getPatchSet().getId(), userId, pathList),
-            OrmException.class);
+            s -> s.markReviewed(resource.getPatchSet().getId(), userId, pathList));
         return pathList;
       }
     }
@@ -332,7 +324,7 @@ public class Files implements ChildCollection<RevisionResource, FileResource> {
       return this;
     }
 
-    public ListFiles setBase(String base) {
+    public ListFiles setBase(@Nullable String base) {
       this.base = base;
       return this;
     }

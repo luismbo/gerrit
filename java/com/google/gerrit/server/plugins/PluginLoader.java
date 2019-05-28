@@ -55,7 +55,6 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Queue;
 import java.util.Set;
 import java.util.TreeSet;
@@ -290,12 +289,7 @@ public class PluginLoader implements LifecycleListener {
 
   private void removeStalePluginFiles() {
     DirectoryStream.Filter<Path> filter =
-        new DirectoryStream.Filter<Path>() {
-          @Override
-          public boolean accept(Path entry) throws IOException {
-            return entry.getFileName().toString().startsWith("plugin_");
-          }
-        };
+        entry -> entry.getFileName().toString().startsWith("plugin_");
     try (DirectoryStream<Path> files = Files.newDirectoryStream(tempDir, filter)) {
       for (Path file : files) {
         logger.atInfo().log("Removing stale plugin file: %s", file.toFile().getName());
@@ -436,20 +430,21 @@ public class PluginLoader implements LifecycleListener {
     cleanInBackground();
   }
 
-  private void addAllEntries(Map<String, Path> from, TreeSet<Entry<String, Path>> to) {
-    Iterator<Entry<String, Path>> it = from.entrySet().iterator();
+  private void addAllEntries(Map<String, Path> from, TreeSet<Map.Entry<String, Path>> to) {
+    Iterator<Map.Entry<String, Path>> it = from.entrySet().iterator();
     while (it.hasNext()) {
-      Entry<String, Path> entry = it.next();
+      Map.Entry<String, Path> entry = it.next();
       to.add(new AbstractMap.SimpleImmutableEntry<>(entry.getKey(), entry.getValue()));
     }
   }
 
-  private TreeSet<Entry<String, Path>> jarsFirstSortedPluginsSet(Map<String, Path> activePlugins) {
-    TreeSet<Entry<String, Path>> sortedPlugins =
+  private TreeSet<Map.Entry<String, Path>> jarsFirstSortedPluginsSet(
+      Map<String, Path> activePlugins) {
+    TreeSet<Map.Entry<String, Path>> sortedPlugins =
         Sets.newTreeSet(
-            new Comparator<Entry<String, Path>>() {
+            new Comparator<Map.Entry<String, Path>>() {
               @Override
-              public int compare(Entry<String, Path> e1, Entry<String, Path> e2) {
+              public int compare(Map.Entry<String, Path> e1, Map.Entry<String, Path> e2) {
                 Path n1 = e1.getValue().getFileName();
                 Path n2 = e2.getValue().getFileName();
                 return ComparisonChain.start()

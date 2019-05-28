@@ -35,9 +35,62 @@
     RIGHT: 'right',
   };
 
+  const Defs = {};
+
+  /**
+   * Special line number which should not be collapsed into a shared region.
+   *
+   * @typedef {{
+   *  number: number,
+   *  leftSide: boolean
+   * }}
+   */
+  Defs.LineOfInterest;
+
   const LARGE_DIFF_THRESHOLD_LINES = 10000;
   const FULL_CONTEXT = -1;
   const LIMITED_CONTEXT = 10;
+
+  /** @typedef {{start_line: number, start_character: number,
+   *             end_line: number, end_character: number}} */
+  Gerrit.Range;
+
+  /**
+   * Compare two ranges. Either argument may be falsy, but will only return
+   * true if both are falsy or if neither are falsy and have the same position
+   * values.
+   *
+   * @param {Gerrit.Range=} a range 1
+   * @param {Gerrit.Range=} b range 2
+   * @return {boolean}
+   */
+  Gerrit.rangesEqual = function(a, b) {
+    if (!a && !b) { return true; }
+    if (!a || !b) { return false; }
+    return a.start_line === b.start_line &&
+        a.start_character === b.start_character &&
+        a.end_line === b.end_line &&
+        a.end_character === b.end_character;
+  };
+
+  function isThreadEl(node) {
+    return node.nodeType === Node.ELEMENT_NODE &&
+        node.classList.contains('comment-thread');
+  }
+
+  /**
+   * Turn a slot element into the corresponding content element.
+   * Slots are only fully supported in Polymer 2 - in Polymer 1, they are
+   * replaced with content elements during template parsing. This conversion is
+   * not applied for imperatively created slot elements, so this method
+   * implements the same behavior as the template parsing for imperative slots.
+   */
+  Gerrit.slotToContent = function(slot) {
+    const content = document.createElement('content');
+    content.name = slot.name;
+    content.setAttribute('select', `[slot='${slot.name}']`);
+    return content;
+  };
 
   const COMMIT_MSG_PATH = '/COMMIT_MSG';
   /**
@@ -49,8 +102,11 @@
    */
   const COMMIT_MSG_LINE_LENGTH = 72;
 
+  const RENDER_DIFF_TABLE_DEBOUNCE_NAME = 'renderDiffTable';
+
   Polymer({
     is: 'gr-diff',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when the user selects a line.
@@ -64,16 +120,17 @@
      */
 
     /**
-     * Fired when a comment is saved or discarded
+     * Fired when a comment is created
      *
-     * @event diff-comments-modified
+     * @event create-comment
      */
 
-     /**
-      * Fired when a draft is added or edited.
-      *
-      * @event draft-interaction
-      */
+    /**
+     * Fired when rendering, including syntax highlighting, is done. Also fired
+     * when no rendering can be done because required preferences are not set.
+     *
+     * @event render
+     */
 
     properties: {
       changeNum: String,
@@ -91,10 +148,6 @@
         type: Object,
         observer: '_prefsObserver',
       },
-      projectConfig: {
-        type: Object,
-        observer: '_projectConfigChanged',
-      },
       projectName: String,
       displayLine: {
         type: Boolean,
@@ -109,9 +162,10 @@
         reflectToAttribute: true,
       },
       noRenderOnPrefsChange: Boolean,
-      comments: {
-        type: Object,
-        value: {left: [], right: []},
+      /** @type {!Array<!Gerrit.HoveredRange>} */
+      _commentRanges: {
+        type: Array,
+        value: () => [],
       },
       lineWrapping: {
         type: Boolean,
@@ -124,13 +178,7 @@
         observer: '_viewModeObserver',
       },
 
-      /**
-       * Special line number which should not be collapsed into a shared region.
-       * @type {{
-       *  number: number,
-       *  leftSide: {boolean}
-       * }|null}
-       */
+       /** @type ?Defs.LineOfInterest */
       lineOfInterest: Object,
 
       loading: {
@@ -189,27 +237,32 @@
         observer: '_blameChanged',
       },
 
-      _parentIndex: {
-        type: Number,
-        computed: '_computeParentIndex(patchRange.*)',
-      },
+      parentIndex: Number,
 
       _newlineWarning: {
         type: String,
         computed: '_computeNewlineWarning(diff)',
       },
 
-      /**
-       * @type {function(number, boolean, !string)}
-       */
-      _createThreadGroupFn: {
-        type: Function,
-        value() {
-          return this._createCommentThreadGroup.bind(this);
-        },
-      },
-
       _diffLength: Number,
+
+      /**
+       * Observes comment nodes added or removed after the initial render.
+       * Can be used to unregister when the entire diff is (re-)rendered or upon
+       * detachment.
+       * @type {?PolymerDomApi.ObserveHandle}
+       */
+      _incrementalNodeObserver: Object,
+
+      /**
+       * Observes comment nodes added or removed at any point.
+       * Can be used to unregister upon detachment.
+       * @type {?PolymerDomApi.ObserveHandle}
+       */
+      _nodeObserver: Object,
+
+      /** Set by Polymer. */
+      isAttached: Boolean,
     },
 
     behaviors: [
@@ -217,15 +270,135 @@
     ],
 
     listeners: {
-      'comment-discard': '_handleCommentDiscard',
-      'comment-update': '_handleCommentUpdate',
-      'comment-save': '_handleCommentSave',
-      'create-comment': '_handleCreateComment',
+      'create-range-comment': '_handleCreateRangeComment',
+      'render-content': '_handleRenderContent',
+    },
+
+    observers: [
+      '_enableSelectionObserver(loggedIn, isAttached)',
+    ],
+
+    attached() {
+      this._observeNodes();
+    },
+
+    detached() {
+      this._unobserveIncrementalNodes();
+      this._unobserveNodes();
+    },
+
+    _enableSelectionObserver(loggedIn, isAttached) {
+      if (loggedIn && isAttached) {
+        this.listen(document, 'selectionchange', '_handleSelectionChange');
+        this.listen(document, 'mouseup', '_handleMouseUp');
+      } else {
+        this.unlisten(document, 'selectionchange', '_handleSelectionChange');
+        this.unlisten(document, 'mouseup', '_handleMouseUp');
+      }
+    },
+
+    _handleSelectionChange() {
+      // Because of shadow DOM selections, we handle the selectionchange here,
+      // and pass the shadow DOM selection into gr-diff-highlight, where the
+      // corresponding range is determined and normalized.
+      const selection = this._getShadowOrDocumentSelection();
+      this.$.highlights.handleSelectionChange(selection, false);
+    },
+
+    _handleMouseUp(e) {
+      // To handle double-click outside of text creating comments, we check on
+      // mouse-up if there's a selection that just covers a line change. We
+      // can't do that on selection change since the user may still be dragging.
+      const selection = this._getShadowOrDocumentSelection();
+      this.$.highlights.handleSelectionChange(selection, true);
+    },
+
+    /** Gets the current selection, preferring the shadow DOM selection. */
+    _getShadowOrDocumentSelection() {
+      // When using native shadow DOM, the selection returned by
+      // document.getSelection() cannot reference the actual DOM elements making
+      // up the diff, because they are in the shadow DOM of the gr-diff element.
+      // This takes the shadow DOM selection if one exists.
+      return this.root.getSelection ?
+          this.root.getSelection() :
+          document.getSelection();
+    },
+
+    _observeNodes() {
+      this._nodeObserver = Polymer.dom(this).observeNodes(info => {
+        const addedThreadEls = info.addedNodes.filter(isThreadEl);
+        const removedThreadEls = info.removedNodes.filter(isThreadEl);
+        this._updateRanges(addedThreadEls, removedThreadEls);
+        this._redispatchHoverEvents(addedThreadEls);
+      });
+    },
+
+    _updateRanges(addedThreadEls, removedThreadEls) {
+      function commentRangeFromThreadEl(threadEl) {
+        const side = threadEl.getAttribute('comment-side');
+        const range = JSON.parse(threadEl.getAttribute('range'));
+        return {side, range, hovering: false};
+      }
+
+      const addedCommentRanges = addedThreadEls
+          .map(commentRangeFromThreadEl)
+          .filter(({range}) => range);
+      const removedCommentRanges = removedThreadEls
+          .map(commentRangeFromThreadEl)
+          .filter(({range}) => range);
+      for (const removedCommentRange of removedCommentRanges) {
+        const i = this._commentRanges.findIndex(commentRange => {
+          return commentRange.side === removedCommentRange.side &&
+              Gerrit.rangesEqual(commentRange.range, removedCommentRange.range);
+        });
+        this.splice('_commentRanges', i, 1);
+      }
+      this.push('_commentRanges', ...addedCommentRanges);
+    },
+
+    /**
+     * The key locations based on the comments and line of interests,
+     * where lines should not be collapsed.
+     *
+     * @return {{left: Object<(string|number), boolean>,
+     *     right: Object<(string|number), boolean>}}
+     */
+    _computeKeyLocations() {
+      const keyLocations = {left: {}, right: {}};
+      if (this.lineOfInterest) {
+        const side = this.lineOfInterest.leftSide ? 'left' : 'right';
+        keyLocations[side][this.lineOfInterest.number] = true;
+      }
+      const threadEls = Polymer.dom(this).getEffectiveChildNodes()
+          .filter(isThreadEl);
+
+      for (const threadEl of threadEls) {
+        const commentSide = threadEl.getAttribute('comment-side');
+        const lineNum = Number(threadEl.getAttribute('line-num')) ||
+            GrDiffLine.FILE;
+        keyLocations[commentSide][lineNum] = true;
+      }
+      return keyLocations;
+    },
+
+    // Dispatch events that are handled by the gr-diff-highlight.
+    _redispatchHoverEvents(addedThreadEls) {
+      for (const threadEl of addedThreadEls) {
+        threadEl.addEventListener('mouseenter', () => {
+          threadEl.dispatchEvent(
+              new CustomEvent('comment-thread-mouseenter', {bubbles: true}));
+        });
+        threadEl.addEventListener('mouseleave', () => {
+          threadEl.dispatchEvent(
+              new CustomEvent('comment-thread-mouseleave', {bubbles: true}));
+        });
+      }
     },
 
     /** Cancel any remaining diff builder rendering work. */
     cancel() {
       this.$.diffBuilder.cancel();
+      this.cancelDebouncer(RENDER_DIFF_TABLE_DEBOUNCE_NAME);
     },
 
     /** @return {!Array<!HTMLElement>} */
@@ -234,7 +407,9 @@
         return [];
       }
 
-      return Polymer.dom(this.root).querySelectorAll('.diff-row');
+      // Polymer2: querySelectorAll returns NodeList instead of Array.
+      return Array.from(
+          Polymer.dom(this.root).querySelectorAll('.diff-row'));
     },
 
     /** @return {boolean} */
@@ -253,22 +428,6 @@
       } else {
         this.classList.remove('showBlame');
       }
-    },
-
-    _handleCommentSaveOrDiscard() {
-      this.dispatchEvent(new CustomEvent('diff-comments-modified',
-          {bubbles: true}));
-    },
-
-    /** @return {!Array<!HTMLElement>} */
-    getThreadEls() {
-      let threads = [];
-      const threadGroupEls = Polymer.dom(this.root)
-          .querySelectorAll('gr-diff-comment-thread-group');
-      for (const threadGroupEl of threadGroupEls) {
-        threads = threads.concat(threadGroupEl.threadEls);
-      }
-      return threads;
     },
 
     /** @return {string} */
@@ -335,10 +494,10 @@
       this._createComment(el, lineNum);
     },
 
-    _handleCreateComment(e) {
+    _handleCreateRangeComment(e) {
       const range = e.detail.range;
       const side = e.detail.side;
-      const lineNum = range.endLine;
+      const lineNum = range.end_line;
       const lineEl = this.$.diffBuilder.getLineElByNumber(lineNum, side);
 
       if (this._isValidElForComment(lineEl)) {
@@ -372,88 +531,51 @@
 
     /**
      * @param {!Object} lineEl
-     * @param {number=} opt_lineNum
-     * @param {string=} opt_side
-     * @param {!Object=} opt_range
+     * @param {number=} lineNum
+     * @param {string=} side
+     * @param {!Object=} range
      */
-    _createComment(lineEl, opt_lineNum, opt_side, opt_range) {
-      this.dispatchEvent(new CustomEvent('draft-interaction', {bubbles: true}));
+    _createComment(lineEl, lineNum=undefined, side=undefined, range=undefined) {
       const contentText = this.$.diffBuilder.getContentByLineEl(lineEl);
       const contentEl = contentText.parentElement;
-      const side = opt_side ||
+      side = side ||
           this._getCommentSideByLineAndContent(lineEl, contentEl);
-      const patchNum = this._getPatchNumByLineAndContent(lineEl, contentEl);
+      const patchForNewThreads = this._getPatchNumByLineAndContent(
+          lineEl, contentEl);
       const isOnParent =
-        this._getIsParentCommentByLineAndContent(lineEl, contentEl);
-      const threadEl = this._getOrCreateThread(contentEl, patchNum,
-          side, isOnParent, opt_range);
-      threadEl.addOrEditDraft(opt_lineNum, opt_range);
-    },
-
-    /**
-     * Fetch the thread group at the given range, or the range-less thread
-     * on the line if no range is provided.
-     *
-     * @param {!Object} threadGroupEl
-     * @param {string} commentSide
-     * @param {!Object=} opt_range
-     * @return {!Object}
-     */
-    _getThread(threadGroupEl, commentSide, opt_range) {
-      return threadGroupEl.getThread(commentSide, opt_range);
+          this._getIsParentCommentByLineAndContent(lineEl, contentEl);
+      this.dispatchEvent(new CustomEvent('create-comment', {
+        bubbles: true,
+        detail: {
+          lineNum,
+          side,
+          patchNum: patchForNewThreads,
+          isOnParent,
+          range,
+        },
+      }));
     },
 
     _getThreadGroupForLine(contentEl) {
-      return contentEl.querySelector('gr-diff-comment-thread-group');
+      return contentEl.querySelector('.thread-group');
     },
 
     /**
-     * Gets or creates a comment thread for a specific spot on a diff.
-     * May include a range, if the comment is a range comment.
-     *
+     * Gets or creates a comment thread group for a specific line and side on a
+     * diff.
      * @param {!Object} contentEl
-     * @param {number} patchNum
-     * @param {string} commentSide
-     * @param {boolean} isOnParent
-     * @param {!Object=} opt_range
-     * @return {!Object}
+     * @param {!Gerrit.DiffSide} commentSide
+     * @return {!Node}
      */
-    _getOrCreateThread(contentEl, patchNum, commentSide,
-        isOnParent, opt_range) {
+    _getOrCreateThreadGroup(contentEl, commentSide) {
       // Check if thread group exists.
       let threadGroupEl = this._getThreadGroupForLine(contentEl);
       if (!threadGroupEl) {
-        threadGroupEl = this._createCommentThreadGroup(patchNum, isOnParent,
-            commentSide);
+        threadGroupEl = document.createElement('div');
+        threadGroupEl.className = 'thread-group';
+        threadGroupEl.setAttribute('data-side', commentSide);
         contentEl.appendChild(threadGroupEl);
       }
-
-      let threadEl = this._getThread(threadGroupEl, commentSide, opt_range);
-
-      if (!threadEl) {
-        threadGroupEl.addNewThread(commentSide, opt_range);
-        Polymer.dom.flush();
-        threadEl = this._getThread(threadGroupEl, commentSide, opt_range);
-      }
-      return threadEl;
-    },
-
-    /**
-     * @param {number} patchNum
-     * @param {boolean} isOnParent
-     * @param {!string} commentSide
-     * @return {!Object}
-     */
-    _createCommentThreadGroup(patchNum, isOnParent, commentSide) {
-      const threadGroupEl =
-          document.createElement('gr-diff-comment-thread-group');
-      threadGroupEl.changeNum = this.changeNum;
-      threadGroupEl.commentSide = commentSide;
-      threadGroupEl.patchForNewThreads = patchNum;
-      threadGroupEl.path = this.path;
-      threadGroupEl.isOnParent = isOnParent;
-      threadGroupEl.projectName = this.projectName;
-      threadGroupEl.parentIndex = this._parentIndex;
       return threadGroupEl;
     },
 
@@ -502,75 +624,6 @@
         side = 'left';
       }
       return side;
-    },
-
-    _handleCommentDiscard(e) {
-      const comment = e.detail.comment;
-      this._removeComment(comment);
-      this._handleCommentSaveOrDiscard();
-    },
-
-    _removeComment(comment) {
-      const side = comment.__commentSide;
-      this._removeCommentFromSide(comment, side);
-    },
-
-    _handleCommentSave(e) {
-      const comment = e.detail.comment;
-      const side = e.detail.comment.__commentSide;
-      const idx = this._findDraftIndex(comment, side);
-      this.set(['comments', side, idx], comment);
-      this._handleCommentSaveOrDiscard();
-    },
-
-    /**
-     * Closure annotation for Polymer.prototype.push is off. Submitted PR:
-     * https://github.com/Polymer/polymer/pull/4776
-     * but for not supressing annotations.
-     *
-     * @suppress {checkTypes} */
-    _handleCommentUpdate(e) {
-      const comment = e.detail.comment;
-      const side = e.detail.comment.__commentSide;
-      let idx = this._findCommentIndex(comment, side);
-      if (idx === -1) {
-        idx = this._findDraftIndex(comment, side);
-      }
-      if (idx !== -1) { // Update draft or comment.
-        this.set(['comments', side, idx], comment);
-      } else { // Create new draft.
-        this.push(['comments', side], comment);
-      }
-    },
-
-    _removeCommentFromSide(comment, side) {
-      let idx = this._findCommentIndex(comment, side);
-      if (idx === -1) {
-        idx = this._findDraftIndex(comment, side);
-      }
-      if (idx !== -1) {
-        this.splice('comments.' + side, idx, 1);
-      }
-    },
-
-    /** @return {number} */
-    _findCommentIndex(comment, side) {
-      if (!comment.id || !this.comments[side]) {
-        return -1;
-      }
-      return this.comments[side].findIndex(item => {
-        return item.id === comment.id;
-      });
-    },
-
-    /** @return {number} */
-    _findDraftIndex(comment, side) {
-      if (!comment.__draftID || !this.comments[side]) {
-        return -1;
-      }
-      return this.comments[side].findIndex(item => {
-        return item.__draftID === comment.__draftID;
-      });
     },
 
     _prefsObserver(newPrefs, oldPrefs) {
@@ -639,19 +692,35 @@
 
       this.updateStyles(stylesToUpdate);
 
-      if (this.diff && this.comments && !this.noRenderOnPrefsChange) {
-        this._renderDiffTable();
+      if (this.diff && !this.noRenderOnPrefsChange) {
+        this._debounceRenderDiffTable();
       }
     },
 
     _diffChanged(newValue) {
       if (newValue) {
         this._diffLength = this.$.diffBuilder.getDiffLength();
-        this._renderDiffTable();
+        this._debounceRenderDiffTable();
       }
     },
 
+    /**
+     * When called multiple times from the same microtask, will call
+     * _renderDiffTable only once, in the next microtask, unless it is cancelled
+     * before that microtask runs.
+     *
+     * This should be used instead of calling _renderDiffTable directly to
+     * render the diff in response to an input change, because there may be
+     * multiple inputs changing in the same microtask, but we only want to
+     * render once.
+     */
+    _debounceRenderDiffTable() {
+      this.debounce(
+          RENDER_DIFF_TABLE_DEBOUNCE_NAME, () => this._renderDiffTable());
+    },
+
     _renderDiffTable() {
+      this._unobserveIncrementalNodes();
       if (!this.prefs) {
         this.dispatchEvent(new CustomEvent('render', {bubbles: true}));
         return;
@@ -665,7 +734,55 @@
       }
 
       this._showWarning = false;
-      this.$.diffBuilder.render(this.comments, this._getBypassPrefs());
+
+      const keyLocations = this._computeKeyLocations();
+      this.$.diffBuilder.render(keyLocations, this._getBypassPrefs())
+          .then(() => {
+            this.dispatchEvent(
+                new CustomEvent('render', {bubbles: true}));
+          });
+    },
+
+    _handleRenderContent() {
+      this._incrementalNodeObserver = Polymer.dom(this).observeNodes(info => {
+        const addedThreadEls = info.addedNodes.filter(isThreadEl);
+        // Removed nodes do not need to be handled because all this code does is
+        // adding a slot for the added thread elements, and the extra slots do
+        // not hurt. It's probably a bigger performance cost to remove them than
+        // to keep them around. Medium term we can even consider to add one slot
+        // for each line from the start.
+        for (const threadEl of addedThreadEls) {
+          const lineNumString = threadEl.getAttribute('line-num') || 'FILE';
+          const commentSide = threadEl.getAttribute('comment-side');
+          const lineEl = this.$.diffBuilder.getLineElByNumber(
+              lineNumString, commentSide);
+          const contentText = this.$.diffBuilder.getContentByLineEl(lineEl);
+          const contentEl = contentText.parentElement;
+          const threadGroupEl = this._getOrCreateThreadGroup(
+              contentEl, commentSide);
+          // Create a slot for the thread and attach it to the thread group.
+          // The Polyfill has some bugs and this only works if the slot is
+          // attached to the group after the group is attached to the DOM.
+          // The thread group may already have a slot with the right name, but
+          // that is okay because the first matching slot is used and the rest
+          // are ignored.
+          const slot = document.createElement('slot');
+          slot.name = threadEl.slot;
+          Polymer.dom(threadGroupEl).appendChild(Gerrit.slotToContent(slot));
+        }
+      });
+    },
+
+    _unobserveIncrementalNodes() {
+      if (this._incrementalNodeObserver) {
+        Polymer.dom(this).unobserveNodes(this._incrementalNodeObserver);
+      }
+    },
+
+    _unobserveNodes() {
+      if (this._nodeObserver) {
+        Polymer.dom(this).unobserveNodes(this._nodeObserver);
+      }
     },
 
     /**
@@ -679,14 +796,8 @@
     },
 
     clearDiffContent() {
+      this._unobserveIncrementalNodes();
       this.$.diffTable.innerHTML = null;
-    },
-
-    _projectConfigChanged(projectConfig) {
-      const threadEls = this.getThreadEls();
-      for (let i = 0; i < threadEls.length; i++) {
-        threadEls[i].projectConfig = projectConfig;
-      }
     },
 
     /** @return {!Array} */
@@ -709,12 +820,12 @@
 
     _handleFullBypass() {
       this._safetyBypass = FULL_CONTEXT;
-      this._renderDiffTable();
+      this._debounceRenderDiffTable();
     },
 
     _handleLimitedBypass() {
       this._safetyBypass = LIMITED_CONTEXT;
-      this._renderDiffTable();
+      this._debounceRenderDiffTable();
     },
 
     /** @return {string} */
@@ -728,16 +839,6 @@
      */
     _computeErrorClass(errorMessage) {
       return errorMessage ? 'showError' : '';
-    },
-
-    /**
-     * @return {number|null}
-     */
-    _computeParentIndex(patchRangeRecord) {
-      if (!this.isMergeParent(patchRangeRecord.base.basePatchNum)) {
-        return null;
-      }
-      return this.getParentIndex(patchRangeRecord.base.basePatchNum);
     },
 
     expandAllContext() {

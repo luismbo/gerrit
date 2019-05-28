@@ -65,6 +65,9 @@ Gerrit 2.x is a complete rewrite of the Gerrit fork, completely
 changing the implementation from Python on Google App Engine, to Java
 on a J2EE servlet container and an SQL database.
 
+Since Gerrit 3.x link:note-db.html[NoteDb] replaced the SQL database
+and all metadata is now stored in Git.
+
 * link:http://video.google.com/videoplay?docid=-8502904076440714866[Mondrian Code Review On The Web]
 * link:https://github.com/rietveld-codereview/rietveld[Rietveld - Code Review for Subversion]
 * link:http://eagain.net/gitweb/?p=gitosis.git;a=blob;f=README.rst;hb=HEAD[Gitosis README]
@@ -83,9 +86,7 @@ and Git's own data integrity checks.
 
 Each Git commit created on the client desktop system is converted
 into a unique change record which can be reviewed independently.
-Change records are stored in a database: PostgreSQL, MySQL, or the
-built-in H2, where they can be queried to present customized user
-dashboards, enumerating any pending changes.
+Change records are stored in NoteDb.
 
 A summary of each newly uploaded change is automatically emailed
 to reviewers, so they receive a direct hyperlink to review the
@@ -121,9 +122,9 @@ to be the author of the change.
 
 End-user web browsers make HTTP requests directly to Gerrit's
 HTTP server.  As nearly all of the user interface is implemented
-through Google Web Toolkit (GWT), the majority of these requests
-are transmitting compressed JSON payloads, with all HTML being
-generated within the browser.  Most responses are under 1 KB.
+through PolyGerrit, the majority of these requests are transmitting
+compressed JSON payloads, with all HTML being generated within the
+browser.  Most responses are under 1 KB.
 
 Gerrit's HTTP server side component is implemented as a standard
 Java servlet, and thus runs within any J2EE servlet container.
@@ -166,9 +167,7 @@ User authentication is handled by OpenID, and therefore Gerrit
 requires that the OpenID provider selected by a user must be
 online and operating in order to authenticate that user.
 
-* link:http://www.gwtproject.org/[Google Web Toolkit (GWT)]
 * link:http://www.kernel.org/pub/software/scm/git/docs/gitrepository-layout.html[Git Repository Format]
-* link:http://www.postgresql.org/about/[About PostgreSQL]
 * link:http://openid.net/developers/specs/[OpenID Specifications]
 
 *1  Although an effort is underway to eliminate the use of the
@@ -200,11 +199,6 @@ The majority of Gerrit's users will be writing change descriptions
 and comments in English, and therefore an English user interface
 is usable by the target user base.
 
-Gerrit uses GWT's i18n support to externalize all constant strings
-and messages shown to the user, so that in the future someone who
-really needed a translated version of the UI could contribute new
-string files for their locale(s).
-
 Right-to-left (RTL) support is only barely considered within the
 Gerrit code base.  Some portions of the code have tried to take
 RTL into consideration, while others probably need to be modified
@@ -235,20 +229,11 @@ provide hints to screen readers.
 
 Supporting non-JavaScript enabled browsers is a non-goal for Gerrit.
 
-As Gerrit is a pure-GWT application with no server side rendering
-fallbacks, the browser must support modern JavaScript semantics in
-order to access the Gerrit web application.  Dumb clients such as
-`lynx`, `wget`, `curl`, or even many search engine spiders are not
-able to access Gerrit content.
-
-As Google Web Toolkit (GWT) is used to generate the browser
-specific versions of the client-side JavaScript code, Gerrit works
-on any JavaScript enabled browser which GWT can produce code for.
-This covers the majority of the popular browsers.
-
-The Gerrit project does not have the development resources necessary
-to support two parallel UI implementations (GWT based JavaScript
-and server-side rendering).  Consequently only one is implemented.
+As Gerrit is a pure JavaScript application on the client side, with
+no server side rendering fallbacks, the browser must support modern
+JavaScript semantics in order to access the Gerrit web application.
+Dumb clients such as `lynx`, `wget`, `curl`, or even many search engine
+spiders are not able to access Gerrit content.
 
 There are number of web browsers available with full JavaScript
 support, and nearly every operating system (including any PDA-like
@@ -317,34 +302,6 @@ they choose.
 Gerrit does not integrate with any Google service, or any other
 services other than those listed above.
 
-
-== Standards / Developer APIs
-
-Gerrit uses an XSRF protected variant of JSON-RPC 1.1 to communicate
-between the browser client and the server.
-
-As the protocol is not the GWT-RPC protocol, but is instead a
-self-describing standard JSON format it is easily implemented by
-any 3rd party client application, provided the client has a JSON
-parser and HTTP client library available.
-
-As the entire command set necessary for the standard web browser
-based UI is exposed through JSON-RPC over HTTP, there are no other
-data feeds or command interfaces to the server.
-
-Commands requiring user authentication may require the user agent to
-complete a sign-in cycle through the user's OpenID provider in order
-to establish the HTTP cookie Gerrit uses to track user identity.
-Automating this sign-in process for non-web browser agents is
-outside of the scope of Gerrit, as each OpenID provider uses its own
-sign-in sequence.  Use of OpenID providers which have difficult to
-automate interfaces may make it impossible for non-browser agents
-to be used with the JSON-RPC interface.
-
-* link:http://json-rpc.org/wd/JSON-RPC-1-1-WD-20060807.html[JSON-RPC 1.1]
-* link:https://gerrit.googlesource.com/gwtjsonrpc/+/master/README[XSRF JSON-RPC]
-
-
 == Privacy Considerations
 
 Gerrit stores the following information per user account:
@@ -378,7 +335,7 @@ cases these same addresses would be more easily obtained from the
 project's mailing list archives.
 
 The user's name and email address is stored unencrypted in the
-Gerrit metadata store, typically a PostgreSQL database.
+link:config-accounts.html#all-users[All-Users] repository.
 
 The snail-mail mailing address, country, and phone and fax numbers
 are gathered to help project leads contact the user should there
@@ -647,12 +604,6 @@ parties around the world have had a chance to comment.  This expected
 lag largely allows for some downtime in a disaster scenario.
 
 === Backups
-
-PostgreSQL and MySQL can be configured to replicate their data to
-other systems, where they are applied to a warm-standby backup in
-real time.  Gerrit instances which care about redundancy will setup
-this feature of PostgreSQL or MySQL to ensure the warm-standby is
-reasonably current should the master go offline.
 
 Using the standard replication plugin, Gerrit can be configured
 to replicate changes made to the local Git repositories over any

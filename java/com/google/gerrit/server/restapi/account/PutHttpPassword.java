@@ -17,6 +17,9 @@ package com.google.gerrit.server.restapi.account;
 import static com.google.gerrit.server.account.externalids.ExternalId.SCHEME_USERNAME;
 
 import com.google.common.base.Strings;
+import com.google.common.flogger.FluentLogger;
+import com.google.gerrit.common.UsedAt;
+import com.google.gerrit.exceptions.EmailException;
 import com.google.gerrit.extensions.common.HttpPasswordInput;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
@@ -25,16 +28,15 @@ import com.google.gerrit.extensions.restapi.Response;
 import com.google.gerrit.extensions.restapi.RestModifyView;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
-import com.google.gerrit.server.UsedAt;
 import com.google.gerrit.server.UserInitiated;
 import com.google.gerrit.server.account.AccountResource;
 import com.google.gerrit.server.account.AccountsUpdate;
 import com.google.gerrit.server.account.externalids.ExternalId;
 import com.google.gerrit.server.account.externalids.ExternalIds;
+import com.google.gerrit.server.mail.send.HttpPasswordUpdateSender;
 import com.google.gerrit.server.permissions.GlobalPermission;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackendException;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import java.io.IOException;
@@ -45,6 +47,8 @@ import org.apache.commons.codec.binary.Base64;
 import org.eclipse.jgit.errors.ConfigInvalidException;
 
 public class PutHttpPassword implements RestModifyView<AccountResource, HttpPasswordInput> {
+  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
+
   private static final int LEN = 31;
   private static final SecureRandom rng;
 
@@ -60,23 +64,26 @@ public class PutHttpPassword implements RestModifyView<AccountResource, HttpPass
   private final PermissionBackend permissionBackend;
   private final ExternalIds externalIds;
   private final Provider<AccountsUpdate> accountsUpdateProvider;
+  private final HttpPasswordUpdateSender.Factory httpPasswordUpdateSenderFactory;
 
   @Inject
   PutHttpPassword(
       Provider<CurrentUser> self,
       PermissionBackend permissionBackend,
       ExternalIds externalIds,
-      @UserInitiated Provider<AccountsUpdate> accountsUpdateProvider) {
+      @UserInitiated Provider<AccountsUpdate> accountsUpdateProvider,
+      HttpPasswordUpdateSender.Factory httpPasswordUpdateSenderFactory) {
     this.self = self;
     this.permissionBackend = permissionBackend;
     this.externalIds = externalIds;
     this.accountsUpdateProvider = accountsUpdateProvider;
+    this.httpPasswordUpdateSenderFactory = httpPasswordUpdateSenderFactory;
   }
 
   @Override
   public Response<String> apply(AccountResource rsrc, HttpPasswordInput input)
-      throws AuthException, ResourceNotFoundException, ResourceConflictException, OrmException,
-          IOException, ConfigInvalidException, PermissionBackendException {
+      throws AuthException, ResourceNotFoundException, ResourceConflictException, IOException,
+          ConfigInvalidException, PermissionBackendException {
     if (!self.get().hasSameAccountId(rsrc.getUser())) {
       permissionBackend.currentUser().check(GlobalPermission.ADMINISTRATE_SERVER);
     }
@@ -96,12 +103,8 @@ public class PutHttpPassword implements RestModifyView<AccountResource, HttpPass
       permissionBackend.currentUser().check(GlobalPermission.ADMINISTRATE_SERVER);
       newPassword = input.httpPassword;
     }
-    return apply(rsrc.getUser(), newPassword);
-  }
 
-  public Response<String> apply(IdentifiedUser user, String newPassword)
-      throws ResourceNotFoundException, ResourceConflictException, OrmException, IOException,
-          ConfigInvalidException {
+    IdentifiedUser user = rsrc.getUser();
     String userName =
         user.getUserName().orElseThrow(() -> new ResourceConflictException("username must be set"));
     Optional<ExternalId> optionalExtId =
@@ -117,7 +120,16 @@ public class PutHttpPassword implements RestModifyView<AccountResource, HttpPass
                     ExternalId.createWithPassword(
                         extId.key(), extId.accountId(), extId.email(), newPassword)));
 
-    return Strings.isNullOrEmpty(newPassword) ? Response.<String>none() : Response.ok(newPassword);
+    try {
+      httpPasswordUpdateSenderFactory
+          .create(user, newPassword == null ? "deleted" : "added or updated")
+          .send();
+    } catch (EmailException e) {
+      logger.atSevere().withCause(e).log(
+          "Cannot send HttpPassword update message to %s", user.getAccount().getPreferredEmail());
+    }
+
+    return Strings.isNullOrEmpty(newPassword) ? Response.none() : Response.ok(newPassword);
   }
 
   @UsedAt(UsedAt.Project.PLUGIN_SERVICEUSER)

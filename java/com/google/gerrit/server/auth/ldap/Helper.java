@@ -186,13 +186,7 @@ class Helper {
     Subject subject = ctx.getSubject();
     try {
       return Subject.doAs(
-          subject,
-          new PrivilegedExceptionAction<DirContext>() {
-            @Override
-            public DirContext run() throws IOException, NamingException {
-              return createContext(env);
-            }
-          });
+          subject, (PrivilegedExceptionAction<DirContext>) () -> createContext(env));
     } catch (PrivilegedActionException e) {
       Throwables.throwIfInstanceOf(e.getException(), IOException.class);
       Throwables.throwIfInstanceOf(e.getException(), NamingException.class);
@@ -402,7 +396,7 @@ class Helper {
                   groupBase,
                   groupScope,
                   new ParameterizedString(groupMemberPattern),
-                  Collections.<String>emptySet());
+                  Collections.emptySet());
           if (groupMemberQuery.getParameters().isEmpty()) {
             throw new IllegalArgumentException("No variables in ldap.groupMemberPattern");
           }

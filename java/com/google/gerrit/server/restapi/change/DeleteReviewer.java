@@ -15,11 +15,13 @@
 package com.google.gerrit.server.restapi.change;
 
 import com.google.gerrit.extensions.api.changes.DeleteReviewerInput;
+import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.restapi.Response;
 import com.google.gerrit.extensions.restapi.RestApiException;
-import com.google.gerrit.reviewdb.server.ReviewDb;
+import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.server.change.DeleteReviewerByEmailOp;
 import com.google.gerrit.server.change.DeleteReviewerOp;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.change.ReviewerResource;
 import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.server.update.BatchUpdateOp;
@@ -28,25 +30,21 @@ import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.Singleton;
 
 @Singleton
 public class DeleteReviewer
     extends RetryingRestModifyView<ReviewerResource, DeleteReviewerInput, Response<?>> {
 
-  private final Provider<ReviewDb> dbProvider;
   private final DeleteReviewerOp.Factory deleteReviewerOpFactory;
   private final DeleteReviewerByEmailOp.Factory deleteReviewerByEmailOpFactory;
 
   @Inject
   DeleteReviewer(
-      Provider<ReviewDb> dbProvider,
       RetryHelper retryHelper,
       DeleteReviewerOp.Factory deleteReviewerOpFactory,
       DeleteReviewerByEmailOp.Factory deleteReviewerByEmailOpFactory) {
     super(retryHelper);
-    this.dbProvider = dbProvider;
     this.deleteReviewerOpFactory = deleteReviewerOpFactory;
     this.deleteReviewerByEmailOpFactory = deleteReviewerByEmailOpFactory;
   }
@@ -61,13 +59,13 @@ public class DeleteReviewer
 
     try (BatchUpdate bu =
         updateFactory.create(
-            dbProvider.get(),
             rsrc.getChangeResource().getProject(),
             rsrc.getChangeResource().getUser(),
             TimeUtil.nowTs())) {
+      bu.setNotify(getNotify(rsrc.getChange(), input));
       BatchUpdateOp op;
       if (rsrc.isByEmail()) {
-        op = deleteReviewerByEmailOpFactory.create(rsrc.getReviewerByEmail(), input);
+        op = deleteReviewerByEmailOpFactory.create(rsrc.getReviewerByEmail());
       } else {
         op = deleteReviewerOpFactory.create(rsrc.getReviewerUser().state(), input);
       }
@@ -75,5 +73,13 @@ public class DeleteReviewer
       bu.execute();
     }
     return Response.none();
+  }
+
+  private static NotifyResolver.Result getNotify(Change change, DeleteReviewerInput input) {
+    NotifyHandling notifyHandling = input.notify;
+    if (notifyHandling == null) {
+      notifyHandling = change.isWorkInProgress() ? NotifyHandling.NONE : NotifyHandling.ALL;
+    }
+    return NotifyResolver.Result.create(notifyHandling);
   }
 }

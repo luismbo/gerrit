@@ -3,35 +3,55 @@ workspace(name = "gerrit")
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_file")
 load("//tools/bzl:maven_jar.bzl", "GERRIT", "MAVEN_LOCAL", "maven_jar")
-load("//lib/codemirror:cm.bzl", "CM_VERSION", "DIFF_MATCH_PATCH_VERSION")
 load("//plugins:external_plugin_deps.bzl", "external_plugin_deps")
+load("//tools:nongoogle.bzl", "declare_nongoogle_deps")
+
+http_archive(
+    name = "bazel_toolchains",
+    sha256 = "88e818f9f03628eef609c8429c210ecf265ffe46c2af095f36c7ef8b1855fef5",
+    strip_prefix = "bazel-toolchains-92dd8a7a518a2fb7ba992d47c8b38299fe0be825",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-toolchains/archive/92dd8a7a518a2fb7ba992d47c8b38299fe0be825.tar.gz",
+        "https://github.com/bazelbuild/bazel-toolchains/archive/92dd8a7a518a2fb7ba992d47c8b38299fe0be825.tar.gz",
+    ],
+)
+
+load("@bazel_toolchains//rules:rbe_repo.bzl", "rbe_autoconfig")
+
+# Creates a default toolchain config for RBE.
+# Use this as is if you are using the rbe_ubuntu16_04 container,
+# otherwise refer to RBE docs.
+rbe_autoconfig(name = "rbe_default")
+
+http_archive(
+    name = "bazel_toolchains",
+    sha256 = "88e818f9f03628eef609c8429c210ecf265ffe46c2af095f36c7ef8b1855fef5",
+    strip_prefix = "bazel-toolchains-92dd8a7a518a2fb7ba992d47c8b38299fe0be825",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-toolchains/archive/92dd8a7a518a2fb7ba992d47c8b38299fe0be825.tar.gz",
+        "https://github.com/bazelbuild/bazel-toolchains/archive/92dd8a7a518a2fb7ba992d47c8b38299fe0be825.tar.gz",
+    ],
+)
+
+load("@bazel_toolchains//rules:rbe_repo.bzl", "rbe_autoconfig")
+
+# Creates a default toolchain config for RBE.
+# Use this as is if you are using the rbe_ubuntu16_04 container,
+# otherwise refer to RBE docs.
+rbe_autoconfig(name = "rbe_default")
 
 http_archive(
     name = "bazel_skylib",
-    sha256 = "bbccf674aa441c266df9894182d80de104cabd19be98be002f6d478aaa31574d",
-    strip_prefix = "bazel-skylib-2169ae1c374aab4a09aa90e65efe1a3aad4e279b",
-    urls = ["https://github.com/bazelbuild/bazel-skylib/archive/2169ae1c374aab4a09aa90e65efe1a3aad4e279b.tar.gz"],
+    sha256 = "2ea8a5ed2b448baf4a6855d3ce049c4c452a6470b1efd1504fdb7c1c134d220a",
+    strip_prefix = "bazel-skylib-0.8.0",
+    urls = ["https://github.com/bazelbuild/bazel-skylib/archive/0.8.0.tar.gz"],
 )
 
 http_archive(
     name = "io_bazel_rules_closure",
-    sha256 = "1c05fea22c9630cf1047f25d008780756373a60ddd4d2a6993cf9858279c5da6",
-    strip_prefix = "rules_closure-50d3dc9e6d27a5577a0f95708466718825d579f4",
-    urls = ["https://github.com/bazelbuild/rules_closure/archive/50d3dc9e6d27a5577a0f95708466718825d579f4.tar.gz"],
-)
-
-# Transitive dependency of rules_closure and protobuf
-http_archive(
-    name = "net_zlib",
-    build_file = "//:lib/zlib/BUILD",
-    sha256 = "c3e5e9fdd5004dcb542feda5ee4f0ff0744628baf8ed2dd5d66f8ca1197cb1a1",
-    strip_prefix = "zlib-1.2.11",
-    urls = ["https://zlib.net/zlib-1.2.11.tar.gz"],
-)
-
-bind(
-    name = "zlib",
-    actual = "@net_zlib//:zlib",
+    sha256 = "bdb00831682cd0923df36e19b01619b8230896d582f16304a937d8dc8270b1b6",
+    strip_prefix = "rules_closure-ad75d7cc1cff0e845cd83683881915d995bd75b2",
+    urls = ["https://github.com/bazelbuild/rules_closure/archive/ad75d7cc1cff0e845cd83683881915d995bd75b2.tar.gz"],
 )
 
 # File is specific to Polymer and copied from the Closure Github -- should be
@@ -46,7 +66,7 @@ http_file(
 
 load("@bazel_skylib//lib:versions.bzl", "versions")
 
-versions.check(minimum_bazel_version = "0.22.0")
+versions.check(minimum_bazel_version = "0.25.0")
 
 load("@io_bazel_rules_closure//closure:defs.bzl", "closure_repositories")
 
@@ -56,6 +76,7 @@ load("@io_bazel_rules_closure//closure:defs.bzl", "closure_repositories")
 # https://github.com/google/closure-templates/pull/155
 closure_repositories(
     omit_aopalliance = True,
+    omit_bazel_skylib = True,
     omit_javax_inject = True,
 )
 
@@ -83,12 +104,6 @@ load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies", "go_repository")
 gazelle_dependencies()
 
 # Dependencies for PolyGerrit local dev server.
-go_repository(
-    name = "com_github_robfig_soy",
-    commit = "82face14ebc0883b4ca9c901b5aaf3738b9f6a24",
-    importpath = "github.com/robfig/soy",
-)
-
 go_repository(
     name = "com_github_howeyc_fsnotify",
     commit = "441bbc86b167f3c1f4786afae9931403b99fdacf",
@@ -122,24 +137,24 @@ maven_jar(
     sha1 = "83cd2cd674a217ade95a4bb83a8a14f351f48bd0",
 )
 
-GUICE_VERS = "4.2.1"
+GUICE_VERS = "4.2.2"
 
 maven_jar(
     name = "guice-library",
     artifact = "com.google.inject:guice:" + GUICE_VERS,
-    sha1 = "f77dfd89318fe3ff293bafceaa75fbf66e4e4b10",
+    sha1 = "6dacbe18e5eaa7f6c9c36db33b42e7985e94ce77",
 )
 
 maven_jar(
     name = "guice-assistedinject",
     artifact = "com.google.inject.extensions:guice-assistedinject:" + GUICE_VERS,
-    sha1 = "d327e4aee7c96f08cd657c17da231a1f4a8999ac",
+    sha1 = "c33fb10080d58446f752b4fcfff8a5fabb80a449",
 )
 
 maven_jar(
     name = "guice-servlet",
     artifact = "com.google.inject.extensions:guice-servlet:" + GUICE_VERS,
-    sha1 = "3927e462f923b0c672fdb045c5645bca4beab5c0",
+    sha1 = "0d0054bdd812224078357a9b11409e43d182a046",
 )
 
 maven_jar(
@@ -158,61 +173,6 @@ maven_jar(
     name = "servlet-api-3_1",
     artifact = "org.apache.tomcat:tomcat-servlet-api:8.5.23",
     sha1 = "021a212688ec94fe77aff74ab34cc74f6f940e60",
-)
-
-GWT_VERS = "2.8.2"
-
-maven_jar(
-    name = "user",
-    artifact = "com.google.gwt:gwt-user:" + GWT_VERS,
-    sha1 = "a2b9be2c996a658c4e009ba652a9c6a81c88a797",
-)
-
-maven_jar(
-    name = "dev",
-    artifact = "com.google.gwt:gwt-dev:" + GWT_VERS,
-    sha1 = "7a87e060bbf129386b7ae772459fb9f87297c332",
-)
-
-maven_jar(
-    name = "javax-validation",
-    artifact = "javax.validation:validation-api:1.0.0.GA",
-    sha1 = "b6bd7f9d78f6fdaa3c37dae18a4bd298915f328e",
-    src_sha1 = "7a561191db2203550fbfa40d534d4997624cd369",
-)
-
-maven_jar(
-    name = "jsinterop-annotations",
-    artifact = "com.google.jsinterop:jsinterop-annotations:1.0.2",
-    sha1 = "abd7319f53d018e11108a88f599bd16492448dd2",
-    src_sha1 = "33716f8aef043f2f02b78ab4a1acda6cd90a7602",
-)
-
-maven_jar(
-    name = "ant",
-    artifact = "ant:ant:1.6.5",
-    attach_source = False,
-    sha1 = "7d18faf23df1a5c3a43613952e0e8a182664564b",
-)
-
-maven_jar(
-    name = "colt",
-    artifact = "colt:colt:1.2.0",
-    attach_source = False,
-    sha1 = "0abc984f3adc760684d49e0f11ddf167ba516d4f",
-)
-
-maven_jar(
-    name = "tapestry",
-    artifact = "tapestry:tapestry:4.0.2",
-    attach_source = False,
-    sha1 = "e855a807425d522e958cbce8697f21e9d679b1f7",
-)
-
-maven_jar(
-    name = "w3c-css-sac",
-    artifact = "org.w3c.css:sac:1.3",
-    sha1 = "cdb2dcb4e22b83d6b32b93095f644c3462739e82",
 )
 
 load("//lib/jgit:jgit.bzl", "jgit_repos")
@@ -247,23 +207,9 @@ maven_jar(
 )
 
 maven_jar(
-    name = "gwtjsonrpc",
-    artifact = "com.google.gerrit:gwtjsonrpc:1.11",
-    sha1 = "0990e7eec9eec3a15661edcf9232acbac4aeacec",
-    src_sha1 = "a682afc46284fb58197a173cb5818770a1e7834a",
-)
-
-maven_jar(
     name = "gson",
     artifact = "com.google.code.gson:gson:2.8.5",
     sha1 = "f645ed69d595b24d4cf8b3fbb64cc505bede8829",
-)
-
-maven_jar(
-    name = "gwtorm-client",
-    artifact = "com.google.gerrit:gwtorm:1.18",
-    sha1 = "f326dec463439a92ccb32f05b38345e21d0b5ecf",
-    src_sha1 = "e0b973d5cafef3d145fa80cdf032fcead1186d29",
 )
 
 maven_jar(
@@ -278,6 +224,12 @@ maven_jar(
     name = "guava",
     artifact = "com.google.guava:guava:" + GUAVA_VERSION,
     sha1 = GUAVA_BIN_SHA1,
+)
+
+maven_jar(
+    name = "guava-failureaccess",
+    artifact = "com.google.guava:failureaccess:1.0.1",
+    sha1 = "1dcf1de382a0bf95a3d8b0849546c88bac1292c9",
 )
 
 maven_jar(
@@ -369,8 +321,14 @@ maven_jar(
 
 maven_jar(
     name = "commons-lang3",
-    artifact = "org.apache.commons:commons-lang3:3.6",
-    sha1 = "9d28a6b23650e8a7e9063c04588ace6cf7012c17",
+    artifact = "org.apache.commons:commons-lang3:3.8.1",
+    sha1 = "6505a72a097d9270f7a9e7bf42c4238283247755",
+)
+
+maven_jar(
+    name = "commons-text",
+    artifact = "org.apache.commons:commons-text:1.2",
+    sha1 = "74acdec7237f576c4803fff0c1008ab8a3808b2b",
 )
 
 maven_jar(
@@ -403,6 +361,33 @@ maven_jar(
     name = "automaton",
     artifact = "dk.brics:automaton:1.12-1",
     sha1 = "959a0c62f9a5c2309e0ad0b0589c74d69e101241",
+)
+
+COMMONMARK_VERS = "0.10.0"
+
+# commonmark must match the version used in Gitiles
+maven_jar(
+    name = "commonmark",
+    artifact = "com.atlassian.commonmark:commonmark:" + COMMONMARK_VERS,
+    sha1 = "119cb7bedc3570d9ecb64ec69ab7686b5c20559b",
+)
+
+maven_jar(
+    name = "cm-autolink",
+    artifact = "com.atlassian.commonmark:commonmark-ext-autolink:" + COMMONMARK_VERS,
+    sha1 = "a6056a5efbd68f57d420bc51bbc54b28a5d3c56b",
+)
+
+maven_jar(
+    name = "gfm-strikethrough",
+    artifact = "com.atlassian.commonmark:commonmark-ext-gfm-strikethrough:" + COMMONMARK_VERS,
+    sha1 = "40837da951b421b545edddac57012e15fcc9e63c",
+)
+
+maven_jar(
+    name = "gfm-tables",
+    artifact = "com.atlassian.commonmark:commonmark-ext-gfm-tables:" + COMMONMARK_VERS,
+    sha1 = "c075db2a3301100cf70c7dced8ecf86b494458a2",
 )
 
 FLEXMARK_VERS = "0.34.18"
@@ -557,7 +542,7 @@ maven_jar(
     sha1 = "31e2e1fbe8273d7c913506eafeb06b1a7badb062",
 )
 
-# Transitive dependency of flexmark
+# Transitive dependency of flexmark and gitiles
 maven_jar(
     name = "autolink",
     artifact = "org.nibor.autolink:autolink:0.7.0",
@@ -600,58 +585,53 @@ maven_jar(
     sha1 = "5e3bda828a80c7a21dfbe2308d1755759c2fd7b4",
 )
 
-OW2_VERS = "6.2.1"
+OW2_VERS = "7.0"
 
 maven_jar(
     name = "ow2-asm",
     artifact = "org.ow2.asm:asm:" + OW2_VERS,
-    sha1 = "c01b6798f81b0fc2c5faa70cbe468c275d4b50c7",
+    sha1 = "d74d4ba0dee443f68fb2dcb7fcdb945a2cd89912",
 )
 
 maven_jar(
     name = "ow2-asm-analysis",
     artifact = "org.ow2.asm:asm-analysis:" + OW2_VERS,
-    sha1 = "e8b876c5ccf226cae2f44ed2c436ad3407d0ec1d",
+    sha1 = "4b310d20d6f1c6b7197a75f1b5d69f169bc8ac1f",
 )
 
 maven_jar(
     name = "ow2-asm-commons",
     artifact = "org.ow2.asm:asm-commons:" + OW2_VERS,
-    sha1 = "eaf31376d741a3e2017248a4c759209fe25c77d3",
+    sha1 = "478006d07b7c561ae3a92ddc1829bca81ae0cdd1",
 )
 
 maven_jar(
     name = "ow2-asm-tree",
     artifact = "org.ow2.asm:asm-tree:" + OW2_VERS,
-    sha1 = "332b022092ecec53cdb6272dc436884b2d940615",
+    sha1 = "29bc62dcb85573af6e62e5b2d735ef65966c4180",
 )
 
 maven_jar(
     name = "ow2-asm-util",
     artifact = "org.ow2.asm:asm-util:" + OW2_VERS,
-    sha1 = "400d664d7c92a659d988c00cb65150d1b30cf339",
+    sha1 = "18d4d07010c24405129a6dbb0e92057f8779fb9d",
 )
 
-AUTO_VALUE_VERSION = "1.6.2"
+AUTO_VALUE_VERSION = "1.6.5"
 
 maven_jar(
     name = "auto-value",
     artifact = "com.google.auto.value:auto-value:" + AUTO_VALUE_VERSION,
-    sha1 = "e7eae562942315a983eea3e191b72d755c153620",
+    sha1 = "816872c85048f36a67a276ef7a49cc2e4595711c",
 )
 
 maven_jar(
     name = "auto-value-annotations",
     artifact = "com.google.auto.value:auto-value-annotations:" + AUTO_VALUE_VERSION,
-    sha1 = "ed193d86e0af90cc2342aedbe73c5d86b03fa09b",
+    sha1 = "c3dad10377f0e2242c9a4b88e9704eaf79103679",
 )
 
-# Transitive dependency of commons-compress
-maven_jar(
-    name = "tukaani-xz",
-    artifact = "org.tukaani:xz:1.6",
-    sha1 = "05b6f921f1810bdf90e25471968f741f87168b64",
-)
+declare_nongoogle_deps()
 
 LUCENE_VERS = "6.6.5"
 
@@ -692,7 +672,7 @@ maven_jar(
     sha1 = "0c9cfae15c74f62491d4f28def0dff1dabe52a47",
 )
 
-PROLOG_VERS = "1.4.3"
+PROLOG_VERS = "1.4.4"
 
 PROLOG_REPO = GERRIT
 
@@ -701,7 +681,7 @@ maven_jar(
     artifact = "com.googlecode.prolog-cafe:prolog-runtime:" + PROLOG_VERS,
     attach_source = False,
     repository = PROLOG_REPO,
-    sha1 = "d5206556cbc76ffeab21313ffc47b586a1efbcbb",
+    sha1 = "e9a364f4233481cce63239e8e68a6190c8f58acd",
 )
 
 maven_jar(
@@ -709,7 +689,7 @@ maven_jar(
     artifact = "com.googlecode.prolog-cafe:prolog-compiler:" + PROLOG_VERS,
     attach_source = False,
     repository = PROLOG_REPO,
-    sha1 = "f37032cf1dec3e064427745bc59da5a12757a3b2",
+    sha1 = "570295026f6aa7b905e423d107cb2e081eecdc04",
 )
 
 maven_jar(
@@ -717,7 +697,7 @@ maven_jar(
     artifact = "com.googlecode.prolog-cafe:prolog-io:" + PROLOG_VERS,
     attach_source = False,
     repository = PROLOG_REPO,
-    sha1 = "d02b2640b26f64036b6ba2b45e4acc79281cea17",
+    sha1 = "1f25c4e27d22bdbc31481ee0c962a2a2853e4428",
 )
 
 maven_jar(
@@ -725,7 +705,7 @@ maven_jar(
     artifact = "com.googlecode.prolog-cafe:prolog-cafeteria:" + PROLOG_VERS,
     attach_source = False,
     repository = PROLOG_REPO,
-    sha1 = "e3b1860c63e57265e5435f890263ad82dafa724f",
+    sha1 = "0e6c2deeaf5054815a561cbd663566fd59b56c6c",
 )
 
 maven_jar(
@@ -740,25 +720,43 @@ maven_jar(
     sha1 = "f7be08ec23c21485b9b5a1cf1654c2ec8c58168d",
 )
 
+GITILES_VERS = "0.2-8"
+
+GITILES_REPO = GERRIT
+
 maven_jar(
     name = "blame-cache",
-    artifact = "com/google/gitiles:blame-cache:0.2-7",
+    artifact = "com.google.gitiles:blame-cache:" + GITILES_VERS,
     attach_source = False,
-    repository = GERRIT,
-    sha1 = "8170f33b8b1db6f55e41d7069fa050a4d102a62b",
+    repository = GITILES_REPO,
+    sha1 = "714fd1d98d02cd8898532ef5169f7b23125747d6",
+)
+
+maven_jar(
+    name = "gitiles-servlet",
+    artifact = "com.google.gitiles:gitiles-servlet:" + GITILES_VERS,
+    repository = GITILES_REPO,
+    sha1 = "a416e4ac5a0cad04410440d0b2785fa966bc5a0c",
+)
+
+# prettify must match the version used in Gitiles
+maven_jar(
+    name = "prettify",
+    artifact = "com.github.twalcari:java-prettify:1.2.2",
+    sha1 = "b8ba1c1eb8b2e45cfd465d01218c6060e887572e",
 )
 
 # Keep this version of Soy synchronized with the version used in Gitiles.
 maven_jar(
     name = "soy",
-    artifact = "com.google.template:soy:2018-03-14",
-    sha1 = "76a1322705ba5a6d6329ee26e7387417725ce4b3",
+    artifact = "com.google.template:soy:2019-03-11",
+    sha1 = "119ac4b3eb0e2c638526ca99374013965c727097",
 )
 
 maven_jar(
     name = "html-types",
-    artifact = "com.google.common.html.types:types:1.0.4",
-    sha1 = "2adf4c8bfccc0ff7346f9186ac5aa57d829ad065",
+    artifact = "com.google.common.html.types:types:1.0.8",
+    sha1 = "9e9cf7bc4b2a60efeb5f5581fe46d17c068e0777",
 )
 
 maven_jar(
@@ -881,30 +879,30 @@ maven_jar(
     sha1 = "42a25dc3219429f0e5d060061f71acb49bf010a0",
 )
 
-TRUTH_VERS = "0.42"
+TRUTH_VERS = "0.44"
 
 maven_jar(
     name = "truth",
     artifact = "com.google.truth:truth:" + TRUTH_VERS,
-    sha1 = "b5768f644b114e6cf5c3962c2ebcb072f788dcbb",
+    sha1 = "11eff954c0c14da7d43276d7b3bcf71463105368",
 )
 
 maven_jar(
     name = "truth-java8-extension",
     artifact = "com.google.truth.extensions:truth-java8-extension:" + TRUTH_VERS,
-    sha1 = "4d01dfa5b3780632a3d109e14e101f01d10cce2c",
+    sha1 = "2081a0721d3101e1cf559f013e59c6129b4b10b0",
 )
 
 maven_jar(
     name = "truth-liteproto-extension",
     artifact = "com.google.truth.extensions:truth-liteproto-extension:" + TRUTH_VERS,
-    sha1 = "c231e6735aa6c133c7e411ae1c1c90b124900a8b",
+    sha1 = "64f47e4e3f79b0a582573098b9c3c6b73599f7c6",
 )
 
 maven_jar(
     name = "truth-proto-extension",
     artifact = "com.google.truth.extensions:truth-proto-extension:" + TRUTH_VERS,
-    sha1 = "c41d22e8b4a61b4171e57c44a2959ebee0091a14",
+    sha1 = "c03fbc16087d8cb3bf0f3265a04566d4beb88a6d",
 )
 
 maven_jar(
@@ -924,12 +922,6 @@ maven_jar(
     name = "cglib-3_2",
     artifact = "cglib:cglib-nodep:3.2.6",
     sha1 = "92bf48723d277d6efd1150b2f7e9e1e92cb56caf",
-)
-
-maven_jar(
-    name = "objenesis",
-    artifact = "org.objenesis:objenesis:1.3",
-    sha1 = "dc13ae4faca6df981fc7aeb5a522d9db446d5d50",
 )
 
 POWERM_VERS = "1.6.1"
@@ -974,13 +966,6 @@ maven_jar(
     name = "javassist",
     artifact = "org.javassist:javassist:3.22.0-GA",
     sha1 = "3e83394258ae2089be7219b971ec21a8288528ad",
-)
-
-maven_jar(
-    name = "derby",
-    artifact = "org.apache.derby:derby:10.12.1.1",
-    attach_source = False,
-    sha1 = "75070c744a8e52a7d17b8b476468580309d5cd09",
 )
 
 JETTY_VERS = "9.4.14.v20181114"
@@ -1059,31 +1044,6 @@ maven_jar(
 )
 
 maven_jar(
-    name = "postgresql",
-    artifact = "org.postgresql:postgresql:42.2.5",
-    sha1 = "951b7eda125f3137538a94e2cbdcf744088ad4c2",
-)
-
-maven_jar(
-    name = "codemirror-minified-gwt",
-    artifact = "org.webjars.npm:codemirror-minified:" + CM_VERSION,
-    sha1 = "36558ea3b8e30782e1e09c0e7bd781e09614f139",
-)
-
-maven_jar(
-    name = "codemirror-original-gwt",
-    artifact = "org.webjars.npm:codemirror:" + CM_VERSION,
-    sha1 = "f1f8fbbc3e2d224fdccc43d2f4180658a92320f9",
-)
-
-maven_jar(
-    name = "diff-match-patch",
-    artifact = "org.webjars:google-diff-match-patch:" + DIFF_MATCH_PATCH_VERSION,
-    attach_source = False,
-    sha1 = "0cf1782dbcb8359d95070da9176059a5a9d37709",
-)
-
-maven_jar(
     name = "commons-io",
     artifact = "commons-io:commons-io:2.2",
     sha1 = "83b5b8a7ba1c08f9e8c8ff2373724e33d3c1e22a",
@@ -1105,30 +1065,28 @@ maven_jar(
 # and httpasyncclient as necessary.
 maven_jar(
     name = "elasticsearch-rest-client",
-    artifact = "org.elasticsearch.client:elasticsearch-rest-client:7.0.0",
-    sha1 = "121d12f1c71f318be1a654e8a956e38d5b68e98a",
+    artifact = "org.elasticsearch.client:elasticsearch-rest-client:7.1.0",
+    sha1 = "93e8e8b96121069d1d6a6f94d29e7aebd3327301",
 )
-
-JACKSON_VERSION = "2.9.8"
 
 maven_jar(
     name = "jackson-core",
-    artifact = "com.fasterxml.jackson.core:jackson-core:" + JACKSON_VERSION,
+    artifact = "com.fasterxml.jackson.core:jackson-core:2.9.8",
     sha1 = "0f5a654e4675769c716e5b387830d19b501ca191",
 )
 
-TESTCONTAINERS_VERSION = "1.11.2"
+TESTCONTAINERS_VERSION = "1.11.3"
 
 maven_jar(
     name = "testcontainers",
     artifact = "org.testcontainers:testcontainers:" + TESTCONTAINERS_VERSION,
-    sha1 = "eae47ed24bb07270d4b60b5e2c3444c5bf3c8ea9",
+    sha1 = "154b69dd976416734b2fc809fb86e173ad9aa25b",
 )
 
 maven_jar(
     name = "testcontainers-elasticsearch",
     artifact = "org.testcontainers:elasticsearch:" + TESTCONTAINERS_VERSION,
-    sha1 = "a327bd8cb68eb7146b36d754aee98a8018132d8f",
+    sha1 = "90713b61f5748d8894c31a20f955bd7f81ac2ece",
 )
 
 maven_jar(
@@ -1147,6 +1105,38 @@ maven_jar(
     name = "jna",
     artifact = "net.java.dev.jna:jna:5.2.0",
     sha1 = "ed8b772eb077a9cb50e44e90899c66a9a6c00e67",
+)
+
+maven_jar(
+    name = "javax-activation",
+    artifact = "javax.activation:activation:1.1.1",
+    sha1 = "485de3a253e23f645037828c07f1d7f1af40763a",
+)
+
+maven_jar(
+    name = "mockito",
+    artifact = "org.mockito:mockito-core:2.24.0",
+    sha1 = "969a7bcb6f16e076904336ebc7ca171d412cc1f9",
+)
+
+BYTE_BUDDY_VERSION = "1.9.7"
+
+maven_jar(
+    name = "byte-buddy",
+    artifact = "net.bytebuddy:byte-buddy:" + BYTE_BUDDY_VERSION,
+    sha1 = "8fea78fea6449e1738b675cb155ce8422661e237",
+)
+
+maven_jar(
+    name = "byte-buddy-agent",
+    artifact = "net.bytebuddy:byte-buddy-agent:" + BYTE_BUDDY_VERSION,
+    sha1 = "8e7d1b599f4943851ffea125fd9780e572727fc0",
+)
+
+maven_jar(
+    name = "objenesis",
+    artifact = "org.objenesis:objenesis:2.6",
+    sha1 = "639033469776fd37c08358c6b92a4761feb2af4b",
 )
 
 load("//tools/bzl:js.bzl", "bower_archive", "npm_binary")
@@ -1299,8 +1289,8 @@ bower_archive(
 bower_archive(
     name = "polymer-resin",
     package = "polymer/polymer-resin",
-    sha1 = "5cb65081d461e710252a1ba1e671fe4c290356ef",
-    version = "1.2.8",
+    sha1 = "94c29926c20ea3a9b636f26b3e0d689ead8137e5",
+    version = "2.0.1",
 )
 
 bower_archive(
@@ -1320,8 +1310,8 @@ bower_archive(
 bower_archive(
     name = "codemirror-minified",
     package = "Dominator008/codemirror-minified",
-    sha1 = "1524e19087d8223edfe4a5b1ccf04c1e3707235d",
-    version = "5.37.0",
+    sha1 = "e6bda82afc7cf3493f4282c6f17265d40e1485e5",
+    version = "5.43.0",
 )
 
 # bower test stuff

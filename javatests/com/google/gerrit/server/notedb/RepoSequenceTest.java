@@ -23,11 +23,12 @@ import com.github.rholder.retry.Retryer;
 import com.github.rholder.retry.RetryerBuilder;
 import com.github.rholder.retry.StopStrategies;
 import com.google.common.util.concurrent.Runnables;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.extensions.events.GitReferenceUpdated;
+import com.google.gerrit.testing.GerritBaseTests;
 import com.google.gerrit.testing.InMemoryRepositoryManager;
-import com.google.gwtorm.server.OrmException;
 import java.io.IOException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -40,16 +41,12 @@ import org.eclipse.jgit.lib.RefUpdate;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
-public class RepoSequenceTest {
+public class RepoSequenceTest extends GerritBaseTests {
   // Don't sleep in tests.
-  private static final Retryer<RefUpdate.Result> RETRYER =
+  private static final Retryer<RefUpdate> RETRYER =
       RepoSequence.retryerBuilder().withBlockStrategy(t -> {}).build();
-
-  @Rule public ExpectedException exception = ExpectedException.none();
 
   private InMemoryRepositoryManager repoManager;
   private Project.NameKey project;
@@ -70,7 +67,7 @@ public class RepoSequenceTest {
       for (int i = 1; i <= max; i++) {
         try {
           assertThat(s.next()).named("i=" + i + " for " + name).isEqualTo(i);
-        } catch (OrmException e) {
+        } catch (StorageException e) {
           throw new AssertionError("failed batchSize=" + batchSize + ", i=" + i, e);
         }
       }
@@ -171,7 +168,7 @@ public class RepoSequenceTest {
   @Test
   public void failOnInvalidValue() throws Exception {
     ObjectId id = writeBlob("id", "not a number");
-    exception.expect(OrmException.class);
+    exception.expect(StorageException.class);
     exception.expectMessage("invalid value in refs/sequences/id blob at " + id.name());
     newSequence("id", 1, 3).next();
   }
@@ -184,7 +181,7 @@ public class RepoSequenceTest {
       try {
         newSequence("id", 1, 3).next();
         fail();
-      } catch (OrmException e) {
+      } catch (StorageException e) {
         assertThat(e.getCause()).isInstanceOf(ExecutionException.class);
         assertThat(e.getCause().getCause()).isInstanceOf(IncorrectObjectTypeException.class);
       }
@@ -200,11 +197,11 @@ public class RepoSequenceTest {
             1,
             10,
             () -> writeBlob("id", Integer.toString(bgCounter.getAndAdd(1000))),
-            RetryerBuilder.<RefUpdate.Result>newBuilder()
+            RetryerBuilder.<RefUpdate>newBuilder()
                 .withStopStrategy(StopStrategies.stopAfterAttempt(3))
                 .build());
-    exception.expect(OrmException.class);
-    exception.expectMessage("failed to update refs/sequences/id: LOCK_FAILURE");
+    exception.expect(StorageException.class);
+    exception.expectMessage("Failed to update refs/sequences/id: LOCK_FAILURE");
     s.next();
   }
 
@@ -335,11 +332,11 @@ public class RepoSequenceTest {
             1,
             10,
             () -> writeBlob("id", Integer.toString(bgCounter.getAndAdd(1000))),
-            RetryerBuilder.<RefUpdate.Result>newBuilder()
+            RetryerBuilder.<RefUpdate>newBuilder()
                 .withStopStrategy(StopStrategies.stopAfterAttempt(3))
                 .build());
-    exception.expect(OrmException.class);
-    exception.expectMessage("failed to update refs/sequences/id: LOCK_FAILURE");
+    exception.expect(StorageException.class);
+    exception.expectMessage("Failed to update refs/sequences/id: LOCK_FAILURE");
     s.increaseTo(2);
   }
 
@@ -352,7 +349,7 @@ public class RepoSequenceTest {
       final int start,
       int batchSize,
       Runnable afterReadRef,
-      Retryer<RefUpdate.Result> retryer) {
+      Retryer<RefUpdate> retryer) {
     return new RepoSequence(
         repoManager,
         GitReferenceUpdated.DISABLED,

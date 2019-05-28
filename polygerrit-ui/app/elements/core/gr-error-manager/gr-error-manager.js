@@ -27,6 +27,7 @@
 
   Polymer({
     is: 'gr-error-manager',
+    _legacyUndefinedCheck: true,
 
     behaviors: [
       Gerrit.BaseUrlBehavior,
@@ -283,6 +284,7 @@
     },
 
     _showErrorDialog(message) {
+      this.$.reporting.reportErrorDialog(message);
       this.$.errorDialog.text = message;
       this.$.errorOverlay.open();
     },

@@ -17,6 +17,7 @@ package com.google.gerrit.server.restapi.account;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.gerrit.extensions.client.ListAccountsOption;
+import com.google.gerrit.extensions.client.ListOption;
 import com.google.gerrit.extensions.common.AccountInfo;
 import com.google.gerrit.extensions.common.AccountVisibility;
 import com.google.gerrit.extensions.restapi.AuthException;
@@ -40,7 +41,6 @@ import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.query.account.AccountPredicates;
 import com.google.gerrit.server.query.account.AccountQueryBuilder;
 import com.google.gerrit.server.query.account.AccountQueryProcessor;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -97,7 +97,7 @@ public class QueryAccounts implements RestReadView<TopLevelResource> {
 
   @Option(name = "-O", usage = "Output option flags, in hex")
   void setOptionFlagsHex(String hex) {
-    options.addAll(ListAccountsOption.fromBits(Integer.parseInt(hex, 16)));
+    options.addAll(ListOption.fromBits(ListAccountsOption.class, Integer.parseInt(hex, 16)));
   }
 
   @Option(
@@ -148,7 +148,7 @@ public class QueryAccounts implements RestReadView<TopLevelResource> {
 
   @Override
   public List<AccountInfo> apply(TopLevelResource rsrc)
-      throws OrmException, RestApiException, PermissionBackendException {
+      throws RestApiException, PermissionBackendException {
     if (Strings.isNullOrEmpty(query)) {
       throw new BadRequestException("missing query field");
     }

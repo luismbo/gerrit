@@ -95,6 +95,20 @@ limitations under the License.
       return element.getComputedStyleValue(cssParam);
     };
 
+    test('_handleMessageAnchorTap', () => {
+      element._changeNum = '1';
+      element._patchRange = {
+        basePatchNum: 'PARENT',
+        patchNum: 1,
+      };
+      const getUrlStub = sandbox.stub(Gerrit.Nav, 'getUrlForChange');
+      const replaceStateStub = sandbox.stub(history, 'replaceState');
+      element._handleMessageAnchorTap({detail: {id: 'a12345'}});
+
+      assert.equal(getUrlStub.lastCall.args[4], '#message-a12345');
+      assert.isTrue(replaceStateStub.called);
+    });
+
     suite('keyboard shortcuts', () => {
       test('t to add topic', () => {
         const editStub = sandbox.stub(element.$.metadata, 'editTopic');
@@ -285,6 +299,16 @@ limitations under the License.
       test(', should open diff preferences', () => {
         const stub = sandbox.stub(
             element.$.fileList.$.diffPreferencesDialog, 'open');
+        element._loggedIn = false;
+        element.disableDiffPrefs = true;
+        MockInteractions.pressAndReleaseKeyOn(element, 188, null, ',');
+        assert.isFalse(stub.called);
+
+        element._loggedIn = true;
+        MockInteractions.pressAndReleaseKeyOn(element, 188, null, ',');
+        assert.isFalse(stub.called);
+
+        element.disableDiffPrefs = false;
         MockInteractions.pressAndReleaseKeyOn(element, 188, null, ',');
         assert.isTrue(stub.called);
       });
@@ -643,12 +667,12 @@ limitations under the License.
         path: '/foo/bar.txt',
         text: 'hello',
       };
-      element._handleCommentSave({target: {comment: draft}});
+      element._handleCommentSave({detail: {comment: draft}});
       draft.patch_set = 2;
       assert.deepEqual(element._diffDrafts, {'/foo/bar.txt': [draft]});
       draft.patch_set = null;
       draft.text = 'hello, there';
-      element._handleCommentSave({target: {comment: draft}});
+      element._handleCommentSave({detail: {comment: draft}});
       draft.patch_set = 2;
       assert.deepEqual(element._diffDrafts, {'/foo/bar.txt': [draft]});
       const draft2 = {
@@ -657,14 +681,14 @@ limitations under the License.
         path: '/foo/bar.txt',
         text: 'hola',
       };
-      element._handleCommentSave({target: {comment: draft2}});
+      element._handleCommentSave({detail: {comment: draft2}});
       draft2.patch_set = 2;
       assert.deepEqual(element._diffDrafts, {'/foo/bar.txt': [draft, draft2]});
       draft.patch_set = null;
-      element._handleCommentDiscard({target: {comment: draft}});
+      element._handleCommentDiscard({detail: {comment: draft}});
       draft.patch_set = 2;
       assert.deepEqual(element._diffDrafts, {'/foo/bar.txt': [draft2]});
-      element._handleCommentDiscard({target: {comment: draft2}});
+      element._handleCommentDiscard({detail: {comment: draft2}});
       assert.deepEqual(element._diffDrafts, {});
     });
 
@@ -1020,6 +1044,53 @@ limitations under the License.
       });
     });
 
+    test('_getBasePatchNum', () => {
+      const _change = {
+        _number: 42,
+        revisions: {
+          '98da160735fb81604b4c40e93c368f380539dd0e': {
+            _number: 1,
+            commit: {
+              parents: [],
+            },
+          },
+        },
+      };
+      const _patchRange = {
+        basePatchNum: 'PARENT',
+      };
+      assert.equal(element._getBasePatchNum(_change, _patchRange), 'PARENT');
+
+      element._prefs = {
+        default_base_for_merges: 'FIRST_PARENT',
+      };
+
+      const _change2 = {
+        _number: 42,
+        revisions: {
+          '98da160735fb81604b4c40e93c368f380539dd0e': {
+            _number: 1,
+            commit: {
+              parents: [
+                {
+                  commit: '6e12bdf1176eb4ab24d8491ba3b6d0704409cde8',
+                  subject: 'test',
+                },
+                {
+                  commit: '22f7db4754b5d9816fc581f3d9a6c0ef8429c841',
+                  subject: 'test3',
+                },
+              ],
+            },
+          },
+        },
+      };
+      assert.equal(element._getBasePatchNum(_change2, _patchRange), -1);
+
+      _patchRange.patchNum = 1;
+      assert.equal(element._getBasePatchNum(_change2, _patchRange), 'PARENT');
+    });
+
     test('_openReplyDialog called with `ANY` when coming from tap event',
         () => {
           const openStub = sandbox.stub(element, '_openReplyDialog');
@@ -1232,24 +1303,6 @@ limitations under the License.
       let updateHeightSpy;
       setup(() => {
         updateHeightSpy = sandbox.spy(element, '_updateRelatedChangeMaxHeight');
-      });
-
-      test('_showRelatedToggle is reset when a new change is loaded', () => {
-        element._patchRange = {};
-        assert.isFalse(element._showRelatedToggle);
-        element._showRelatedToggle = true;
-        element._change = {
-          change_id: 'Iad9dc96274af6946f3632be53b106ef80f7ba6ca',
-          _number: 42,
-          revisions: {
-            rev1: {_number: 1, commit: {parents: []}},
-          },
-          current_revision: 'rev1',
-          status: 'NEW',
-          labels: {},
-          actions: {},
-        };
-        assert.isFalse(element._showRelatedToggle);
       });
 
       test('relatedChangesToggle shown height greater than changeInfo height',

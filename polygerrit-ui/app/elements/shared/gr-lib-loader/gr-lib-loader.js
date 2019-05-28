@@ -22,6 +22,7 @@
 
   Polymer({
     is: 'gr-lib-loader',
+    _legacyUndefinedCheck: true,
 
     properties: {
       _hljsState: {
@@ -82,6 +83,9 @@
     _onHLJSLibLoaded() {
       const lib = this._getHighlightLib();
       this._hljsState.loading = false;
+      this.$.jsAPI.handleEvent(this.$.jsAPI.EventType.HIGHLIGHTJS_LOADED, {
+        hljs: lib,
+      });
       for (const cb of this._hljsState.callbacks) {
         cb(lib);
       }

@@ -30,7 +30,6 @@ import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.notedb.AbstractChangeNotes;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.notedb.ChangeUpdate;
-import com.google.gerrit.server.notedb.NotesMigration;
 import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.inject.Injector;
 import java.util.TimeZone;
@@ -77,8 +76,8 @@ public class TestChanges {
     return ps;
   }
 
-  public static ChangeUpdate newUpdate(Injector injector, Change c, CurrentUser user)
-      throws Exception {
+  public static ChangeUpdate newUpdate(
+      Injector injector, Change c, CurrentUser user, boolean shouldExist) throws Exception {
     injector =
         injector.createChildInjector(
             new FactoryModule() {
@@ -91,15 +90,16 @@ public class TestChanges {
         injector
             .getInstance(ChangeUpdate.Factory.class)
             .create(
-                new ChangeNotes(injector.getInstance(AbstractChangeNotes.Args.class), c).load(),
+                new ChangeNotes(
+                        injector.getInstance(AbstractChangeNotes.Args.class), c, shouldExist, null)
+                    .load(),
                 user,
                 TimeUtil.nowTs(),
-                Ordering.<String>natural());
+                Ordering.natural());
 
     ChangeNotes notes = update.getNotes();
     boolean hasPatchSets = notes.getPatchSets() != null && !notes.getPatchSets().isEmpty();
-    NotesMigration migration = injector.getInstance(NotesMigration.class);
-    if (hasPatchSets || !migration.readChanges()) {
+    if (hasPatchSets) {
       return update;
     }
 
