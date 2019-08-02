@@ -17,17 +17,14 @@ package com.google.gerrit.common.data;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableList;
+import com.google.gerrit.testing.GerritBaseTests;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
-public class AccessSectionTest {
-  @Rule public ExpectedException exception = ExpectedException.none();
-
+public class AccessSectionTest extends GerritBaseTests {
   private static final String REF_PATTERN = "refs/heads/master";
 
   private AccessSection accessSection;
@@ -151,21 +148,6 @@ public class AccessSectionTest {
 
     Permission submitPermission = new Permission(Permission.SUBMIT);
     permissions.add(submitPermission);
-    assertThat(accessSection.getPermission(Permission.SUBMIT)).isNull();
-  }
-
-  @Test
-  public void cannotAddPermissionByModifyingListThatWasRetrievedFromAccessSection() {
-    Permission submitPermission = new Permission(Permission.SUBMIT);
-    accessSection.getPermissions().add(submitPermission);
-    assertThat(accessSection.getPermission(Permission.SUBMIT)).isNull();
-
-    List<Permission> permissions = new ArrayList<>();
-    permissions.add(new Permission(Permission.ABANDON));
-    permissions.add(new Permission(Permission.REBASE));
-    accessSection.setPermissions(permissions);
-    assertThat(accessSection.getPermission(Permission.SUBMIT)).isNull();
-    accessSection.getPermissions().add(submitPermission);
     assertThat(accessSection.getPermission(Permission.SUBMIT)).isNull();
   }
 

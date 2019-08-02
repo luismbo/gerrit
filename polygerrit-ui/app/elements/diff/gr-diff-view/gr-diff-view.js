@@ -35,6 +35,7 @@
 
   Polymer({
     is: 'gr-diff-view',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when the title of the page should change.
@@ -68,6 +69,14 @@
         notify: true,
         value() { return {}; },
         observer: '_changeViewStateChanged',
+      },
+      disableDiffPrefs: {
+        type: Boolean,
+        value: false,
+      },
+      _diffPrefsDisabled: {
+        type: Boolean,
+        computed: '_computeDiffPrefsDisabled(disableDiffPrefs, _loggedIn)',
       },
       /** @type {?} */
       _patchRange: Object,
@@ -213,7 +222,7 @@
         [this.Shortcut.EXPAND_ALL_DIFF_CONTEXT]: '_handleExpandAllDiffContext',
         [this.Shortcut.NEXT_UNREVIEWED_FILE]: '_handleNextUnreviewedFile',
 
-        // Final two are actually handled by gr-diff-comment-thread.
+        // Final two are actually handled by gr-comment-thread.
         [this.Shortcut.EXPAND_ALL_COMMENT_THREADS]: null,
         [this.Shortcut.COLLAPSE_ALL_COMMENT_THREADS]: null,
       };
@@ -457,6 +466,7 @@
     _handleCommaKey(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
+      if (this._diffPrefsDisabled) { return; }
 
       e.preventDefault();
       this.$.diffPreferencesDialog.open();
@@ -803,8 +813,8 @@
           (unresolvedString ? `${unresolvedString}` : '');
     },
 
-    _computePrefsButtonHidden(prefs, loggedIn) {
-      return !loggedIn || !prefs;
+    _computePrefsButtonHidden(prefs, prefsDisabled) {
+      return prefsDisabled || !prefs;
     },
 
     _handleFileChange(e) {
@@ -1008,6 +1018,10 @@
     _handleExpandAllDiffContext(e) {
       if (this.shouldSuppressKeyboardShortcut(e)) { return; }
       this.$.diffHost.expandAllContext();
+    },
+
+    _computeDiffPrefsDisabled(disableDiffPrefs, loggedIn) {
+      return disableDiffPrefs || !loggedIn;
     },
 
     _handleNextUnreviewedFile(e) {

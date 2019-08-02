@@ -97,23 +97,24 @@ import com.google.gerrit.extensions.restapi.RestResource;
 import com.google.gerrit.extensions.restapi.RestView;
 import com.google.gerrit.extensions.restapi.TopLevelResource;
 import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
+import com.google.gerrit.git.LockFailureException;
 import com.google.gerrit.httpd.WebSession;
 import com.google.gerrit.httpd.restapi.ParameterParser.QueryParams;
+import com.google.gerrit.json.OutputFormat;
 import com.google.gerrit.server.AccessPath;
 import com.google.gerrit.server.AnonymousUser;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.OptionUtil;
-import com.google.gerrit.server.OutputFormat;
 import com.google.gerrit.server.audit.ExtendedHttpAuditEvent;
 import com.google.gerrit.server.cache.PerThreadCache;
 import com.google.gerrit.server.config.GerritServerConfig;
-import com.google.gerrit.server.git.LockFailureException;
 import com.google.gerrit.server.group.GroupAuditService;
 import com.google.gerrit.server.logging.RequestId;
 import com.google.gerrit.server.logging.TraceContext;
 import com.google.gerrit.server.permissions.GlobalPermission;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackendException;
+import com.google.gerrit.server.quota.QuotaException;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
 import com.google.gerrit.util.http.CacheHeaders;
@@ -227,6 +228,7 @@ public class RestApiServlet extends HttpServlet {
     final GroupAuditService auditService;
     final RestApiMetrics metrics;
     final Pattern allowOrigin;
+    final RestApiQuotaEnforcer quotaChecker;
 
     @Inject
     Globals(
@@ -236,6 +238,7 @@ public class RestApiServlet extends HttpServlet {
         PermissionBackend permissionBackend,
         GroupAuditService auditService,
         RestApiMetrics metrics,
+        RestApiQuotaEnforcer quotaChecker,
         @GerritServerConfig Config cfg) {
       this.currentUser = currentUser;
       this.webSession = webSession;
@@ -243,6 +246,7 @@ public class RestApiServlet extends HttpServlet {
       this.permissionBackend = permissionBackend;
       this.auditService = auditService;
       this.metrics = metrics;
+      this.quotaChecker = quotaChecker;
       allowOrigin = makeAllowOrigin(cfg);
     }
 
@@ -317,6 +321,7 @@ public class RestApiServlet extends HttpServlet {
         viewData = new ViewData(null, null);
 
         if (path.isEmpty()) {
+          globals.quotaChecker.enforce(req);
           if (rc instanceof NeedsParams) {
             ((NeedsParams) rc).setParams(qp.params());
           }
@@ -339,6 +344,7 @@ public class RestApiServlet extends HttpServlet {
           IdString id = path.remove(0);
           try {
             rsrc = rc.parse(rsrc, id);
+            globals.quotaChecker.enforce(rsrc, req);
             if (path.isEmpty()) {
               checkPreconditions(req);
             }
@@ -346,6 +352,7 @@ public class RestApiServlet extends HttpServlet {
             if (!path.isEmpty()) {
               throw e;
             }
+            globals.quotaChecker.enforce(req);
 
             if (isPost(req) || isPut(req)) {
               RestView<RestResource> createView = rc.views().get(PluginName.GERRIT, "CREATE./");
@@ -385,8 +392,12 @@ public class RestApiServlet extends HttpServlet {
             if (isRead(req)) {
               viewData = new ViewData(null, c.list());
             } else if (isPost(req)) {
+              // TODO: Here and on other collection methods: There is a bug that binds child views
+              // with pluginName="gerrit" instead of the real plugin name. This has never worked
+              // correctly and should be fixed where the binding gets created (DynamicMapProvider)
+              // and here.
               RestView<RestResource> restCollectionView =
-                  c.views().get(viewData.pluginName, "POST_ON_COLLECTION./");
+                  c.views().get(PluginName.GERRIT, "POST_ON_COLLECTION./");
               if (restCollectionView != null) {
                 viewData = new ViewData(null, restCollectionView);
               } else {
@@ -394,7 +405,7 @@ public class RestApiServlet extends HttpServlet {
               }
             } else if (isDelete(req)) {
               RestView<RestResource> restCollectionView =
-                  c.views().get(viewData.pluginName, "DELETE_ON_COLLECTION./");
+                  c.views().get(PluginName.GERRIT, "DELETE_ON_COLLECTION./");
               if (restCollectionView != null) {
                 viewData = new ViewData(null, restCollectionView);
               } else {
@@ -602,6 +613,9 @@ public class RestApiServlet extends HttpServlet {
           status = SC_INTERNAL_SERVER_ERROR;
           responseBytes = handleException(e, req, res);
         }
+      } catch (QuotaException e) {
+        responseBytes =
+            replyError(req, res, status = 429, messageOr(e, "Quota limit reached"), e.caching(), e);
       } catch (Exception e) {
         status = SC_INTERNAL_SERVER_ERROR;
         responseBytes = handleException(e, req, res);
@@ -1254,6 +1268,8 @@ public class RestApiServlet extends HttpServlet {
       return new ViewData(PluginName.GERRIT, core);
     }
 
+    // Check if we want to delegate to a child collection. Child collections are bound with
+    // GET.name so we have to check for this since we haven't found any other views.
     core = views.get(PluginName.GERRIT, "GET." + p.get(0));
     if (core != null) {
       return new ViewData(PluginName.GERRIT, core);
@@ -1264,6 +1280,17 @@ public class RestApiServlet extends HttpServlet {
       RestView<RestResource> action = views.get(plugin, name);
       if (action != null) {
         r.put(plugin, action);
+      }
+    }
+
+    if (r.isEmpty()) {
+      // Check if we want to delegate to a child collection. Child collections are bound with
+      // GET.name so we have to check for this since we haven't found any other views.
+      for (String plugin : views.plugins()) {
+        RestView<RestResource> action = views.get(plugin, "GET." + p.get(0));
+        if (action != null) {
+          r.put(plugin, action);
+        }
       }
     }
 
@@ -1351,9 +1378,7 @@ public class RestApiServlet extends HttpServlet {
     // generated.
     TraceContext traceContext =
         TraceContext.newTrace(
-            doTrace,
-            traceId1,
-            (tagName, traceId) -> res.setHeader(X_GERRIT_TRACE, traceId.toString()));
+            doTrace, traceId1, (tagName, traceId) -> res.setHeader(X_GERRIT_TRACE, traceId));
     // If a second trace ID was specified, add a tag for it as well.
     if (traceId2 != null) {
       traceContext.addTag(RequestId.Type.TRACE_ID, traceId2);

@@ -26,7 +26,6 @@ import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_LABEL;
 import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_PATCH_SET;
 import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_PATCH_SET_DESCRIPTION;
 import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_PRIVATE;
-import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_READ_ONLY_UNTIL;
 import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_REAL_USER;
 import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_REVERT_OF;
 import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_STATUS;
@@ -38,6 +37,7 @@ import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_TOPIC;
 import static com.google.gerrit.server.notedb.ChangeNoteUtil.FOOTER_WORK_IN_PROGRESS;
 import static com.google.gerrit.server.notedb.ChangeNoteUtil.parseCommitMessageRange;
 import static com.google.gerrit.server.notedb.NoteDbTable.CHANGES;
+import static java.util.Comparator.comparing;
 import static java.util.stream.Collectors.joining;
 
 import com.google.auto.value.AutoValue;
@@ -68,7 +68,6 @@ import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.reviewdb.client.RevId;
-import com.google.gerrit.reviewdb.server.ReviewDbUtil;
 import com.google.gerrit.server.ReviewerByEmailSet;
 import com.google.gerrit.server.ReviewerSet;
 import com.google.gerrit.server.ReviewerStatusUpdate;
@@ -77,7 +76,6 @@ import com.google.gerrit.server.util.LabelVote;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.sql.Timestamp;
-import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -85,7 +83,6 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -99,7 +96,6 @@ import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.notes.NoteMap;
 import org.eclipse.jgit.revwalk.FooterKey;
-import org.eclipse.jgit.util.GitDateParser;
 import org.eclipse.jgit.util.RawParseUtils;
 
 class ChangeNotesParser {
@@ -163,7 +159,6 @@ class ChangeNotesParser {
   private String submissionId;
   private String tag;
   private RevisionNoteMap<ChangeRevisionNote> revisionNoteMap;
-  private Timestamp readOnlyUntil;
   private Boolean isPrivate;
   private Boolean workInProgress;
   private Boolean previousWorkInProgressFooter;
@@ -266,7 +261,6 @@ class ChangeNotesParser {
         submitRecords,
         buildAllMessages(),
         comments,
-        readOnlyUntil,
         firstNonNull(isPrivate, false),
         firstNonNull(workInProgress, false),
         firstNonNull(hasReviewStarted, true),
@@ -401,10 +395,6 @@ class ChangeNotesParser {
       // behavior.
     }
 
-    if (readOnlyUntil == null) {
-      parseReadOnlyUntil(commit);
-    }
-
     if (isPrivate == null) {
       parseIsPrivate(commit);
     }
@@ -469,7 +459,7 @@ class ChangeNotesParser {
       throws ConfigInvalidException {
     String line = parseOneFooter(commit, footerKey);
     if (line == null) {
-      throw expectedOneFooter(footerKey, Collections.<String>emptyList());
+      throw expectedOneFooter(footerKey, Collections.emptyList());
     }
     return line;
   }
@@ -732,7 +722,7 @@ class ChangeNotesParser {
     Map<RevId, ChangeRevisionNote> rns = revisionNoteMap.revisionNotes;
 
     for (Map.Entry<RevId, ChangeRevisionNote> e : rns.entrySet()) {
-      for (Comment c : e.getValue().getComments()) {
+      for (Comment c : e.getValue().getEntities()) {
         comments.put(e.getKey(), c);
       }
     }
@@ -838,12 +828,8 @@ class ChangeNotesParser {
       throw pe;
     }
 
-    // Store an actual 0-vote approval in the map for a removed approval, for
-    // several reasons:
-    //  - This is closer to the ReviewDb representation, which leads to less
-    //    confusion and special-casing of NoteDb.
-    //  - More importantly, ApprovalCopier needs an actual approval in order to
-    //    block copying an earlier approval over a later delete.
+    // Store an actual 0-vote approval in the map for a removed approval, because ApprovalCopier
+    // needs an actual approval in order to block copying an earlier approval over a later delete.
     PatchSetApproval remove =
         new PatchSetApproval(
             new PatchSetApproval.Key(psId, effectiveAccountId, new LabelId(label)), (short) 0, ts);
@@ -933,20 +919,6 @@ class ChangeNotesParser {
     }
   }
 
-  private void parseReadOnlyUntil(ChangeNotesCommit commit) throws ConfigInvalidException {
-    String raw = parseOneFooter(commit, FOOTER_READ_ONLY_UNTIL);
-    if (raw == null) {
-      return;
-    }
-    try {
-      readOnlyUntil = new Timestamp(GitDateParser.parse(raw, null, Locale.US).getTime());
-    } catch (ParseException e) {
-      ConfigInvalidException cie = invalidFooter(FOOTER_READ_ONLY_UNTIL, raw);
-      cie.initCause(e);
-      throw cie;
-    }
-  }
-
   private void parseIsPrivate(ChangeNotesCommit commit) throws ConfigInvalidException {
     String raw = parseOneFooter(commit, FOOTER_PRIVATE);
     if (raw == null) {
@@ -1028,7 +1000,7 @@ class ChangeNotesParser {
   }
 
   private void updatePatchSetStates() {
-    Set<PatchSet.Id> missing = new TreeSet<>(ReviewDbUtil.intKeyOrdering());
+    Set<PatchSet.Id> missing = new TreeSet<>(comparing(PatchSet.Id::get));
     for (Iterator<PatchSet> it = patchSets.values().iterator(); it.hasNext(); ) {
       PatchSet ps = it.next();
       if (ps.getRevision().equals(PARTIAL_PATCH_SET)) {

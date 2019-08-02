@@ -35,6 +35,8 @@ import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.RestResponse;
 import com.google.gerrit.acceptance.TestProjectInput;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperations;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.RawInputUtil;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.Permission;
@@ -43,7 +45,6 @@ import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.api.changes.PublishChangeEditInput;
 import com.google.gerrit.extensions.api.changes.ReviewInput;
 import com.google.gerrit.extensions.client.ChangeEditDetailOption;
-import com.google.gerrit.extensions.client.InheritableBoolean;
 import com.google.gerrit.extensions.client.ListChangesOption;
 import com.google.gerrit.extensions.common.ApprovalInfo;
 import com.google.gerrit.extensions.common.ChangeInfo;
@@ -55,7 +56,6 @@ import com.google.gerrit.extensions.restapi.BinaryResult;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ChangeMessagesUtil;
 import com.google.gerrit.server.project.testing.Util;
 import com.google.gerrit.server.restapi.change.ChangeEdits.EditMessage;
@@ -64,7 +64,6 @@ import com.google.gerrit.server.restapi.change.ChangeEdits.Put;
 import com.google.gerrit.testing.TestTimeUtil;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
-import com.google.gwtorm.server.SchemaFactory;
 import com.google.inject.Inject;
 import java.io.IOException;
 import java.sql.Timestamp;
@@ -78,7 +77,6 @@ import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
-import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -94,7 +92,8 @@ public class ChangeEditIT extends AbstractDaemonTest {
   private static final String CONTENT_NEW2_STR = "quxÄÜÖßµ";
   private static final byte[] CONTENT_NEW2 = CONTENT_NEW2_STR.getBytes(UTF_8);
 
-  @Inject private SchemaFactory<ReviewDb> reviewDbProvider;
+  @Inject private ProjectOperations projectOperations;
+  @Inject private RequestScopeOperations requestScopeOperations;
 
   private String changeId;
   private String changeId2;
@@ -112,17 +111,11 @@ public class ChangeEditIT extends AbstractDaemonTest {
 
   @Before
   public void setUp() throws Exception {
-    db = reviewDbProvider.open();
-    changeId = newChange(admin.getIdent());
+    changeId = newChange(admin.newIdent());
     ps = getCurrentPatchSet(changeId);
     assertThat(ps).isNotNull();
-    amendChange(admin.getIdent(), changeId);
-    changeId2 = newChange2(admin.getIdent());
-  }
-
-  @After
-  public void cleanup() {
-    db.close();
+    amendChange(admin.newIdent(), changeId);
+    changeId2 = newChange2(admin.newIdent());
   }
 
   @Test
@@ -146,7 +139,7 @@ public class ChangeEditIT extends AbstractDaemonTest {
   @Test
   public void deleteEditOfOlderPatchSet() throws Exception {
     createArbitraryEditFor(changeId2);
-    amendChange(admin.getIdent(), changeId2);
+    amendChange(admin.newIdent(), changeId2);
 
     gApi.changes().id(changeId2).edit().delete();
     assertThat(getEdit(changeId2)).isAbsent();
@@ -206,7 +199,7 @@ public class ChangeEditIT extends AbstractDaemonTest {
   @Test
   public void publishEditNotifyRest() throws Exception {
     AddReviewerInput in = new AddReviewerInput();
-    in.reviewer = user.email;
+    in.reviewer = user.email();
     gApi.changes().id(changeId).addReviewer(in);
 
     createArbitraryEditFor(changeId);
@@ -221,7 +214,7 @@ public class ChangeEditIT extends AbstractDaemonTest {
   @Test
   public void publishEditWithDefaultNotify() throws Exception {
     AddReviewerInput in = new AddReviewerInput();
-    in.reviewer = user.email;
+    in.reviewer = user.email();
     gApi.changes().id(changeId).addReviewer(in);
 
     createArbitraryEditFor(changeId);
@@ -239,20 +232,11 @@ public class ChangeEditIT extends AbstractDaemonTest {
   }
 
   @Test
-  public void publishEditRestWithoutCLA() throws Exception {
-    createArbitraryEditFor(changeId);
-    setUseContributorAgreements(InheritableBoolean.TRUE);
-    adminRestSession.post(urlPublish(changeId)).assertForbidden();
-    setUseContributorAgreements(InheritableBoolean.FALSE);
-    adminRestSession.post(urlPublish(changeId)).assertNoContent();
-  }
-
-  @Test
   public void rebaseEdit() throws Exception {
     PatchSet previousPatchSet = getCurrentPatchSet(changeId2);
     createEmptyEditFor(changeId2);
     gApi.changes().id(changeId2).edit().modifyFile(FILE_NAME, RawInputUtil.create(CONTENT_NEW));
-    amendChange(admin.getIdent(), changeId2);
+    amendChange(admin.newIdent(), changeId2);
     PatchSet currentPatchSet = getCurrentPatchSet(changeId2);
 
     Optional<EditInfo> originalEdit = getEdit(changeId2);
@@ -271,7 +255,7 @@ public class ChangeEditIT extends AbstractDaemonTest {
     PatchSet previousPatchSet = getCurrentPatchSet(changeId2);
     createEmptyEditFor(changeId2);
     gApi.changes().id(changeId2).edit().modifyFile(FILE_NAME, RawInputUtil.create(CONTENT_NEW));
-    amendChange(admin.getIdent(), changeId2);
+    amendChange(admin.newIdent(), changeId2);
     PatchSet currentPatchSet = getCurrentPatchSet(changeId2);
 
     Optional<EditInfo> originalEdit = getEdit(changeId2);
@@ -294,8 +278,7 @@ public class ChangeEditIT extends AbstractDaemonTest {
     assertThat(edit).value().baseRevision().isEqualTo(currentPatchSet.getRevision().get());
     PushOneCommit push =
         pushFactory.create(
-            db,
-            admin.getIdent(),
+            admin.newIdent(),
             testRepo,
             PushOneCommit.SUBJECT,
             FILE_NAME,
@@ -319,7 +302,7 @@ public class ChangeEditIT extends AbstractDaemonTest {
   public void updateRootCommitMessage() throws Exception {
     // Re-clone empty repo; TestRepository doesn't let us reset to unborn head.
     testRepo = cloneProject(project);
-    changeId = newChange(admin.getIdent());
+    changeId = newChange(admin.newIdent());
 
     createEmptyEditFor(changeId);
     Optional<EditInfo> edit = getEdit(changeId);
@@ -645,11 +628,11 @@ public class ChangeEditIT extends AbstractDaemonTest {
     gApi.changes().id(changeId2).edit().publish(publishInput);
     assertThat(queryEdits()).isEmpty();
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     createEmptyEditFor(changeId);
     assertThat(queryEdits()).hasSize(1);
 
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     assertThat(queryEdits()).isEmpty();
   }
 
@@ -690,7 +673,7 @@ public class ChangeEditIT extends AbstractDaemonTest {
   @Test
   public void createEditWithoutPushPatchSetPermission() throws Exception {
     // Create new project with clean permissions
-    Project.NameKey p = createProject("addPatchSetEdit");
+    Project.NameKey p = projectOperations.newProject().create();
     // Clone repository as user
     TestRepository<InMemoryRepository> userTestRepo = cloneProject(p, user);
 
@@ -698,7 +681,7 @@ public class ChangeEditIT extends AbstractDaemonTest {
     block(p, "refs/for/*", Permission.ADD_PATCH_SET, REGISTERED_USERS);
 
     // Create change as user
-    PushOneCommit push = pushFactory.create(db, user.getIdent(), userTestRepo);
+    PushOneCommit push = pushFactory.create(user.newIdent(), userTestRepo);
     PushOneCommit.Result r1 = push.to("refs/for/master");
     r1.assertOkStatus();
 
@@ -753,14 +736,13 @@ public class ChangeEditIT extends AbstractDaemonTest {
   private String newChange(PersonIdent ident) throws Exception {
     PushOneCommit push =
         pushFactory.create(
-            db, ident, testRepo, PushOneCommit.SUBJECT, FILE_NAME, new String(CONTENT_OLD, UTF_8));
+            ident, testRepo, PushOneCommit.SUBJECT, FILE_NAME, new String(CONTENT_OLD, UTF_8));
     return push.to("refs/for/master").getChangeId();
   }
 
   private String amendChange(PersonIdent ident, String changeId) throws Exception {
     PushOneCommit push =
         pushFactory.create(
-            db,
             ident,
             testRepo,
             PushOneCommit.SUBJECT,
@@ -773,7 +755,7 @@ public class ChangeEditIT extends AbstractDaemonTest {
   private String newChange2(PersonIdent ident) throws Exception {
     PushOneCommit push =
         pushFactory.create(
-            db, ident, testRepo, PushOneCommit.SUBJECT, FILE_NAME, new String(CONTENT_OLD, UTF_8));
+            ident, testRepo, PushOneCommit.SUBJECT, FILE_NAME, new String(CONTENT_OLD, UTF_8));
     return push.rm("refs/for/master").getChangeId();
   }
 

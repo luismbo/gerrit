@@ -22,7 +22,6 @@ import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.permissions.ChangePermission;
@@ -35,9 +34,7 @@ import com.google.gerrit.server.plugincontext.PluginSetEntryContext;
 import com.google.gerrit.server.project.NoSuchChangeException;
 import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.project.ProjectState;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.Singleton;
 
 /** Distributes Events to listeners if they are allowed to see them */
@@ -64,27 +61,22 @@ public class EventBroker implements EventDispatcher {
 
   protected final ChangeNotes.Factory notesFactory;
 
-  protected final Provider<ReviewDb> dbProvider;
-
   @Inject
   public EventBroker(
       PluginSetContext<UserScopedEventListener> listeners,
       PluginSetContext<EventListener> unrestrictedListeners,
       PermissionBackend permissionBackend,
       ProjectCache projectCache,
-      ChangeNotes.Factory notesFactory,
-      Provider<ReviewDb> dbProvider) {
+      ChangeNotes.Factory notesFactory) {
     this.listeners = listeners;
     this.unrestrictedListeners = unrestrictedListeners;
     this.permissionBackend = permissionBackend;
     this.projectCache = projectCache;
     this.notesFactory = notesFactory;
-    this.dbProvider = dbProvider;
   }
 
   @Override
-  public void postEvent(Change change, ChangeEvent event)
-      throws OrmException, PermissionBackendException {
+  public void postEvent(Change change, ChangeEvent event) throws PermissionBackendException {
     fireEvent(change, event);
   }
 
@@ -100,7 +92,7 @@ public class EventBroker implements EventDispatcher {
   }
 
   @Override
-  public void postEvent(Event event) throws OrmException, PermissionBackendException {
+  public void postEvent(Event event) throws PermissionBackendException {
     fireEvent(event);
   }
 
@@ -108,10 +100,9 @@ public class EventBroker implements EventDispatcher {
     unrestrictedListeners.runEach(l -> l.onEvent(event));
   }
 
-  protected void fireEvent(Change change, ChangeEvent event)
-      throws OrmException, PermissionBackendException {
+  protected void fireEvent(Change change, ChangeEvent event) throws PermissionBackendException {
     for (PluginSetEntryContext<UserScopedEventListener> c : listeners) {
-      CurrentUser user = c.call(l -> l.getUser());
+      CurrentUser user = c.call(UserScopedEventListener::getUser);
       if (isVisibleTo(change, user)) {
         c.run(l -> l.onEvent(event));
       }
@@ -121,7 +112,7 @@ public class EventBroker implements EventDispatcher {
 
   protected void fireEvent(Project.NameKey project, ProjectEvent event) {
     for (PluginSetEntryContext<UserScopedEventListener> c : listeners) {
-      CurrentUser user = c.call(l -> l.getUser());
+      CurrentUser user = c.call(UserScopedEventListener::getUser);
       if (isVisibleTo(project, user)) {
         c.run(l -> l.onEvent(event));
       }
@@ -132,7 +123,7 @@ public class EventBroker implements EventDispatcher {
   protected void fireEvent(Branch.NameKey branchName, RefEvent event)
       throws PermissionBackendException {
     for (PluginSetEntryContext<UserScopedEventListener> c : listeners) {
-      CurrentUser user = c.call(l -> l.getUser());
+      CurrentUser user = c.call(UserScopedEventListener::getUser);
       if (isVisibleTo(branchName, user)) {
         c.run(l -> l.onEvent(event));
       }
@@ -140,9 +131,9 @@ public class EventBroker implements EventDispatcher {
     fireEventForUnrestrictedListeners(event);
   }
 
-  protected void fireEvent(Event event) throws OrmException, PermissionBackendException {
+  protected void fireEvent(Event event) throws PermissionBackendException {
     for (PluginSetEntryContext<UserScopedEventListener> c : listeners) {
-      CurrentUser user = c.call(l -> l.getUser());
+      CurrentUser user = c.call(UserScopedEventListener::getUser);
       if (isVisibleTo(event, user)) {
         c.run(l -> l.onEvent(event));
       }
@@ -164,8 +155,7 @@ public class EventBroker implements EventDispatcher {
     }
   }
 
-  protected boolean isVisibleTo(Change change, CurrentUser user)
-      throws OrmException, PermissionBackendException {
+  protected boolean isVisibleTo(Change change, CurrentUser user) throws PermissionBackendException {
     if (change == null) {
       return false;
     }
@@ -173,12 +163,10 @@ public class EventBroker implements EventDispatcher {
     if (pe == null || !pe.statePermitsRead()) {
       return false;
     }
-    ReviewDb db = dbProvider.get();
     try {
       permissionBackend
           .user(user)
-          .change(notesFactory.createChecked(db, change))
-          .database(db)
+          .change(notesFactory.createChecked(change))
           .check(ChangePermission.READ);
       return true;
     } catch (AuthException e) {
@@ -201,18 +189,14 @@ public class EventBroker implements EventDispatcher {
     }
   }
 
-  protected boolean isVisibleTo(Event event, CurrentUser user)
-      throws OrmException, PermissionBackendException {
+  protected boolean isVisibleTo(Event event, CurrentUser user) throws PermissionBackendException {
     if (event instanceof RefEvent) {
       RefEvent refEvent = (RefEvent) event;
       String ref = refEvent.getRefName();
       if (PatchSet.isChangeRef(ref)) {
         Change.Id cid = PatchSet.Id.fromRef(ref).getParentKey();
         try {
-          Change change =
-              notesFactory
-                  .createChecked(dbProvider.get(), refEvent.getProjectNameKey(), cid)
-                  .getChange();
+          Change change = notesFactory.createChecked(refEvent.getProjectNameKey(), cid).getChange();
           return isVisibleTo(change, user);
         } catch (NoSuchChangeException e) {
           logger.atFine().log(

@@ -16,7 +16,6 @@ package com.google.gerrit.server.change;
 
 import static com.google.common.base.Preconditions.checkState;
 
-import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.restapi.MergeConflictException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.RestApiException;
@@ -26,6 +25,7 @@ import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.change.RebaseUtil.Base;
+import com.google.gerrit.server.git.GroupCollector;
 import com.google.gerrit.server.git.MergeUtil;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.permissions.PermissionBackendException;
@@ -37,7 +37,6 @@ import com.google.gerrit.server.update.BatchUpdateOp;
 import com.google.gerrit.server.update.ChangeContext;
 import com.google.gerrit.server.update.Context;
 import com.google.gerrit.server.update.RepoContext;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.assistedinject.Assisted;
 import java.io.IOException;
@@ -69,9 +68,9 @@ public class RebaseChangeOp implements BatchUpdateOp {
   private boolean validate = true;
   private boolean checkAddPatchSetPermission = true;
   private boolean forceContentMerge;
-  private boolean copyApprovals = true;
   private boolean detailedCommitMessage;
   private boolean postMessage = true;
+  private boolean sendEmail = true;
   private boolean matchAuthorToCommitterDate = false;
 
   private RevCommit rebasedCommit;
@@ -126,11 +125,6 @@ public class RebaseChangeOp implements BatchUpdateOp {
     return this;
   }
 
-  public RebaseChangeOp setCopyApprovals(boolean copyApprovals) {
-    this.copyApprovals = copyApprovals;
-    return this;
-  }
-
   public RebaseChangeOp setDetailedCommitMessage(boolean detailedCommitMessage) {
     this.detailedCommitMessage = detailedCommitMessage;
     return this;
@@ -138,6 +132,11 @@ public class RebaseChangeOp implements BatchUpdateOp {
 
   public RebaseChangeOp setPostMessage(boolean postMessage) {
     this.postMessage = postMessage;
+    return this;
+  }
+
+  public RebaseChangeOp setSendEmail(boolean sendEmail) {
+    this.sendEmail = sendEmail;
     return this;
   }
 
@@ -149,7 +148,7 @@ public class RebaseChangeOp implements BatchUpdateOp {
   @Override
   public void updateRepo(RepoContext ctx)
       throws MergeConflictException, InvalidChangeOperationException, RestApiException, IOException,
-          OrmException, NoSuchChangeException, PermissionBackendException {
+          NoSuchChangeException, PermissionBackendException {
     // Ok that originalPatchSet was not read in a transaction, since we just
     // need its revision.
     RevId oldRev = originalPatchSet.getRevision();
@@ -178,18 +177,19 @@ public class RebaseChangeOp implements BatchUpdateOp {
             baseCommitId.name());
 
     rebasedPatchSetId =
-        ChangeUtil.nextPatchSetIdFromChangeRefsMap(
-            ctx.getRepoView().getRefs(originalPatchSet.getId().getParentKey().toRefPrefix()),
+        ChangeUtil.nextPatchSetIdFromChangeRefs(
+            ctx.getRepoView()
+                .getRefs(originalPatchSet.getId().getParentKey().toRefPrefix())
+                .keySet(),
             notes.getChange().currentPatchSetId());
     patchSetInserter =
         patchSetInserterFactory
             .create(notes, rebasedPatchSetId, rebasedCommit)
             .setDescription("Rebase")
-            .setNotify(NotifyHandling.NONE)
             .setFireRevisionCreated(fireRevisionCreated)
-            .setCopyApprovals(copyApprovals)
             .setCheckAddPatchSetPermission(checkAddPatchSetPermission)
-            .setValidate(validate);
+            .setValidate(validate)
+            .setSendEmail(sendEmail);
     if (postMessage) {
       patchSetInserter.setMessage(
           "Patch Set "
@@ -199,22 +199,27 @@ public class RebaseChangeOp implements BatchUpdateOp {
               + " was rebased");
     }
 
-    if (base != null) {
-      patchSetInserter.setGroups(base.patchSet().getGroups());
+    if (base != null && !base.notes().getChange().isMerged()) {
+      if (!base.notes().getChange().isMerged()) {
+        // Add to end of relation chain for open base change.
+        patchSetInserter.setGroups(base.patchSet().getGroups());
+      } else {
+        // If the base is merged, start a new relation chain.
+        patchSetInserter.setGroups(GroupCollector.getDefaultGroups(rebasedCommit));
+      }
     }
     patchSetInserter.updateRepo(ctx);
   }
 
   @Override
-  public boolean updateChange(ChangeContext ctx)
-      throws ResourceConflictException, OrmException, IOException {
+  public boolean updateChange(ChangeContext ctx) throws ResourceConflictException, IOException {
     boolean ret = patchSetInserter.updateChange(ctx);
     rebasedPatchSet = patchSetInserter.getPatchSet();
     return ret;
   }
 
   @Override
-  public void postUpdate(Context ctx) throws OrmException {
+  public void postUpdate(Context ctx) {
     patchSetInserter.postUpdate(ctx);
   }
 

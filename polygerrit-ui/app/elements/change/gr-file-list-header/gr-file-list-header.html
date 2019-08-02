@@ -153,7 +153,10 @@ limitations under the License.
     </style>
     <div class$="patchInfo-header [[_computeEditModeClass(editMode)]] [[_computePatchInfoClass(patchNum, allPatchSets)]]">
       <div class="patchInfo-left">
-        <h3 class="label">Files</h3>
+        <template is="dom-if"
+            if="[[showTitle]]">
+          <h3 class="label">Files</h3>
+        </template>
         <div class="patchInfoContent">
           <gr-patch-range-select
               id="rangeSelect"
@@ -248,10 +251,10 @@ limitations under the License.
           <gr-diff-mode-selector
               id="modeSelect"
               mode="{{diffViewMode}}"
-              save-on-change="[[loggedIn]]"></gr-diff-mode-selector>
+              save-on-change="[[!diffPrefsDisabled]]"></gr-diff-mode-selector>
           <span id="diffPrefsContainer"
               class="hideOnEdit"
-              hidden$="[[_computePrefsButtonHidden(diffPrefs, loggedIn)]]"
+              hidden$="[[_computePrefsButtonHidden(diffPrefs, diffPrefsDisabled)]]"
               hidden>
             <gr-button
                 link

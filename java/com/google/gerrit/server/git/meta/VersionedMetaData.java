@@ -18,8 +18,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 import com.google.common.base.MoreObjects;
 import com.google.gerrit.common.Nullable;
+import com.google.gerrit.git.LockFailureException;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.server.git.LockFailureException;
 import com.google.gerrit.server.logging.TraceContext;
 import com.google.gerrit.server.logging.TraceContext.TraceTimer;
 import java.io.BufferedReader;
@@ -461,7 +461,12 @@ public abstract class VersionedMetaData {
   }
 
   protected Config readConfig(String fileName) throws IOException, ConfigInvalidException {
-    Config rc = new Config();
+    return readConfig(fileName, null);
+  }
+
+  protected Config readConfig(String fileName, Config baseConfig)
+      throws IOException, ConfigInvalidException {
+    Config rc = new Config(baseConfig);
     String text = readUTF8(fileName);
     if (!text.isEmpty()) {
       try {

@@ -204,6 +204,7 @@
 
   Polymer({
     is: 'gr-router',
+    _legacyUndefinedCheck: true,
 
     properties: {
       _app: {
@@ -211,6 +212,12 @@
         value: app,
       },
       _isRedirecting: Boolean,
+      // This variable is to differentiate between internal navigation (false)
+      // and for first navigation in app after loaded from server (true).
+      _isInitialLoad: {
+        type: Boolean,
+        value: true,
+      },
     },
 
     behaviors: [
@@ -392,6 +399,9 @@
         suffix += '?' + params.querystring;
       } else if (params.edit) {
         suffix += ',edit';
+      }
+      if (params.messageHash) {
+        suffix += params.messageHash;
       }
       if (params.project) {
         const encodedProject = this.encodeURL(params.project, true);
@@ -633,7 +643,7 @@
           return Promise.resolve();
         } else {
           this._redirectToLogin(data.canonicalPath);
-          return Promise.reject();
+          return Promise.reject(new Error());
         }
       });
     },
@@ -688,6 +698,7 @@
           this.$.reporting.beforeLocationChanged();
         }
         this._isRedirecting = false;
+        this._isInitialLoad = false;
         next();
       });
 
@@ -1457,7 +1468,13 @@
      * Catchall route for when no other route is matched.
      */
     _handleDefaultRoute() {
-      this._show404();
+      if (this._isInitialLoad) {
+        // Server recognized this route as polygerrit, so we show 404.
+        this._show404();
+      } else {
+        // Route can be recognized by server, so we pass it to server.
+        this._handlePassThroughRoute();
+      }
     },
 
     _show404() {

@@ -20,8 +20,9 @@ import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS
 import static org.eclipse.jgit.lib.Constants.R_HEADS;
 
 import com.google.gerrit.acceptance.AbstractDaemonTest;
-import com.google.gerrit.acceptance.GerritConfig;
 import com.google.gerrit.acceptance.RestResponse;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperations;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.projects.BranchApi;
 import com.google.gerrit.extensions.api.projects.BranchInput;
@@ -31,23 +32,26 @@ import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.RefNames;
+import com.google.inject.Inject;
 import org.junit.Before;
 import org.junit.Test;
 
 public class DeleteBranchIT extends AbstractDaemonTest {
+  @Inject private ProjectOperations projectOperations;
+  @Inject private RequestScopeOperations requestScopeOperations;
 
   private Branch.NameKey testBranch;
 
   @Before
   public void setUp() throws Exception {
-    project = createProject(name("p"));
+    project = projectOperations.newProject().create();
     testBranch = new Branch.NameKey(project, "test");
     branch(testBranch).create(new BranchInput());
   }
 
   @Test
   public void deleteBranch_Forbidden() throws Exception {
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertDeleteForbidden(testBranch);
   }
 
@@ -59,7 +63,7 @@ public class DeleteBranchIT extends AbstractDaemonTest {
   @Test
   public void deleteBranchByProjectOwner() throws Exception {
     grantOwner();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertDeleteSucceeds(testBranch);
   }
 
@@ -73,21 +77,21 @@ public class DeleteBranchIT extends AbstractDaemonTest {
   public void deleteBranchByProjectOwnerForcePushBlocked_Forbidden() throws Exception {
     grantOwner();
     blockForcePush();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertDeleteForbidden(testBranch);
   }
 
   @Test
   public void deleteBranchByUserWithForcePushPermission() throws Exception {
     grantForcePush();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertDeleteSucceeds(testBranch);
   }
 
   @Test
   public void deleteBranchByUserWithDeletePermission() throws Exception {
     grantDelete();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     assertDeleteSucceeds(testBranch);
   }
 
@@ -134,11 +138,10 @@ public class DeleteBranchIT extends AbstractDaemonTest {
 
     exception.expect(ResourceConflictException.class);
     exception.expectMessage("Not allowed to delete user branch.");
-    branch(new Branch.NameKey(allUsers, RefNames.refsUsers(admin.id))).delete();
+    branch(new Branch.NameKey(allUsers, RefNames.refsUsers(admin.id()))).delete();
   }
 
   @Test
-  @GerritConfig(name = "noteDb.groups.write", value = "true")
   public void deleteGroupBranch_Conflict() throws Exception {
     allow(allUsers, RefNames.REFS_GROUPS + "*", Permission.CREATE, REGISTERED_USERS);
     allow(allUsers, RefNames.REFS_GROUPS + "*", Permission.PUSH, REGISTERED_USERS);

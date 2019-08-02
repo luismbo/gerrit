@@ -26,7 +26,6 @@ import com.google.gerrit.extensions.restapi.Url;
 import com.google.gerrit.reviewdb.client.Comment;
 import com.google.gerrit.reviewdb.client.PatchLineComment.Status;
 import com.google.gerrit.reviewdb.client.PatchSet;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CommentsUtil;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.change.DraftCommentResource;
@@ -41,7 +40,6 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -53,7 +51,6 @@ import java.util.Optional;
 public class PutDraftComment
     extends RetryingRestModifyView<DraftCommentResource, DraftInput, Response<CommentInfo>> {
 
-  private final Provider<ReviewDb> db;
   private final DeleteDraftComment delete;
   private final CommentsUtil commentsUtil;
   private final PatchSetUtil psUtil;
@@ -62,7 +59,6 @@ public class PutDraftComment
 
   @Inject
   PutDraftComment(
-      Provider<ReviewDb> db,
       DeleteDraftComment delete,
       CommentsUtil commentsUtil,
       PatchSetUtil psUtil,
@@ -70,7 +66,6 @@ public class PutDraftComment
       Provider<CommentJson> commentJson,
       PatchListCache patchListCache) {
     super(retryHelper);
-    this.db = db;
     this.delete = delete;
     this.commentsUtil = commentsUtil;
     this.psUtil = psUtil;
@@ -81,7 +76,7 @@ public class PutDraftComment
   @Override
   protected Response<CommentInfo> applyImpl(
       BatchUpdate.Factory updateFactory, DraftCommentResource rsrc, DraftInput in)
-      throws RestApiException, UpdateException, OrmException, PermissionBackendException {
+      throws RestApiException, UpdateException, PermissionBackendException {
     if (in == null || in.message == null || in.message.trim().isEmpty()) {
       return delete.applyImpl(updateFactory, rsrc, null);
     } else if (in.id != null && !rsrc.getId().equals(in.id)) {
@@ -93,8 +88,7 @@ public class PutDraftComment
     }
 
     try (BatchUpdate bu =
-        updateFactory.create(
-            db.get(), rsrc.getChange().getProject(), rsrc.getUser(), TimeUtil.nowTs())) {
+        updateFactory.create(rsrc.getChange().getProject(), rsrc.getUser(), TimeUtil.nowTs())) {
       Op op = new Op(rsrc.getComment().key, in);
       bu.addOp(rsrc.getChange().getId(), op);
       bu.execute();
@@ -116,9 +110,9 @@ public class PutDraftComment
 
     @Override
     public boolean updateChange(ChangeContext ctx)
-        throws ResourceNotFoundException, OrmException, PatchListNotAvailableException {
+        throws ResourceNotFoundException, PatchListNotAvailableException {
       Optional<Comment> maybeComment =
-          commentsUtil.getDraft(ctx.getDb(), ctx.getNotes(), ctx.getIdentifiedUser(), key);
+          commentsUtil.getDraft(ctx.getNotes(), ctx.getIdentifiedUser(), key);
       if (!maybeComment.isPresent()) {
         // Disappeared out from under us. Can't easily fall back to insert,
         // because the input might be missing required fields. Just give up.
@@ -133,7 +127,7 @@ public class PutDraftComment
       PatchSet.Id psId = new PatchSet.Id(ctx.getChange().getId(), origComment.key.patchSetId);
       ChangeUpdate update = ctx.getUpdate(psId);
 
-      PatchSet ps = psUtil.get(ctx.getDb(), ctx.getNotes(), psId);
+      PatchSet ps = psUtil.get(ctx.getNotes(), psId);
       if (ps == null) {
         throw new ResourceNotFoundException("patch set not found: " + psId);
       }
@@ -141,16 +135,12 @@ public class PutDraftComment
         // Updating the path alters the primary key, which isn't possible.
         // Delete then recreate the comment instead of an update.
 
-        commentsUtil.deleteComments(ctx.getDb(), update, Collections.singleton(origComment));
+        commentsUtil.deleteComments(update, Collections.singleton(origComment));
         comment.key.filename = in.path;
       }
       setCommentRevId(comment, patchListCache, ctx.getChange(), ps);
       commentsUtil.putComments(
-          ctx.getDb(),
-          update,
-          Status.DRAFT,
-          Collections.singleton(update(comment, in, ctx.getWhen())));
-      ctx.dontBumpLastUpdatedOn();
+          update, Status.DRAFT, Collections.singleton(update(comment, in, ctx.getWhen())));
       return true;
     }
   }

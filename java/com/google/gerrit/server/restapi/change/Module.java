@@ -32,6 +32,7 @@ import com.google.gerrit.server.account.AccountLoader;
 import com.google.gerrit.server.change.AddReviewersOp;
 import com.google.gerrit.server.change.ChangeInserter;
 import com.google.gerrit.server.change.ChangeResource;
+import com.google.gerrit.server.change.DeleteChangeOp;
 import com.google.gerrit.server.change.DeleteReviewerByEmailOp;
 import com.google.gerrit.server.change.DeleteReviewerOp;
 import com.google.gerrit.server.change.EmailReviewComments;
@@ -99,7 +100,6 @@ public class Module extends RestApiModule {
     get(CHANGE_KIND, "submitted_together").to(SubmittedTogether.class);
     post(CHANGE_KIND, "rebase").to(Rebase.CurrentRevision.class);
     post(CHANGE_KIND, "index").to(Index.class);
-    post(CHANGE_KIND, "rebuild.notedb").to(Rebuild.class);
     post(CHANGE_KIND, "move").to(Move.class);
     post(CHANGE_KIND, "private").to(PostPrivate.class);
     post(CHANGE_KIND, "private.delete").to(DeletePrivateByPost.class);
@@ -190,6 +190,7 @@ public class Module extends RestApiModule {
     factory(AccountLoader.Factory.class);
     factory(ChangeInserter.Factory.class);
     factory(ChangeResource.Factory.class);
+    factory(DeleteChangeOp.Factory.class);
     factory(DeleteReviewerByEmailOp.Factory.class);
     factory(DeleteReviewerOp.Factory.class);
     factory(EmailReviewComments.Factory.class);

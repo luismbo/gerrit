@@ -17,10 +17,9 @@ package com.google.gerrit.server.mail.receive;
 import static java.util.stream.Collectors.toList;
 
 import com.google.common.base.Strings;
-import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.flogger.FluentLogger;
-import com.google.gerrit.extensions.api.changes.NotifyHandling;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.client.Side;
 import com.google.gerrit.extensions.registration.DynamicItem;
 import com.google.gerrit.extensions.registration.DynamicMap;
@@ -66,7 +65,6 @@ import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.ManualRequestContext;
 import com.google.gerrit.server.util.OneOffRequestContext;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -149,7 +147,7 @@ public class MailProcessor {
   }
 
   private void processImpl(BatchUpdate.Factory buf, MailMessage message)
-      throws OrmException, UpdateException, RestApiException, IOException {
+      throws UpdateException, RestApiException, IOException {
     for (Extension<MailFilter> filter : mailFilters) {
       if (!filter.getProvider().get().shouldProcessMessage(message)) {
         logger.atWarning().log(
@@ -210,7 +208,7 @@ public class MailProcessor {
 
   private void persistComments(
       BatchUpdate.Factory buf, MailMessage message, MailMetadata metadata, Account.Id sender)
-      throws OrmException, UpdateException, RestApiException {
+      throws UpdateException, RestApiException {
     try (ManualRequestContext ctx = oneOffRequestContext.openAs(sender)) {
       List<ChangeData> changeDataList =
           queryProvider.get().byLegacyChangeId(new Change.Id(metadata.changeNumber));
@@ -262,7 +260,7 @@ public class MailProcessor {
       }
 
       Op o = new Op(new PatchSet.Id(cd.getId(), metadata.patchSet), parsedComments, message.id());
-      BatchUpdate batchUpdate = buf.create(cd.db(), project, ctx.getUser(), TimeUtil.nowTs());
+      BatchUpdate batchUpdate = buf.create(project, ctx.getUser(), TimeUtil.nowTs());
       batchUpdate.addOp(cd.getId(), o);
       batchUpdate.execute();
     }
@@ -285,15 +283,15 @@ public class MailProcessor {
 
     @Override
     public boolean updateChange(ChangeContext ctx)
-        throws OrmException, UnprocessableEntityException, PatchListNotAvailableException {
-      patchSet = psUtil.get(ctx.getDb(), ctx.getNotes(), psId);
+        throws UnprocessableEntityException, PatchListNotAvailableException {
+      patchSet = psUtil.get(ctx.getNotes(), psId);
       notes = ctx.getNotes();
       if (patchSet == null) {
-        throw new OrmException("patch set not found: " + psId);
+        throw new StorageException("patch set not found: " + psId);
       }
 
       changeMessage = generateChangeMessage(ctx);
-      changeMessagesUtil.addChangeMessage(ctx.getDb(), ctx.getUpdate(psId), changeMessage);
+      changeMessagesUtil.addChangeMessage(ctx.getUpdate(psId), changeMessage);
 
       comments = new ArrayList<>();
       for (MailComment c : parsedComments) {
@@ -304,10 +302,7 @@ public class MailProcessor {
             persistentCommentFromMailComment(ctx, c, targetPatchSetForComment(ctx, c, patchSet)));
       }
       commentsUtil.putComments(
-          ctx.getDb(),
-          ctx.getUpdate(ctx.getChange().currentPatchSetId()),
-          Status.PUBLISHED,
-          comments);
+          ctx.getUpdate(ctx.getChange().currentPatchSetId()), Status.PUBLISHED, comments);
 
       return true;
     }
@@ -321,8 +316,7 @@ public class MailProcessor {
       // Send email notifications
       outgoingMailFactory
           .create(
-              NotifyHandling.ALL,
-              ArrayListMultimap.create(),
+              ctx.getNotify(notes.getChangeId()),
               notes,
               patchSet,
               ctx.getUser().asIdentifiedUser(),
@@ -335,12 +329,7 @@ public class MailProcessor {
       Map<String, Short> approvals = new HashMap<>();
       approvalsUtil
           .byPatchSetUser(
-              ctx.getDb(),
-              notes,
-              psId,
-              ctx.getAccountId(),
-              ctx.getRevWalk(),
-              ctx.getRepoView().getConfig())
+              notes, psId, ctx.getAccountId(), ctx.getRevWalk(), ctx.getRepoView().getConfig())
           .forEach(a -> approvals.put(a.getLabel(), a.getValue()));
       // Fire Gerrit event. Note that approvals can't be granted via email, so old and new approvals
       // are always the same here.
@@ -369,10 +358,9 @@ public class MailProcessor {
     }
 
     private PatchSet targetPatchSetForComment(
-        ChangeContext ctx, MailComment mailComment, PatchSet current) throws OrmException {
+        ChangeContext ctx, MailComment mailComment, PatchSet current) {
       if (mailComment.getInReplyTo() != null) {
         return psUtil.get(
-            ctx.getDb(),
             ctx.getNotes(),
             new PatchSet.Id(ctx.getChange().getId(), mailComment.getInReplyTo().key.patchSetId));
       }
@@ -381,7 +369,7 @@ public class MailProcessor {
 
     private Comment persistentCommentFromMailComment(
         ChangeContext ctx, MailComment mailComment, PatchSet patchSetForComment)
-        throws OrmException, UnprocessableEntityException, PatchListNotAvailableException {
+        throws UnprocessableEntityException, PatchListNotAvailableException {
       String fileName;
       // The patch set that this comment is based on is different if this
       // comment was sent in reply to a comment on a previous patch set.
@@ -424,7 +412,7 @@ public class MailProcessor {
     return "(" + numComments + (numComments > 1 ? " comments)" : " comment)");
   }
 
-  private Set<String> existingMessageIds(ChangeData cd) throws OrmException {
+  private Set<String> existingMessageIds(ChangeData cd) {
     Set<String> existingMessageIds = new HashSet<>();
     cd.messages().stream()
         .forEach(

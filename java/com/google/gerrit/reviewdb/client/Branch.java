@@ -14,19 +14,24 @@
 
 package com.google.gerrit.reviewdb.client;
 
-import com.google.gwtorm.client.Column;
 import com.google.gwtorm.client.StringKey;
 
 /** Line of development within a {@link Project}. */
 public final class Branch {
+  public static NameKey nameKey(Project.NameKey projectName, String branchName) {
+    return new NameKey(projectName, RefNames.fullName(branchName));
+  }
+
+  public static NameKey nameKey(String projectName, String branchName) {
+    return nameKey(Project.nameKey(projectName), branchName);
+  }
+
   /** Branch name key */
   public static class NameKey extends StringKey<Project.NameKey> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1)
     protected Project.NameKey projectName;
 
-    @Column(id = 2)
     protected String branchName;
 
     protected NameKey() {
@@ -47,6 +52,10 @@ public final class Branch {
       return branchName;
     }
 
+    public String branch() {
+      return get();
+    }
+
     @Override
     protected void set(String newValue) {
       branchName = RefNames.fullName(newValue);
@@ -55,6 +64,10 @@ public final class Branch {
     @Override
     public Project.NameKey getParentKey() {
       return projectName;
+    }
+
+    public Project.NameKey project() {
+      return getParentKey();
     }
 
     public String getShortName() {

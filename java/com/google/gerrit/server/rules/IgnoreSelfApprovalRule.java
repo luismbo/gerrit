@@ -23,13 +23,13 @@ import com.google.gerrit.common.data.LabelFunction;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.SubmitRecord;
 import com.google.gerrit.common.data.SubmitRequirement;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.annotations.Exports;
 import com.google.gerrit.extensions.config.FactoryModule;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
 import com.google.gerrit.server.project.SubmitRuleOptions;
 import com.google.gerrit.server.query.change.ChangeData;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import java.util.ArrayList;
@@ -66,12 +66,12 @@ public class IgnoreSelfApprovalRule implements SubmitRule {
     try {
       labelTypes = cd.getLabelTypes().getLabelTypes();
       approvals = cd.currentApprovals();
-    } catch (OrmException e) {
+    } catch (StorageException e) {
       logger.atWarning().withCause(e).log(E_UNABLE_TO_FETCH_LABELS);
       return singletonRuleError(E_UNABLE_TO_FETCH_LABELS);
     }
 
-    boolean shouldIgnoreSelfApproval = labelTypes.stream().anyMatch(l -> l.ignoreSelfApproval());
+    boolean shouldIgnoreSelfApproval = labelTypes.stream().anyMatch(LabelType::ignoreSelfApproval);
     if (!shouldIgnoreSelfApproval) {
       // Shortcut to avoid further processing if no label should ignore uploader approvals
       return ImmutableList.of();
@@ -80,7 +80,7 @@ public class IgnoreSelfApprovalRule implements SubmitRule {
     Account.Id uploader;
     try {
       uploader = cd.currentPatchSet().getUploader();
-    } catch (OrmException e) {
+    } catch (StorageException e) {
       logger.atWarning().withCause(e).log(E_UNABLE_TO_FETCH_UPLOADER);
       return singletonRuleError(E_UNABLE_TO_FETCH_UPLOADER);
     }

@@ -17,7 +17,6 @@ package com.google.gerrit.server.restapi.change;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Strings;
 import com.google.common.collect.Iterables;
-import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.client.ListChangesOption;
 import com.google.gerrit.extensions.common.ChangeInfo;
 import com.google.gerrit.extensions.common.MergeInput;
@@ -33,7 +32,6 @@ import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.GerritPersonIdent;
@@ -42,6 +40,7 @@ import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.change.ChangeFinder;
 import com.google.gerrit.server.change.ChangeJson;
 import com.google.gerrit.server.change.ChangeResource;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.change.PatchSetInserter;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.git.MergeUtil;
@@ -58,7 +57,6 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -79,7 +77,6 @@ import org.eclipse.jgit.util.ChangeIdUtil;
 @Singleton
 public class CreateMergePatchSet
     extends RetryingRestModifyView<ChangeResource, MergePatchSetInput, Response<ChangeInfo>> {
-  private final Provider<ReviewDb> db;
   private final GitRepositoryManager gitManager;
   private final CommitsCollection commits;
   private final TimeZone serverTimeZone;
@@ -94,7 +91,6 @@ public class CreateMergePatchSet
 
   @Inject
   CreateMergePatchSet(
-      Provider<ReviewDb> db,
       GitRepositoryManager gitManager,
       CommitsCollection commits,
       @GerritPersonIdent PersonIdent myIdent,
@@ -108,7 +104,6 @@ public class CreateMergePatchSet
       ChangeFinder changeFinder,
       PermissionBackend permissionBackend) {
     super(retryHelper);
-    this.db = db;
     this.gitManager = gitManager;
     this.commits = commits;
     this.serverTimeZone = myIdent.getTimeZone();
@@ -125,12 +120,11 @@ public class CreateMergePatchSet
   @Override
   protected Response<ChangeInfo> applyImpl(
       BatchUpdate.Factory updateFactory, ChangeResource rsrc, MergePatchSetInput in)
-      throws OrmException, IOException, RestApiException, UpdateException,
-          PermissionBackendException {
+      throws IOException, RestApiException, UpdateException, PermissionBackendException {
     // Not allowed to create a new patch set if the current patch set is locked.
     psUtil.checkPatchSetNotLocked(rsrc.getNotes());
 
-    rsrc.permissions().database(db).check(ChangePermission.ADD_PATCH_SET);
+    rsrc.permissions().check(ChangePermission.ADD_PATCH_SET);
 
     ProjectState projectState = projectCache.checkedGet(rsrc.getProject());
     projectState.checkStatePermitsWrite();
@@ -141,7 +135,7 @@ public class CreateMergePatchSet
     }
     in.baseChange = Strings.nullToEmpty(in.baseChange).trim();
 
-    PatchSet ps = psUtil.current(db.get(), rsrc.getNotes());
+    PatchSet ps = psUtil.current(rsrc.getNotes());
     Change change = rsrc.getChange();
     Project.NameKey project = change.getProject();
     Branch.NameKey dest = change.getDest();
@@ -185,13 +179,12 @@ public class CreateMergePatchSet
       PatchSet.Id nextPsId = ChangeUtil.nextPatchSetId(ps.getId());
       PatchSetInserter psInserter =
           patchSetInserterFactory.create(rsrc.getNotes(), nextPsId, newCommit);
-      try (BatchUpdate bu = updateFactory.create(db.get(), project, me, now)) {
+      try (BatchUpdate bu = updateFactory.create(project, me, now)) {
         bu.setRepository(git, rw, oi);
+        bu.setNotify(NotifyResolver.Result.none());
         psInserter
             .setMessage("Uploaded patch set " + nextPsId.get() + ".")
-            .setNotify(NotifyHandling.NONE)
-            .setCheckAddPatchSetPermission(false)
-            .setNotify(NotifyHandling.NONE);
+            .setCheckAddPatchSetPermission(false);
         if (groups != null) {
           psInserter.setGroups(groups);
         }
@@ -205,18 +198,18 @@ public class CreateMergePatchSet
   }
 
   private PatchSet findBasePatchSet(String baseChange)
-      throws PermissionBackendException, OrmException, UnprocessableEntityException {
+      throws PermissionBackendException, UnprocessableEntityException {
     List<ChangeNotes> notes = changeFinder.find(baseChange);
     if (notes.size() != 1) {
       throw new UnprocessableEntityException("Base change not found: " + baseChange);
     }
     ChangeNotes change = Iterables.getOnlyElement(notes);
     try {
-      permissionBackend.currentUser().change(change).database(db).check(ChangePermission.READ);
+      permissionBackend.currentUser().change(change).check(ChangePermission.READ);
     } catch (AuthException e) {
       throw new UnprocessableEntityException("Read not permitted for " + baseChange);
     }
-    return psUtil.current(db.get(), change);
+    return psUtil.current(change);
   }
 
   private RevCommit createMergeCommit(

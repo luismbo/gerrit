@@ -40,6 +40,8 @@ limitations under the License.
     let element;
     let sandbox;
 
+    const MINIMAL_PREFS = {tab_size: 2, line_length: 80};
+
     setup(() => {
       sandbox = sinon.sandbox.create();
     });
@@ -47,6 +49,30 @@ limitations under the License.
     teardown(() => {
       sandbox.restore();
     });
+
+    suite('selectionchange event handling', () => {
+      const emulateSelection = function() {
+        document.dispatchEvent(new CustomEvent('selectionchange'));
+      };
+
+      setup(() => {
+        element = fixture('basic');
+        sandbox.stub(element.$.highlights, 'handleSelectionChange');
+      });
+
+      test('enabled if logged in', () => {
+        element.loggedIn = true;
+        emulateSelection();
+        assert.isTrue(element.$.highlights.handleSelectionChange.called);
+      });
+
+      test('ignored if logged out', () => {
+        element.loggedIn = false;
+        emulateSelection();
+        assert.isFalse(element.$.highlights.handleSelectionChange.called);
+      });
+    });
+
 
     test('cancel', () => {
       element = fixture('basic');
@@ -57,14 +83,14 @@ limitations under the License.
 
     test('line limit with line_wrapping', () => {
       element = fixture('basic');
-      element.prefs = {line_wrapping: true, line_length: 80, tab_size: 2};
+      element.prefs = Object.assign({}, MINIMAL_PREFS, {line_wrapping: true});
       flushAsynchronousOperations();
       assert.equal(element.customStyle['--line-limit'], '80ch');
     });
 
     test('line limit without line_wrapping', () => {
       element = fixture('basic');
-      element.prefs = {line_wrapping: false, line_length: 80, tab_size: 2};
+      element.prefs = Object.assign({}, MINIMAL_PREFS, {line_wrapping: false});
       flushAsynchronousOperations();
       assert.isNotOk(element.customStyle['--line-limit']);
     });
@@ -192,118 +218,8 @@ limitations under the License.
             element.$$('.diffContainer').classList.contains('displayLine'));
       });
 
-      test('remove comment', () => {
-        element.comments = {
-          meta: {
-            changeNum: '42',
-            patchRange: {
-              basePatchNum: 'PARENT',
-              patchNum: 3,
-            },
-            path: '/path/to/foo',
-            projectConfig: {foo: 'bar'},
-          },
-          left: [
-            {id: 'bc1', side: 'PARENT', __commentSide: 'left'},
-            {id: 'bc2', side: 'PARENT', __commentSide: 'left'},
-            {id: 'bd1', __draft: true, side: 'PARENT', __commentSide: 'left'},
-            {id: 'bd2', __draft: true, side: 'PARENT', __commentSide: 'left'},
-          ],
-          right: [
-            {id: 'c1', __commentSide: 'right'},
-            {id: 'c2', __commentSide: 'right'},
-            {id: 'd1', __draft: true, __commentSide: 'right'},
-            {id: 'd2', __draft: true, __commentSide: 'right'},
-          ],
-        };
-
-        element._removeComment({});
-        // Using JSON.stringify because Safari 9.1 (11601.5.17.1) doesn’t seem
-        // to believe that one object deepEquals another even when they do :-/.
-        assert.equal(JSON.stringify(element.comments), JSON.stringify({
-          meta: {
-            changeNum: '42',
-            patchRange: {
-              basePatchNum: 'PARENT',
-              patchNum: 3,
-            },
-            path: '/path/to/foo',
-            projectConfig: {foo: 'bar'},
-          },
-          left: [
-            {id: 'bc1', side: 'PARENT', __commentSide: 'left'},
-            {id: 'bc2', side: 'PARENT', __commentSide: 'left'},
-            {id: 'bd1', __draft: true, side: 'PARENT', __commentSide: 'left'},
-            {id: 'bd2', __draft: true, side: 'PARENT', __commentSide: 'left'},
-          ],
-          right: [
-            {id: 'c1', __commentSide: 'right'},
-            {id: 'c2', __commentSide: 'right'},
-            {id: 'd1', __draft: true, __commentSide: 'right'},
-            {id: 'd2', __draft: true, __commentSide: 'right'},
-          ],
-        }));
-
-        element._removeComment({id: 'bc2', side: 'PARENT',
-          __commentSide: 'left'});
-        assert.deepEqual(element.comments, {
-          meta: {
-            changeNum: '42',
-            patchRange: {
-              basePatchNum: 'PARENT',
-              patchNum: 3,
-            },
-            path: '/path/to/foo',
-            projectConfig: {foo: 'bar'},
-          },
-          left: [
-            {id: 'bc1', side: 'PARENT', __commentSide: 'left'},
-            {id: 'bd1', __draft: true, side: 'PARENT', __commentSide: 'left'},
-            {id: 'bd2', __draft: true, side: 'PARENT', __commentSide: 'left'},
-          ],
-          right: [
-            {id: 'c1', __commentSide: 'right'},
-            {id: 'c2', __commentSide: 'right'},
-            {id: 'd1', __draft: true, __commentSide: 'right'},
-            {id: 'd2', __draft: true, __commentSide: 'right'},
-          ],
-        });
-
-        element._removeComment({id: 'd2', __commentSide: 'right'});
-        assert.deepEqual(element.comments, {
-          meta: {
-            changeNum: '42',
-            patchRange: {
-              basePatchNum: 'PARENT',
-              patchNum: 3,
-            },
-            path: '/path/to/foo',
-            projectConfig: {foo: 'bar'},
-          },
-          left: [
-            {id: 'bc1', side: 'PARENT', __commentSide: 'left'},
-            {id: 'bd1', __draft: true, side: 'PARENT', __commentSide: 'left'},
-            {id: 'bd2', __draft: true, side: 'PARENT', __commentSide: 'left'},
-          ],
-          right: [
-            {id: 'c1', __commentSide: 'right'},
-            {id: 'c2', __commentSide: 'right'},
-            {id: 'd1', __draft: true, __commentSide: 'right'},
-          ],
-        });
-      });
-
       test('thread groups', () => {
         const contentEl = document.createElement('div');
-        const commentSide = 'left';
-        const patchNum = 1;
-        const side = 'PARENT';
-        let range = {
-          startLine: 1,
-          startChar: 1,
-          endLine: 1,
-          endChar: 2,
-        };
 
         element.changeNum = 123;
         element.patchRange = {basePatchNum: 1, patchNum: 2};
@@ -311,36 +227,19 @@ limitations under the License.
 
         const mock = document.createElement('mock-diff-response');
         element.$.diffBuilder._builder = element.$.diffBuilder._getDiffBuilder(
-            mock.diffResponse, {}, {tab_size: 2, line_length: 80});
+            mock.diffResponse, Object.assign({}, MINIMAL_PREFS));
 
         // No thread groups.
         assert.isNotOk(element._getThreadGroupForLine(contentEl));
 
         // A thread group gets created.
-        assert.isOk(element._getOrCreateThread(contentEl,
-            patchNum, commentSide, side));
+        const threadGroupEl = element._getOrCreateThreadGroup(contentEl);
+        assert.isOk(threadGroupEl);
 
-        // Try to fetch a thread with a different range.
-        range = {
-          startLine: 1,
-          startChar: 1,
-          endLine: 1,
-          endChar: 3,
-        };
-
-        assert.isOk(element._getOrCreateThread(
-            contentEl, patchNum, commentSide, side, range));
         // The new thread group can be fetched.
         assert.isOk(element._getThreadGroupForLine(contentEl));
 
-        assert.equal(contentEl.querySelectorAll(
-            'gr-diff-comment-thread-group').length, 1);
-
-        const threadGroup = contentEl.querySelector(
-            'gr-diff-comment-thread-group');
-        const threadLength = Polymer.dom(threadGroup.root).
-              querySelectorAll('gr-diff-comment-thread').length;
-        assert.equal(threadLength, 2);
+        assert.equal(contentEl.querySelectorAll('.thread-group').length, 1);
       });
 
       suite('image diffs', () => {
@@ -359,7 +258,6 @@ limitations under the License.
           };
 
           element.patchRange = {basePatchNum: 'PARENT', patchNum: 1};
-          element.comments = {left: [], right: []};
           element.isImageDiff = true;
           element.prefs = {
             auto_hide_diff_table_header: true,
@@ -552,7 +450,7 @@ limitations under the License.
             binary: true,
           };
 
-          element.addEventListener('render', () => {
+          function rendered() {
             // Recognizes that it should be an image diff.
             assert.isTrue(element.isImageDiff);
             assert.instanceOf(
@@ -564,7 +462,9 @@ limitations under the License.
             assert.isNotOk(leftImage);
             assert.isOk(rightImage);
             done();
-          });
+            element.removeEventListener('render', rendered);
+          }
+          element.addEventListener('render', rendered);
 
           element.revisionImage = mockFile2;
           element.diff = mockDiff;
@@ -587,7 +487,7 @@ limitations under the License.
             binary: true,
           };
 
-          element.addEventListener('render', () => {
+          function rendered() {
             // Recognizes that it should be an image diff.
             assert.isTrue(element.isImageDiff);
             assert.instanceOf(
@@ -599,7 +499,9 @@ limitations under the License.
             assert.isOk(leftImage);
             assert.isNotOk(rightImage);
             done();
-          });
+            element.removeEventListener('render', rendered);
+          }
+          element.addEventListener('render', rendered);
 
           element.baseImage = mockFile1;
           element.diff = mockDiff;
@@ -623,7 +525,7 @@ limitations under the License.
           };
           mockFile1.type = 'image/jpeg-evil';
 
-          element.addEventListener('render', () => {
+          function rendered() {
             // Recognizes that it should be an image diff.
             assert.isTrue(element.isImageDiff);
             assert.instanceOf(
@@ -631,7 +533,9 @@ limitations under the License.
             const leftImage = element.$.diffTable.querySelector('td.left img');
             assert.isNotOk(leftImage);
             done();
-          });
+            element.removeEventListener('render', rendered);
+          }
+          element.addEventListener('render', rendered);
 
           element.baseImage = mockFile1;
           element.diff = mockDiff;
@@ -685,10 +589,6 @@ limitations under the License.
         const setupDiff = function() {
           const mock = document.createElement('mock-diff-response');
           element.diff = mock.diffResponse;
-          element.comments = {
-            left: [],
-            right: [],
-          };
           element.prefs = {
             context: 10,
             tab_size: 8,
@@ -787,35 +687,14 @@ limitations under the License.
             change_type: 'MODIFIED',
             content: [{skip: 66}],
           };
-          element.comments = {
-            meta: {
-              changeNum: '42',
-              patchRange: {
-                basePatchNum: 'PARENT',
-                patchNum: 3,
-              },
-              path: '/path/to/foo',
-              projectConfig: {foo: 'bar'},
-            },
-            left: [
-              {id: 'bc1', side: 'PARENT', __commentSide: 'left'},
-              {id: 'bc2', side: 'PARENT', __commentSide: 'left'},
-              {id: 'bd1', __draft: true, side: 'PARENT', __commentSide: 'left'},
-              {id: 'bd2', __draft: true, side: 'PARENT', __commentSide: 'left'},
-            ],
-            right: [
-              {id: 'c1', __commentSide: 'right'},
-              {id: 'c2', __commentSide: 'right'},
-              {id: 'd1', __draft: true, __commentSide: 'right'},
-              {id: 'd2', __draft: true, __commentSide: 'right'},
-            ],
-          };
+          element.flushDebouncer('renderDiffTable');
         });
 
         test('change in preferences re-renders diff', () => {
           sandbox.stub(element, '_renderDiffTable');
-          element.prefs = {};
-          element.prefs = {time_format: 'HHMM_12'};
+          element.prefs = Object.assign(
+              {}, MINIMAL_PREFS, {time_format: 'HHMM_12'});
+          element.flushDebouncer('renderDiffTable');
           assert.isTrue(element._renderDiffTable.called);
         });
 
@@ -823,89 +702,10 @@ limitations under the License.
             'noRenderOnPrefsChange', () => {
           sandbox.stub(element, '_renderDiffTable');
           element.noRenderOnPrefsChange = true;
-          element.prefs = {};
-          element.prefs = {time_format: 'HHMM_12'};
+          element.prefs = Object.assign(
+              {}, MINIMAL_PREFS, {time_format: 'HHMM_12'});
+          element.flushDebouncer('renderDiffTable');
           assert.isFalse(element._renderDiffTable.called);
-        });
-      });
-
-      suite('handle comment-update', () => {
-        setup(() => {
-          element.comments = {
-            meta: {
-              changeNum: '42',
-              patchRange: {
-                basePatchNum: 'PARENT',
-                patchNum: 3,
-              },
-              path: '/path/to/foo',
-              projectConfig: {foo: 'bar'},
-            },
-            left: [
-              {id: 'bc1', side: 'PARENT', __commentSide: 'left'},
-              {id: 'bc2', side: 'PARENT', __commentSide: 'left'},
-              {id: 'bd1', __draft: true, side: 'PARENT', __commentSide: 'left'},
-              {id: 'bd2', __draft: true, side: 'PARENT', __commentSide: 'left'},
-            ],
-            right: [
-              {id: 'c1', __commentSide: 'right'},
-              {id: 'c2', __commentSide: 'right'},
-              {id: 'd1', __draft: true, __commentSide: 'right'},
-              {id: 'd2', __draft: true, __commentSide: 'right'},
-            ],
-          };
-        });
-
-        test('creating a draft', () => {
-          const comment = {__draft: true, __draftID: 'tempID', side: 'PARENT',
-            __commentSide: 'left'};
-          element.fire('comment-update', {comment});
-          assert.include(element.comments.left, comment);
-        });
-
-        test('discarding a draft', () => {
-          const draftID = 'tempID';
-          const id = 'savedID';
-          const comment = {
-            __draft: true,
-            __draftID: draftID,
-            side: 'PARENT',
-            __commentSide: 'left',
-          };
-          const diffCommentsModifiedStub = sandbox.stub();
-          element.addEventListener('diff-comments-modified',
-              diffCommentsModifiedStub);
-          element.comments.left.push(comment);
-          comment.id = id;
-          element.fire('comment-discard', {comment});
-          const drafts = element.comments.left.filter(item => {
-            return item.__draftID === draftID;
-          });
-          assert.equal(drafts.length, 0);
-          assert.isTrue(diffCommentsModifiedStub.called);
-        });
-
-        test('saving a draft', () => {
-          const draftID = 'tempID';
-          const id = 'savedID';
-          const comment = {
-            __draft: true,
-            __draftID: draftID,
-            side: 'PARENT',
-            __commentSide: 'left',
-          };
-          const diffCommentsModifiedStub = sandbox.stub();
-          element.addEventListener('diff-comments-modified',
-              diffCommentsModifiedStub);
-          element.comments.left.push(comment);
-          comment.id = id;
-          element.fire('comment-save', {comment});
-          const drafts = element.comments.left.filter(item => {
-            return item.__draftID === draftID;
-          });
-          assert.equal(drafts.length, 1);
-          assert.equal(drafts[0].id, id);
-          assert.isTrue(diffCommentsModifiedStub.called);
         });
       });
     });
@@ -967,38 +767,43 @@ limitations under the License.
         const mock = document.createElement('mock-diff-response');
         sandbox.stub(element.$.diffBuilder, 'getDiffLength').returns(10000);
         element.diff = mock.diffResponse;
-        element.comments = {left: [], right: []};
         element.noRenderOnPrefsChange = true;
       });
 
       test('large render w/ context = 10', done => {
-        element.prefs = {context: 10};
-        element.addEventListener('render', () => {
+        element.prefs = Object.assign({}, MINIMAL_PREFS, {context: 10});
+        function rendered() {
           assert.isTrue(renderStub.called);
           assert.isFalse(element._showWarning);
           done();
-        });
+          element.removeEventListener('render', rendered);
+        }
+        element.addEventListener('render', rendered);
         element._renderDiffTable();
       });
 
       test('large render w/ whole file and bypass', done => {
-        element.prefs = {context: -1};
+        element.prefs = Object.assign({}, MINIMAL_PREFS, {context: -1});
         element._safetyBypass = 10;
-        element.addEventListener('render', () => {
+        function rendered() {
           assert.isTrue(renderStub.called);
           assert.isFalse(element._showWarning);
           done();
-        });
+          element.removeEventListener('render', rendered);
+        }
+        element.addEventListener('render', rendered);
         element._renderDiffTable();
       });
 
       test('large render w/ whole file and no bypass', done => {
-        element.prefs = {context: -1};
-        element.addEventListener('render', () => {
+        element.prefs = Object.assign({}, MINIMAL_PREFS, {context: -1});
+        function rendered() {
           assert.isFalse(renderStub.called);
           assert.isTrue(element._showWarning);
           done();
-        });
+          element.removeEventListener('render', rendered);
+        }
+        element.addEventListener('render', rendered);
         element._renderDiffTable();
       });
     });
@@ -1146,6 +951,58 @@ limitations under the License.
         assert.equal(element._computeNewlineWarningClass('foo', true), hidden);
         assert.equal(element._computeNewlineWarningClass(null, false), hidden);
         assert.equal(element._computeNewlineWarningClass('foo', false), shown);
+      });
+    });
+
+    suite('key locations', () => {
+      let renderStub;
+
+      setup(() => {
+        element = fixture('basic');
+        element.prefs = {};
+        renderStub = sandbox.stub(element.$.diffBuilder, 'render')
+            .returns(new Promise(() => {}));
+      });
+
+      test('lineOfInterest is a key location', () => {
+        element.lineOfInterest = {number: 789, leftSide: true};
+        element._renderDiffTable();
+        assert.isTrue(renderStub.called);
+        assert.deepEqual(renderStub.lastCall.args[0], {
+          left: {789: true},
+          right: {},
+        });
+      });
+
+      test('line comments are key locations', () => {
+        const threadEl = document.createElement('div');
+        threadEl.className = 'comment-thread';
+        threadEl.setAttribute('comment-side', 'right');
+        threadEl.setAttribute('line-num', 3);
+        Polymer.dom(element).appendChild(threadEl);
+        Polymer.dom.flush();
+
+        element._renderDiffTable();
+        assert.isTrue(renderStub.called);
+        assert.deepEqual(renderStub.lastCall.args[0], {
+          left: {},
+          right: {3: true},
+        });
+      });
+
+      test('file comments are key locations', () => {
+        const threadEl = document.createElement('div');
+        threadEl.className = 'comment-thread';
+        threadEl.setAttribute('comment-side', 'left');
+        Polymer.dom(element).appendChild(threadEl);
+        Polymer.dom.flush();
+
+        element._renderDiffTable();
+        assert.isTrue(renderStub.called);
+        assert.deepEqual(renderStub.lastCall.args[0], {
+          left: {FILE: true},
+          right: {},
+        });
       });
     });
   });

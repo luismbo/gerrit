@@ -19,7 +19,6 @@ jar_filetype = [".jar"]
 LIBS = [
     "//java/com/google/gerrit/common:version",
     "//java/com/google/gerrit/httpd/init",
-    "//lib:postgresql",
     "//lib/bouncycastle:bcpkix",
     "//lib/bouncycastle:bcprov",
     "//lib/bouncycastle:bcpg",
@@ -77,11 +76,11 @@ def _war_impl(ctx):
 
     # Add lib
     transitive_libs = []
-    for l in ctx.attr.libs:
-        if hasattr(l, "java"):
-            transitive_libs.append(l.java.transitive_runtime_deps)
-        elif hasattr(l, "files"):
-            transitive_libs.append(l.files)
+    for j in ctx.attr.libs:
+        if hasattr(j, "java"):
+            transitive_libs.append(j.java.transitive_runtime_deps)
+        elif hasattr(j, "files"):
+            transitive_libs.append(j.files)
 
     transitive_lib_deps = depset(transitive = transitive_libs)
     for dep in transitive_lib_deps.to_list():
@@ -90,8 +89,8 @@ def _war_impl(ctx):
 
     # Add pgm lib
     transitive_pgmlibs = []
-    for l in ctx.attr.pgmlibs:
-        transitive_pgmlibs.append(l.java.transitive_runtime_deps)
+    for j in ctx.attr.pgmlibs:
+        transitive_pgmlibs.append(j.java.transitive_runtime_deps)
 
     transitive_pgmlib_deps = depset(transitive = transitive_pgmlibs)
     for dep in transitive_pgmlib_deps.to_list():
@@ -137,14 +136,12 @@ _pkg_war = rule(
     implementation = _war_impl,
 )
 
-def pkg_war(name, ui = "ui_optdbg", context = [], doc = False, **kwargs):
+def pkg_war(name, ui = "polygerrit", context = [], doc = False, **kwargs):
     doc_ctx = []
     doc_lib = []
     ui_deps = []
-    if ui == "polygerrit" or ui == "ui_optdbg" or ui == "ui_optdbg_r":
+    if ui == "polygerrit":
         ui_deps.append("//polygerrit-ui/app:polygerrit_ui")
-    if ui and ui != "polygerrit":
-        ui_deps.append("//gerrit-gwtui:%s" % ui)
     if doc:
         doc_ctx.append("//Documentation:html")
         doc_lib.append("//Documentation:index")

@@ -19,11 +19,16 @@
 
   Polymer({
     is: 'gr-http-password',
+    _legacyUndefinedCheck: true,
 
     properties: {
       _username: String,
       _generatedPassword: String,
       _passwordUrl: String,
+    },
+
+    attached() {
+      this.loadData();
     },
 
     loadData() {

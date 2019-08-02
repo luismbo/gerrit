@@ -20,13 +20,10 @@ import static com.google.common.truth.TruthJUnit.assume;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.server.config.SitePaths;
 import com.google.gerrit.server.ioutil.HostPlatform;
-import com.google.gerrit.testing.TempFileUtil;
-import com.google.gwtorm.client.KeyUtil;
-import com.google.gwtorm.server.StandardKeyEncoder;
+import com.google.gerrit.testing.GerritBaseTests;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import org.easymock.EasyMockSupport;
 import org.eclipse.jgit.errors.RepositoryNotFoundException;
 import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.Constants;
@@ -35,13 +32,12 @@ import org.eclipse.jgit.lib.RepositoryCache;
 import org.eclipse.jgit.lib.RepositoryCache.FileKey;
 import org.eclipse.jgit.util.FS;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
-public class LocalDiskRepositoryManagerTest extends EasyMockSupport {
-
-  static {
-    KeyUtil.setEncoderImpl(new StandardKeyEncoder());
-  }
+public class LocalDiskRepositoryManagerTest extends GerritBaseTests {
+  @Rule public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
   private Config cfg;
   private SitePaths site;
@@ -49,7 +45,7 @@ public class LocalDiskRepositoryManagerTest extends EasyMockSupport {
 
   @Before
   public void setUp() throws Exception {
-    site = new SitePaths(TempFileUtil.createTempDirectory().toPath());
+    site = new SitePaths(temporaryFolder.newFolder().toPath());
     site.resolve("git").toFile().mkdir();
     cfg = new Config();
     cfg.setString("gerrit", null, "basePath", "git");

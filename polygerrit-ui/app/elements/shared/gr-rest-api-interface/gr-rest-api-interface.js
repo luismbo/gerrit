@@ -183,6 +183,7 @@
 
   Polymer({
     is: 'gr-rest-api-interface',
+    _legacyUndefinedCheck: true,
 
     behaviors: [
       Gerrit.PathListBehavior,
@@ -353,7 +354,7 @@
 
     /**
      * @param {string} url
-     * @param {?Object=} opt_params URL params, key-value hash.
+     * @param {?Object|string=} opt_params URL params, key-value hash.
      * @return {string}
      */
     _urlWithParams(url, opt_params) {
@@ -462,10 +463,11 @@
     saveRepoConfig(repo, config, opt_errFn) {
       // TODO(kaspern): Rename rest api from /projects/ to /repos/ once backend
       // supports it.
-      const encodeName = encodeURIComponent(repo);
+      const url = `/projects/${encodeURIComponent(repo)}/config`;
+      this._cache.delete(url);
       return this._send({
         method: 'PUT',
-        url: `/projects/${encodeName}/config`,
+        url,
         body: config,
         errFn: opt_errFn,
         anonymizedUrl: '/projects/*/config',
@@ -1321,6 +1323,8 @@
      * @param {function()=} opt_cancelCondition
      */
     getChangeDetail(changeNum, opt_errFn, opt_cancelCondition) {
+      // This list MUST be kept in sync with
+      // ChangeIT#changeDetailsDoesNotRequireIndex
       const options = [
         this.ListChangesOption.ALL_COMMITS,
         this.ListChangesOption.ALL_REVISIONS,
@@ -1350,30 +1354,32 @@
      * @param {function()=} opt_cancelCondition
      */
     getDiffChangeDetail(changeNum, opt_errFn, opt_cancelCondition) {
-      const params = this.listChangesOptionsToHex(
+      const optionsHex = this.listChangesOptionsToHex(
           this.ListChangesOption.ALL_COMMITS,
           this.ListChangesOption.ALL_REVISIONS,
           this.ListChangesOption.SKIP_MERGEABLE
       );
-      return this._getChangeDetail(changeNum, params, opt_errFn,
+      return this._getChangeDetail(changeNum, optionsHex, opt_errFn,
           opt_cancelCondition);
     },
 
     /**
      * @param {number|string} changeNum
+     * @param {string|undefined} optionsHex list changes options in hex
      * @param {function(?Response, string=)=} opt_errFn
      * @param {function()=} opt_cancelCondition
      */
-    _getChangeDetail(changeNum, params, opt_errFn, opt_cancelCondition) {
+    _getChangeDetail(changeNum, optionsHex, opt_errFn, opt_cancelCondition) {
       return this.getChangeActionURL(changeNum, null, '/detail').then(url => {
-        const urlWithParams = this._urlWithParams(url, params);
+        const urlWithParams = this._urlWithParams(url, optionsHex);
+        const params = {O: optionsHex};
         const req = {
           url,
           errFn: opt_errFn,
           cancelCondition: opt_cancelCondition,
-          params: {O: params},
+          params,
           fetchOptions: this._etags.getOptions(urlWithParams),
-          anonymizedUrl: '/changes/*~*/detail?O=' + params,
+          anonymizedUrl: '/changes/*~*/detail?O=' + optionsHex,
         };
         return this._fetchRawJSON(req).then(response => {
           if (response && response.status === 304) {
@@ -1520,7 +1526,9 @@
      * @param {function(?Response, string=)=} opt_errFn
      */
     getChangeSuggestedReviewers(changeNum, inputVal, opt_errFn) {
-      const params = {n: 10};
+      // More suggestions may obscure content underneath in the reply dialog,
+      // see issue 10793.
+      const params = {n: 6};
       if (inputVal) { params.q = inputVal; }
       return this._getChangeURLAndFetch({
         changeNum,
@@ -2506,7 +2514,9 @@
     _fetchB64File(url) {
       return this._fetch({url: this.getBaseUrl() + url})
           .then(response => {
-            if (!response.ok) { return Promise.reject(response.statusText); }
+            if (!response.ok) {
+              return Promise.reject(new Error(response.statusText));
+            }
             const type = response.headers.get('X-FYI-Content-Type');
             return response.text()
                 .then(text => {
@@ -2666,12 +2676,12 @@
       return this._send(req)
           .then(response => {
             if (response.status < 200 && response.status >= 300) {
-              return Promise.reject();
+              return Promise.reject(new Error('error'));
             }
             return this.getResponseObject(response);
           })
           .then(obj => {
-            if (!obj.valid) { return Promise.reject(); }
+            if (!obj.valid) { return Promise.reject(new Error('error')); }
             return obj;
           });
     },
@@ -2701,12 +2711,12 @@
       return this._send(req)
           .then(response => {
             if (response.status < 200 && response.status >= 300) {
-              return Promise.reject();
+              return Promise.reject(new Error('error'));
             }
             return this.getResponseObject(response);
           })
           .then(obj => {
-            if (!obj) { return Promise.reject(); }
+            if (!obj) { return Promise.reject(new Error('error')); }
             return obj;
           });
     },

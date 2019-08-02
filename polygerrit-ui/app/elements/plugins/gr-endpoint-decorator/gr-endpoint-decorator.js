@@ -21,6 +21,7 @@
 
   Polymer({
     is: 'gr-endpoint-decorator',
+    _legacyUndefinedCheck: true,
 
     properties: {
       name: String,
@@ -71,7 +72,9 @@
     },
 
     _getEndpointParams() {
-      return Polymer.dom(this).querySelectorAll('gr-endpoint-param');
+      // Polymer2: querySelectorAll returns NodeList instead of Array.
+      return Array.from(
+          Polymer.dom(this).querySelectorAll('gr-endpoint-param'));
     },
 
     /**
@@ -112,7 +115,8 @@
     },
 
     _initModule({moduleName, plugin, type, domHook}) {
-      if (this._initializedPlugins.get(plugin.getPluginName())) {
+      const name = plugin.getPluginName() + '.' + moduleName;
+      if (this._initializedPlugins.get(name)) {
         return;
       }
       let initPromise;
@@ -125,10 +129,9 @@
           break;
       }
       if (!initPromise) {
-        console.warn('Unable to initialize module' +
-            `${moduleName} from ${plugin.getPluginName()}`);
+        console.warn('Unable to initialize module ' + name);
       }
-      this._initializedPlugins.set(plugin.getPluginName(), true);
+      this._initializedPlugins.set(name, true);
       initPromise.then(el => {
         domHook.handleInstanceAttached(el);
         this._domHooks.set(el, domHook);

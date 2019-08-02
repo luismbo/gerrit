@@ -20,10 +20,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.gerrit.common.Nullable;
-import com.google.gerrit.common.errors.NoSuchGroupException;
+import com.google.gerrit.exceptions.NoSuchGroupException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.AccountGroup;
-import com.google.gerrit.server.Sequences;
 import com.google.gerrit.server.ServerInitiated;
 import com.google.gerrit.server.account.AccountsUpdate;
 import com.google.gerrit.server.account.GroupCache;
@@ -31,7 +30,7 @@ import com.google.gerrit.server.account.externalids.ExternalId;
 import com.google.gerrit.server.group.InternalGroup;
 import com.google.gerrit.server.group.db.GroupsUpdate;
 import com.google.gerrit.server.group.db.InternalGroupUpdate;
-import com.google.gwtorm.server.OrmException;
+import com.google.gerrit.server.notedb.Sequences;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -108,7 +107,7 @@ public class AccountCreator {
       }
     }
 
-    account = new TestAccount(id, username, email, fullName, httpPass);
+    account = TestAccount.create(id, username, email, fullName, httpPass);
     if (username != null) {
       accounts.put(username, account);
     }
@@ -149,7 +148,7 @@ public class AccountCreator {
   }
 
   public void evict(Collection<Account.Id> ids) {
-    accounts.values().removeIf(a -> ids.contains(a.id));
+    accounts.values().removeIf(a -> ids.contains(a.id()));
   }
 
   public ImmutableList<TestAccount> getAll() {
@@ -157,7 +156,7 @@ public class AccountCreator {
   }
 
   private void addGroupMember(AccountGroup.UUID groupUuid, Account.Id accountId)
-      throws OrmException, IOException, NoSuchGroupException, ConfigInvalidException {
+      throws IOException, NoSuchGroupException, ConfigInvalidException {
     InternalGroupUpdate groupUpdate =
         InternalGroupUpdate.builder()
             .setMemberModification(memberIds -> Sets.union(memberIds, ImmutableSet.of(accountId)))

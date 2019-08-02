@@ -23,6 +23,7 @@
 
   Polymer({
     is: 'gr-file-list-header',
+    _legacyUndefinedCheck: true,
 
     /**
      * @event expand-diffs
@@ -62,6 +63,7 @@
       serverConfig: Object,
       shownFileCount: Number,
       diffPrefs: Object,
+      diffPrefsDisabled: Boolean,
       diffViewMode: {
         type: String,
         notify: true,
@@ -79,6 +81,10 @@
       _patchsetDescription: {
         type: String,
         value: '',
+      },
+      showTitle: {
+        type: Boolean,
+        value: true,
       },
       _descriptionReadOnly: {
         type: Boolean,
@@ -183,10 +189,9 @@
           });
     },
 
-    _computePrefsButtonHidden(prefs, loggedIn) {
-      return !loggedIn || !prefs;
+    _computePrefsButtonHidden(prefs, diffPrefsDisabled) {
+      return diffPrefsDisabled || !prefs;
     },
-
 
     _fileListActionsVisible(shownFileCount, maxFilesForBulkActions) {
       return shownFileCount <= maxFilesForBulkActions;

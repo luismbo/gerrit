@@ -6,6 +6,7 @@ java_library(
     visibility = ["//visibility:public"],
     deps = [
         "//java/com/google/gerrit/common:annotations",
+        "//java/com/google/gerrit/exceptions",
         "//java/com/google/gerrit/extensions:api",
         "//java/com/google/gerrit/httpd",
         "//java/com/google/gerrit/reviewdb:server",
@@ -13,7 +14,6 @@ java_library(
         "//java/com/google/gerrit/server/audit",
         "//lib:gson",
         "//lib:guava",
-        "//lib:gwtorm",
         "//lib:servlet-api-3_1",
         "//lib/commons:codec",
         "//lib/flogger:api",

@@ -26,6 +26,7 @@
 
   Polymer({
     is: 'gr-change-list-item',
+    _legacyUndefinedCheck: true,
 
     properties: {
       visibleChangeTableColumns: Array,
@@ -57,6 +58,9 @@
         type: String,
         computed: '_computeChangeSize(change)',
       },
+      _dynamicCellEndpoints: {
+        type: Array,
+      },
     },
 
     behaviors: [
@@ -66,6 +70,13 @@
       Gerrit.RESTClientBehavior,
       Gerrit.URLEncodingBehavior,
     ],
+
+    attached() {
+      Gerrit.awaitPluginsLoaded().then(() => {
+        this._dynamicCellEndpoints = Gerrit._endpoints.getDynamicEndpoints(
+            'change-list-item-cell');
+      });
+    },
 
     _computeItemNeedsReview(reviewed) {
       return !reviewed;

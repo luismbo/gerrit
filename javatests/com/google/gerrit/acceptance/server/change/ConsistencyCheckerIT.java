@@ -15,11 +15,9 @@
 package com.google.gerrit.acceptance.server.change;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.TruthJUnit.assume;
 import static com.google.gerrit.extensions.common.ProblemInfo.Status.FIXED;
 import static com.google.gerrit.extensions.common.ProblemInfo.Status.FIX_FAILED;
 import static com.google.gerrit.testing.TestChanges.newPatchSet;
-import static java.util.Collections.singleton;
 import static java.util.Objects.requireNonNull;
 
 import com.google.gerrit.acceptance.AbstractDaemonTest;
@@ -28,34 +26,28 @@ import com.google.gerrit.acceptance.TestAccount;
 import com.google.gerrit.common.FooterConstants;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.api.changes.FixInput;
-import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.client.ChangeStatus;
 import com.google.gerrit.extensions.common.ChangeInfo;
 import com.google.gerrit.extensions.common.ProblemInfo;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
-import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.IdentifiedUser;
-import com.google.gerrit.server.Sequences;
 import com.google.gerrit.server.change.ChangeInserter;
 import com.google.gerrit.server.change.ConsistencyChecker;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.change.PatchSetInserter;
-import com.google.gerrit.server.config.AnonymousCowardName;
 import com.google.gerrit.server.notedb.ChangeNoteUtil;
 import com.google.gerrit.server.notedb.ChangeNotes;
-import com.google.gerrit.server.notedb.NoteDbChangeState.PrimaryStorage;
+import com.google.gerrit.server.notedb.Sequences;
 import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.server.update.BatchUpdateOp;
 import com.google.gerrit.server.update.ChangeContext;
 import com.google.gerrit.server.update.RepoContext;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gerrit.testing.InMemoryRepositoryManager;
-import com.google.gerrit.testing.NoteDbMode;
 import com.google.gerrit.testing.TestChanges;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import java.io.IOException;
@@ -88,19 +80,12 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
 
   @Inject private ChangeNoteUtil noteUtil;
 
-  @Inject @AnonymousCowardName private String anonymousCowardName;
-
   @Inject private Sequences sequences;
 
   private RevCommit tip;
   private Account.Id adminId;
   private ConsistencyChecker checker;
   private TestRepository<InMemoryRepository> serverSideTestRepo;
-
-  private void assumeNoteDbDisabled() {
-    assume().that(notesMigration.readChanges()).isFalse();
-    assume().that(NoteDbMode.get()).isNotEqualTo(NoteDbMode.CHECK);
-  }
 
   @Before
   public void setUp() throws Exception {
@@ -110,7 +95,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
         serverSideTestRepo
             .getRevWalk()
             .parseCommit(serverSideTestRepo.getRepository().exactRef("HEAD").getObjectId());
-    adminId = admin.getId();
+    adminId = admin.id();
     checker = checkerProvider.get();
   }
 
@@ -129,41 +114,9 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   public void missingOwner() throws Exception {
     TestAccount owner = accountCreator.create("missing");
     ChangeNotes notes = insertChange(owner);
-    deleteUserBranch(owner.getId());
+    deleteUserBranch(owner.id());
 
-    assertProblems(notes, null, problem("Missing change owner: " + owner.getId()));
-  }
-
-  @Test
-  public void missingRepo() throws Exception {
-    // NoteDb can't have a change without a repo.
-    assumeNoteDbDisabled();
-
-    ChangeNotes notes = insertChange();
-    Project.NameKey name = notes.getProjectName();
-    ((InMemoryRepositoryManager) repoManager).deleteRepository(name);
-    assertThat(checker.check(notes, null).problems())
-        .containsExactly(problem("Destination repository not found: " + name));
-  }
-
-  @Test
-  public void invalidRevision() throws Exception {
-    // NoteDb always parses the revision when inserting a patch set, so we can't
-    // create an invalid patch set.
-    assumeNoteDbDisabled();
-
-    ChangeNotes notes = insertChange();
-    PatchSet ps =
-        newPatchSet(
-            notes.getChange().currentPatchSetId(),
-            "fooooooooooooooooooooooooooooooooooooooo",
-            adminId);
-    db.patchSets().update(singleton(ps));
-
-    assertProblems(
-        notes,
-        null,
-        problem("Invalid revision on patch set 1: fooooooooooooooooooooooooooooooooooooooo"));
+    assertProblems(notes, null, problem("Missing change owner: " + owner.id()));
   }
 
   // No test for ref existing but object missing; InMemoryRepository won't let
@@ -201,7 +154,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   public void patchSetRefMissing() throws Exception {
     ChangeNotes notes = insertChange();
     serverSideTestRepo.update(
-        "refs/other/foo", ObjectId.fromString(psUtil.current(db, notes).getRevision().get()));
+        "refs/other/foo", ObjectId.fromString(psUtil.current(notes).getRevision().get()));
     String refName = notes.getChange().currentPatchSetId().toRefName();
     deleteRef(refName);
 
@@ -211,7 +164,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   @Test
   public void patchSetRefMissingWithFix() throws Exception {
     ChangeNotes notes = insertChange();
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     serverSideTestRepo.update("refs/other/foo", ObjectId.fromString(rev));
     String refName = notes.getChange().currentPatchSetId().toRefName();
     deleteRef(refName);
@@ -225,7 +178,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   @Test
   public void patchSetObjectAndRefMissingWithDeletingPatchSet() throws Exception {
     ChangeNotes notes = insertChange();
-    PatchSet ps1 = psUtil.current(db, notes);
+    PatchSet ps1 = psUtil.current(notes);
 
     String rev2 = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
     PatchSet ps2 = insertMissingPatchSet(notes, rev2);
@@ -241,20 +194,20 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
 
     notes = reload(notes);
     assertThat(notes.getChange().currentPatchSetId().get()).isEqualTo(1);
-    assertThat(psUtil.get(db, notes, ps1.getId())).isNotNull();
-    assertThat(psUtil.get(db, notes, ps2.getId())).isNull();
+    assertThat(psUtil.get(notes, ps1.getId())).isNotNull();
+    assertThat(psUtil.get(notes, ps2.getId())).isNull();
   }
 
   @Test
   public void patchSetMultipleObjectsMissingWithDeletingPatchSets() throws Exception {
     ChangeNotes notes = insertChange();
-    PatchSet ps1 = psUtil.current(db, notes);
+    PatchSet ps1 = psUtil.current(notes);
 
     String rev2 = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
     PatchSet ps2 = insertMissingPatchSet(notes, rev2);
 
     notes = incrementPatchSet(reload(notes));
-    PatchSet ps3 = psUtil.current(db, notes);
+    PatchSet ps3 = psUtil.current(notes);
 
     String rev4 = "c0ffeeeec0ffeeeec0ffeeeec0ffeeeec0ffeeee";
     PatchSet ps4 = insertMissingPatchSet(notes, rev4);
@@ -272,27 +225,20 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
 
     notes = reload(notes);
     assertThat(notes.getChange().currentPatchSetId().get()).isEqualTo(3);
-    assertThat(psUtil.get(db, notes, ps1.getId())).isNotNull();
-    assertThat(psUtil.get(db, notes, ps2.getId())).isNull();
-    assertThat(psUtil.get(db, notes, ps3.getId())).isNotNull();
-    assertThat(psUtil.get(db, notes, ps4.getId())).isNull();
+    assertThat(psUtil.get(notes, ps1.getId())).isNotNull();
+    assertThat(psUtil.get(notes, ps2.getId())).isNull();
+    assertThat(psUtil.get(notes, ps3.getId())).isNotNull();
+    assertThat(psUtil.get(notes, ps4.getId())).isNull();
   }
 
   @Test
   public void onlyPatchSetObjectMissingWithFix() throws Exception {
-    Change c = TestChanges.newChange(project, admin.getId(), sequences.nextChangeId());
-
-    // Set review started, mimicking Schema_153, so tests pass with NoteDbMode.CHECK.
-    c.setReviewStarted(true);
+    Change c = TestChanges.newChange(project, admin.id(), sequences.nextChangeId());
 
     PatchSet.Id psId = c.currentPatchSetId();
     String rev = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
     PatchSet ps = newPatchSet(psId, rev, adminId);
 
-    if (notesMigration.changePrimaryStorage() == PrimaryStorage.REVIEW_DB) {
-      db.changes().insert(singleton(c));
-      db.patchSets().insert(singleton(ps));
-    }
     addNoteDbCommit(
         c.getId(),
         "Create change\n"
@@ -311,8 +257,8 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
             + "Groups: "
             + rev
             + "\n");
-    indexer.index(db, c.getProject(), c.getId());
-    ChangeNotes notes = changeNotesFactory.create(db, c.getProject(), c.getId());
+    indexer.index(c.getProject(), c.getId());
+    ChangeNotes notes = changeNotesFactory.create(c.getProject(), c.getId());
 
     FixInput fix = new FixInput();
     fix.deletePatchSetIfCommitMissing = true;
@@ -327,23 +273,13 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
 
     notes = reload(notes);
     assertThat(notes.getChange().currentPatchSetId().get()).isEqualTo(1);
-    assertThat(psUtil.current(db, notes)).isNotNull();
-  }
-
-  @Test
-  public void currentPatchSetMissing() throws Exception {
-    // NoteDb can't create a change without a patch set.
-    assumeNoteDbDisabled();
-
-    ChangeNotes notes = insertChange();
-    db.patchSets().deleteKeys(singleton(notes.getChange().currentPatchSetId()));
-    assertProblems(notes, null, problem("Current patch set 1 not found"));
+    assertThat(psUtil.current(notes)).isNotNull();
   }
 
   @Test
   public void duplicatePatchSetRevisions() throws Exception {
     ChangeNotes notes = insertChange();
-    PatchSet ps1 = psUtil.current(db, notes);
+    PatchSet ps1 = psUtil.current(notes);
     String rev = ps1.getRevision().get();
 
     notes =
@@ -376,7 +312,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
           notes.getChangeId(),
           new BatchUpdateOp() {
             @Override
-            public boolean updateChange(ChangeContext ctx) throws OrmException {
+            public boolean updateChange(ChangeContext ctx) {
               ctx.getChange().setStatus(Change.Status.MERGED);
               ctx.getUpdate(ctx.getChange().currentPatchSetId()).fixStatus(Change.Status.MERGED);
               return true;
@@ -386,7 +322,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
     }
     notes = reload(notes);
 
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     ObjectId tip = getDestRef(notes);
     assertProblems(
         notes,
@@ -403,7 +339,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   @Test
   public void newChangeIsMerged() throws Exception {
     ChangeNotes notes = insertChange();
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     serverSideTestRepo
         .branch(notes.getChange().getDest().get())
         .update(serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev)));
@@ -423,7 +359,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   @Test
   public void newChangeIsMergedWithFix() throws Exception {
     ChangeNotes notes = insertChange();
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     serverSideTestRepo
         .branch(notes.getChange().getDest().get())
         .update(serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev)));
@@ -442,14 +378,14 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
             "Marked change as merged"));
 
     notes = reload(notes);
-    assertThat(notes.getChange().getStatus()).isEqualTo(Change.Status.MERGED);
+    assertThat(notes.getChange().isMerged()).isTrue();
     assertNoProblems(notes, null);
   }
 
   @Test
   public void extensionApiReturnsUpdatedValueAfterFix() throws Exception {
     ChangeNotes notes = insertChange();
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     serverSideTestRepo
         .branch(notes.getChange().getDest().get())
         .update(serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev)));
@@ -464,7 +400,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   @Test
   public void expectedMergedCommitIsLatestPatchSet() throws Exception {
     ChangeNotes notes = insertChange();
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     serverSideTestRepo
         .branch(notes.getChange().getDest().get())
         .update(serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev)));
@@ -485,14 +421,14 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
             "Marked change as merged"));
 
     notes = reload(notes);
-    assertThat(notes.getChange().getStatus()).isEqualTo(Change.Status.MERGED);
+    assertThat(notes.getChange().isMerged()).isTrue();
     assertNoProblems(notes, null);
   }
 
   @Test
   public void expectedMergedCommitNotMergedIntoDestination() throws Exception {
     ChangeNotes notes = insertChange();
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     RevCommit commit = serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev));
     serverSideTestRepo.branch(notes.getChange().getDest().get()).update(commit);
 
@@ -515,7 +451,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   public void createNewPatchSetForExpectedMergeCommitWithNoChangeId() throws Exception {
     ChangeNotes notes = insertChange();
     String dest = notes.getChange().getDest().get();
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     RevCommit commit = serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev));
 
     RevCommit mergedAs =
@@ -547,7 +483,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
     notes = reload(notes);
     PatchSet.Id psId2 = new PatchSet.Id(notes.getChangeId(), 2);
     assertThat(notes.getChange().currentPatchSetId()).isEqualTo(psId2);
-    assertThat(psUtil.get(db, notes, psId2).getRevision().get()).isEqualTo(mergedAs.name());
+    assertThat(psUtil.get(notes, psId2).getRevision().get()).isEqualTo(mergedAs.name());
 
     assertNoProblems(notes, null);
   }
@@ -556,7 +492,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   public void createNewPatchSetForExpectedMergeCommitWithChangeId() throws Exception {
     ChangeNotes notes = insertChange();
     String dest = notes.getChange().getDest().get();
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     RevCommit commit = serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev));
 
     RevCommit mergedAs =
@@ -595,7 +531,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
     notes = reload(notes);
     PatchSet.Id psId2 = new PatchSet.Id(notes.getChangeId(), 2);
     assertThat(notes.getChange().currentPatchSetId()).isEqualTo(psId2);
-    assertThat(psUtil.get(db, notes, psId2).getRevision().get()).isEqualTo(mergedAs.name());
+    assertThat(psUtil.get(notes, psId2).getRevision().get()).isEqualTo(mergedAs.name());
 
     assertNoProblems(notes, null);
   }
@@ -603,10 +539,10 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   @Test
   public void expectedMergedCommitIsOldPatchSetOfSameChange() throws Exception {
     ChangeNotes notes = insertChange();
-    PatchSet ps1 = psUtil.current(db, notes);
+    PatchSet ps1 = psUtil.current(notes);
     String rev1 = ps1.getRevision().get();
     notes = incrementPatchSet(notes);
-    PatchSet ps2 = psUtil.current(db, notes);
+    PatchSet ps2 = psUtil.current(notes);
     serverSideTestRepo
         .branch(notes.getChange().getDest().get())
         .update(serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev1)));
@@ -635,15 +571,15 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
     notes = reload(notes);
     PatchSet.Id psId3 = new PatchSet.Id(notes.getChangeId(), 3);
     assertThat(notes.getChange().currentPatchSetId()).isEqualTo(psId3);
-    assertThat(notes.getChange().getStatus()).isEqualTo(Change.Status.MERGED);
-    assertThat(psUtil.byChangeAsMap(db, notes).keySet()).containsExactly(ps2.getId(), psId3);
-    assertThat(psUtil.get(db, notes, psId3).getRevision().get()).isEqualTo(rev1);
+    assertThat(notes.getChange().isMerged()).isTrue();
+    assertThat(psUtil.byChangeAsMap(notes).keySet()).containsExactly(ps2.getId(), psId3);
+    assertThat(psUtil.get(notes, psId3).getRevision().get()).isEqualTo(rev1);
   }
 
   @Test
   public void expectedMergedCommitIsDanglingPatchSetOlderThanCurrent() throws Exception {
     ChangeNotes notes = insertChange();
-    PatchSet ps1 = psUtil.current(db, notes);
+    PatchSet ps1 = psUtil.current(notes);
 
     // Create dangling ref so next ID in the database becomes 3.
     PatchSet.Id psId2 = new PatchSet.Id(notes.getChangeId(), 2);
@@ -652,7 +588,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
     serverSideTestRepo.branch(psId2.toRefName()).update(commit2);
 
     notes = incrementPatchSet(notes);
-    PatchSet ps3 = psUtil.current(db, notes);
+    PatchSet ps3 = psUtil.current(notes);
     assertThat(ps3.getId().get()).isEqualTo(3);
 
     serverSideTestRepo
@@ -683,16 +619,16 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
     notes = reload(notes);
     PatchSet.Id psId4 = new PatchSet.Id(notes.getChangeId(), 4);
     assertThat(notes.getChange().currentPatchSetId()).isEqualTo(psId4);
-    assertThat(notes.getChange().getStatus()).isEqualTo(Change.Status.MERGED);
-    assertThat(psUtil.byChangeAsMap(db, notes).keySet())
+    assertThat(notes.getChange().isMerged()).isTrue();
+    assertThat(psUtil.byChangeAsMap(notes).keySet())
         .containsExactly(ps1.getId(), ps3.getId(), psId4);
-    assertThat(psUtil.get(db, notes, psId4).getRevision().get()).isEqualTo(rev2);
+    assertThat(psUtil.get(notes, psId4).getRevision().get()).isEqualTo(rev2);
   }
 
   @Test
   public void expectedMergedCommitIsDanglingPatchSetNewerThanCurrent() throws Exception {
     ChangeNotes notes = insertChange();
-    PatchSet ps1 = psUtil.current(db, notes);
+    PatchSet ps1 = psUtil.current(notes);
 
     // Create dangling ref with no patch set.
     PatchSet.Id psId2 = new PatchSet.Id(notes.getChangeId(), 2);
@@ -720,9 +656,9 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
 
     notes = reload(notes);
     assertThat(notes.getChange().currentPatchSetId()).isEqualTo(psId2);
-    assertThat(notes.getChange().getStatus()).isEqualTo(Change.Status.MERGED);
-    assertThat(psUtil.byChangeAsMap(db, notes).keySet()).containsExactly(ps1.getId(), psId2);
-    assertThat(psUtil.get(db, notes, psId2).getRevision().get()).isEqualTo(rev2);
+    assertThat(notes.getChange().isMerged()).isTrue();
+    assertThat(psUtil.byChangeAsMap(notes).keySet()).containsExactly(ps1.getId(), psId2);
+    assertThat(psUtil.get(notes, psId2).getRevision().get()).isEqualTo(rev2);
   }
 
   @Test
@@ -730,7 +666,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
     ChangeNotes notes = insertChange();
     String dest = notes.getChange().getDest().get();
     RevCommit parent = serverSideTestRepo.branch(dest).commit().message("parent").create();
-    String rev = psUtil.current(db, notes).getRevision().get();
+    String rev = psUtil.current(notes).getRevision().get();
     RevCommit commit = serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev));
     serverSideTestRepo.branch(dest).update(commit);
 
@@ -764,19 +700,19 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   @Test
   public void expectedMergedCommitMatchesMultiplePatchSets() throws Exception {
     ChangeNotes notes1 = insertChange();
-    PatchSet.Id psId1 = psUtil.current(db, notes1).getId();
+    PatchSet.Id psId1 = psUtil.current(notes1).getId();
     String dest = notes1.getChange().getDest().get();
-    String rev = psUtil.current(db, notes1).getRevision().get();
+    String rev = psUtil.current(notes1).getRevision().get();
     RevCommit commit = serverSideTestRepo.getRevWalk().parseCommit(ObjectId.fromString(rev));
     serverSideTestRepo.branch(dest).update(commit);
 
     ChangeNotes notes2 = insertChange();
     notes2 = incrementPatchSet(notes2, commit);
-    PatchSet.Id psId2 = psUtil.current(db, notes2).getId();
+    PatchSet.Id psId2 = psUtil.current(notes2).getId();
 
     ChangeNotes notes3 = insertChange();
     notes3 = incrementPatchSet(notes3, commit);
-    PatchSet.Id psId3 = psUtil.current(db, notes3).getId();
+    PatchSet.Id psId3 = psUtil.current(notes3).getId();
 
     FixInput fix = new FixInput();
     fix.expectMergedAs = commit.name();
@@ -796,7 +732,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   }
 
   private BatchUpdate newUpdate(Account.Id owner) {
-    return batchUpdateFactory.create(db, project, userFactory.create(owner), TimeUtil.nowTs());
+    return batchUpdateFactory.create(project, userFactory.create(owner), TimeUtil.nowTs());
   }
 
   private ChangeNotes insertChange() throws Exception {
@@ -810,18 +746,18 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   private ChangeNotes insertChange(TestAccount owner, String dest) throws Exception {
     Change.Id id = new Change.Id(sequences.nextChangeId());
     ChangeInserter ins;
-    try (BatchUpdate bu = newUpdate(owner.getId())) {
+    try (BatchUpdate bu = newUpdate(owner.id())) {
       RevCommit commit = patchSetCommit(new PatchSet.Id(id, 1));
+      bu.setNotify(NotifyResolver.Result.none());
       ins =
           changeInserterFactory
               .create(id, commit, dest)
               .setValidate(false)
-              .setNotify(NotifyHandling.NONE)
               .setFireRevisionCreated(false)
               .setSendMail(false);
       bu.insertChange(ins).execute();
     }
-    return changeNotesFactory.create(db, project, ins.getChange().getId());
+    return changeNotesFactory.create(project, ins.getChange().getId());
   }
 
   private PatchSet.Id nextPatchSetId(ChangeNotes notes) throws Exception {
@@ -836,19 +772,19 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   private ChangeNotes incrementPatchSet(ChangeNotes notes, RevCommit commit) throws Exception {
     PatchSetInserter ins;
     try (BatchUpdate bu = newUpdate(notes.getChange().getOwner())) {
+      bu.setNotify(NotifyResolver.Result.none());
       ins =
           patchSetInserterFactory
               .create(notes, nextPatchSetId(notes), commit)
               .setValidate(false)
-              .setFireRevisionCreated(false)
-              .setNotify(NotifyHandling.NONE);
+              .setFireRevisionCreated(false);
       bu.addOp(notes.getChangeId(), ins).execute();
     }
     return reload(notes);
   }
 
   private ChangeNotes reload(ChangeNotes notes) throws Exception {
-    return changeNotesFactory.create(db, notes.getChange().getProject(), notes.getChangeId());
+    return changeNotesFactory.create(notes.getChange().getProject(), notes.getChangeId());
   }
 
   private RevCommit patchSetCommit(PatchSet.Id psId) throws Exception {
@@ -865,11 +801,6 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
     c.setCurrentPatchSet(psId, subject, c.getOriginalSubject());
     PatchSet ps = newPatchSet(psId, rev, adminId);
 
-    if (PrimaryStorage.of(c) == PrimaryStorage.REVIEW_DB) {
-      db.patchSets().insert(singleton(ps));
-      db.changes().update(singleton(c));
-    }
-
     addNoteDbCommit(
         c.getId(),
         "Update patch set "
@@ -885,7 +816,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
             + "Subject: "
             + subject
             + "\n");
-    indexer.index(db, c.getProject(), c.getId());
+    indexer.index(c.getProject(), c.getId());
 
     return ps;
   }
@@ -897,12 +828,8 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
   }
 
   private void addNoteDbCommit(Change.Id id, String commitMessage) throws Exception {
-    if (!notesMigration.commitChangeWrites()) {
-      return;
-    }
     PersonIdent committer = serverIdent.get();
-    PersonIdent author =
-        noteUtil.newIdent(getAccount(admin.getId()), committer.getWhen(), committer);
+    PersonIdent author = noteUtil.newIdent(getAccount(admin.id()), committer.getWhen(), committer);
     serverSideTestRepo
         .branch(RefNames.changeMetaRef(id))
         .commit()
@@ -921,7 +848,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
 
   private ChangeNotes mergeChange(ChangeNotes notes) throws Exception {
     final ObjectId oldId = getDestRef(notes);
-    final ObjectId newId = ObjectId.fromString(psUtil.current(db, notes).getRevision().get());
+    final ObjectId newId = ObjectId.fromString(psUtil.current(notes).getRevision().get());
     final String dest = notes.getChange().getDest().get();
 
     try (BatchUpdate bu = newUpdate(adminId)) {
@@ -934,7 +861,7 @@ public class ConsistencyCheckerIT extends AbstractDaemonTest {
             }
 
             @Override
-            public boolean updateChange(ChangeContext ctx) throws OrmException {
+            public boolean updateChange(ChangeContext ctx) {
               ctx.getChange().setStatus(Change.Status.MERGED);
               ctx.getUpdate(ctx.getChange().currentPatchSetId()).fixStatus(Change.Status.MERGED);
               return true;

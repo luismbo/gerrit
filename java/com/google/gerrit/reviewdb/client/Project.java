@@ -17,7 +17,6 @@ package com.google.gerrit.reviewdb.client;
 import com.google.gerrit.extensions.client.InheritableBoolean;
 import com.google.gerrit.extensions.client.ProjectState;
 import com.google.gerrit.extensions.client.SubmitType;
-import com.google.gwtorm.client.Column;
 import com.google.gwtorm.client.StringKey;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -31,11 +30,14 @@ public final class Project {
   /** Default submit type for root project (All-Projects). */
   public static final SubmitType DEFAULT_ALL_PROJECTS_SUBMIT_TYPE = SubmitType.MERGE_IF_NECESSARY;
 
+  public static NameKey nameKey(String name) {
+    return new NameKey(name);
+  }
+
   /** Project name key */
   public static class NameKey extends StringKey<com.google.gwtorm.client.Key<?>> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1)
     protected String name;
 
     protected NameKey() {}
@@ -96,8 +98,6 @@ public final class Project {
   protected String defaultDashboardId;
 
   protected String localDefaultDashboardId;
-
-  protected String themeName;
 
   protected String configRefState;
 
@@ -182,22 +182,6 @@ public final class Project {
 
   public void setLocalDefaultDashboard(String localDefaultDashboardId) {
     this.localDefaultDashboardId = localDefaultDashboardId;
-  }
-
-  public String getThemeName() {
-    return themeName;
-  }
-
-  public void setThemeName(String themeName) {
-    this.themeName = themeName;
-  }
-
-  public void copySettingsFrom(Project update) {
-    description = update.description;
-    booleanConfigs = new HashMap<>(update.booleanConfigs);
-    submitType = update.submitType;
-    state = update.state;
-    maxObjectSizeLimit = update.maxObjectSizeLimit;
   }
 
   /**

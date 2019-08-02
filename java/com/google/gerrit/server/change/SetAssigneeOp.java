@@ -32,7 +32,6 @@ import com.google.gerrit.server.update.ChangeContext;
 import com.google.gerrit.server.update.Context;
 import com.google.gerrit.server.validators.AssigneeValidationListener;
 import com.google.gerrit.server.validators.ValidationException;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
@@ -74,7 +73,7 @@ public class SetAssigneeOp implements BatchUpdateOp {
   }
 
   @Override
-  public boolean updateChange(ChangeContext ctx) throws OrmException, RestApiException {
+  public boolean updateChange(ChangeContext ctx) throws RestApiException {
     change = ctx.getChange();
     if (newAssignee.getAccountId().equals(change.getAssignee())) {
       return false;
@@ -99,7 +98,7 @@ public class SetAssigneeOp implements BatchUpdateOp {
     return true;
   }
 
-  private void addMessage(ChangeContext ctx, ChangeUpdate update) throws OrmException {
+  private void addMessage(ChangeContext ctx, ChangeUpdate update) {
     StringBuilder msg = new StringBuilder();
     msg.append("Assignee ");
     if (oldAssignee == null) {
@@ -113,11 +112,11 @@ public class SetAssigneeOp implements BatchUpdateOp {
     }
     ChangeMessage cmsg =
         ChangeMessagesUtil.newMessage(ctx, msg.toString(), ChangeMessagesUtil.TAG_SET_ASSIGNEE);
-    cmUtil.addChangeMessage(ctx.getDb(), update, cmsg);
+    cmUtil.addChangeMessage(update, cmsg);
   }
 
   @Override
-  public void postUpdate(Context ctx) throws OrmException {
+  public void postUpdate(Context ctx) {
     try {
       SetAssigneeSender cm =
           setAssigneeSenderFactory.create(

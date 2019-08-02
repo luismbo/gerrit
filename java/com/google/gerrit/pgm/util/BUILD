@@ -19,8 +19,6 @@ java_library(
         "//java/com/google/gerrit/util/cli",
         "//lib:args4j",
         "//lib:guava",
-        "//lib:gwtorm",
-        "//lib/commons:dbcp",
         "//lib/flogger:api",
         "//lib/guice",
         "//lib/jgit/org.eclipse.jgit:jgit",

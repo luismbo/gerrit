@@ -66,14 +66,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.mina.transport.socket.SocketSessionConfig;
 import org.apache.sshd.common.BaseBuilder;
 import org.apache.sshd.common.NamedFactory;
-import org.apache.sshd.common.channel.RequestHandler;
 import org.apache.sshd.common.cipher.Cipher;
 import org.apache.sshd.common.compression.BuiltinCompressions;
 import org.apache.sshd.common.compression.Compression;
-import org.apache.sshd.common.file.FileSystemFactory;
 import org.apache.sshd.common.forward.DefaultForwarderFactory;
-import org.apache.sshd.common.future.CloseFuture;
-import org.apache.sshd.common.future.SshFutureListener;
 import org.apache.sshd.common.io.AbstractIoServiceFactory;
 import org.apache.sshd.common.io.IoAcceptor;
 import org.apache.sshd.common.io.IoServiceFactory;
@@ -87,7 +83,6 @@ import org.apache.sshd.common.keyprovider.KeyPairProvider;
 import org.apache.sshd.common.mac.Mac;
 import org.apache.sshd.common.random.Random;
 import org.apache.sshd.common.random.SingletonRandomFactory;
-import org.apache.sshd.common.session.ConnectionService;
 import org.apache.sshd.common.session.Session;
 import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
@@ -100,7 +95,6 @@ import org.apache.sshd.server.auth.gss.GSSAuthenticator;
 import org.apache.sshd.server.auth.gss.UserAuthGSSFactory;
 import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator;
 import org.apache.sshd.server.auth.pubkey.UserAuthPublicKeyFactory;
-import org.apache.sshd.server.command.Command;
 import org.apache.sshd.server.command.CommandFactory;
 import org.apache.sshd.server.forward.ForwardingFilter;
 import org.apache.sshd.server.global.CancelTcpipForwardHandler;
@@ -274,14 +268,11 @@ public class SshDaemon extends SshServer implements SshInfo, LifecycleListener {
             // Log a session close without authentication as a failure.
             //
             s.addCloseFutureListener(
-                new SshFutureListener<CloseFuture>() {
-                  @Override
-                  public void operationComplete(CloseFuture future) {
-                    connected.decrementAndGet();
-                    if (sd.isAuthenticationError()) {
-                      authFailures.increment();
-                      sshLog.onAuthFail(sd);
-                    }
+                future -> {
+                  connected.decrementAndGet();
+                  if (sd.isAuthenticationError()) {
+                    authFailures.increment();
+                    sshLog.onAuthFail(sd);
                   }
                 });
             return s;
@@ -293,7 +284,7 @@ public class SshDaemon extends SshServer implements SshInfo, LifecycleListener {
           }
         });
     setGlobalRequestHandlers(
-        Arrays.<RequestHandler<ConnectionService>>asList(
+        Arrays.asList(
             new KeepAliveHandler(),
             new NoMoreSessionsHandler(),
             new TcpipForwardHandler(),
@@ -654,7 +645,7 @@ public class SshDaemon extends SshServer implements SshInfo, LifecycleListener {
   }
 
   private void initSubsystems() {
-    setSubsystemFactories(Collections.<NamedFactory<Command>>emptyList());
+    setSubsystemFactories(Collections.emptyList());
   }
 
   private void initUserAuth(
@@ -721,10 +712,8 @@ public class SshDaemon extends SshServer implements SshInfo, LifecycleListener {
 
   private void initFileSystemFactory() {
     setFileSystemFactory(
-        new FileSystemFactory() {
-          @Override
-          public FileSystem createFileSystem(Session session) throws IOException {
-            return new FileSystem() {
+        session ->
+            new FileSystem() {
               @Override
               public void close() throws IOException {}
 
@@ -782,8 +771,6 @@ public class SshDaemon extends SshServer implements SshInfo, LifecycleListener {
               public Set<String> supportedFileAttributeViews() {
                 return null;
               }
-            };
-          }
-        });
+            });
   }
 }

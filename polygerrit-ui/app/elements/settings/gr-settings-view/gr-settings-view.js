@@ -47,6 +47,7 @@
 
   Polymer({
     is: 'gr-settings-view',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when the title of the page should change.
@@ -165,7 +166,6 @@
         this.$.accountInfo.loadData(),
         this.$.watchedProjectsEditor.loadData(),
         this.$.groupList.loadData(),
-        this.$.httpPass.loadData(),
         this.$.identities.loadData(),
         this.$.editPrefs.loadData(),
         this.$.diffPrefs.loadData(),

@@ -139,15 +139,13 @@ def _maven_jar_impl(ctx):
     args = [python, script, "-o", binjar_path, "-u", binurl]
     if ctx.attr.sha1:
         args.extend(["-v", sha1])
-    if ctx.attr.unsign:
-        args.append("--unsign")
     for x in ctx.attr.exclude:
         args.extend(["-x", x])
 
     out = ctx.execute(args)
 
     if out.return_code:
-        fail("failed %s: %s" % (" ".join(args), out.stderr))
+        fail("failed %s: %s" % (args, out.stderr))
 
     srcjar = None
     if ctx.attr.src_sha1 or ctx.attr.attach_source:

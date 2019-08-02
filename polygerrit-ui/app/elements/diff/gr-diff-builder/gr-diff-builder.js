@@ -42,11 +42,8 @@
    */
   const REGEX_TAB_OR_SURROGATE_PAIR = /\t|[\uD800-\uDBFF][\uDC00-\uDFFF]/;
 
-  function GrDiffBuilder(diff, comments, createThreadGroupFn, prefs, outputEl,
-      layers) {
+  function GrDiffBuilder(diff, prefs, outputEl, layers) {
     this._diff = diff;
-    this._comments = comments;
-    this._createThreadGroupFn = createThreadGroupFn;
     this._prefs = prefs;
     this._outputEl = outputEl;
     this.groups = [];
@@ -221,7 +218,9 @@
         // if lines are collapsed and not visible on the page yet.
         continue;
       }
-      el.parentElement.replaceChild(this._createTextEl(line, side).firstChild,
+      const lineNumberEl = this._getLineNumberEl(el, side);
+      el.parentElement.replaceChild(
+          this._createTextEl(lineNumberEl, line, side).firstChild,
           el);
     }
   };
@@ -319,152 +318,6 @@
     return button;
   };
 
-  GrDiffBuilder.prototype._getCommentsForLine = function(comments, line,
-      opt_side) {
-    function byLineNum(lineNum) {
-      return function(c) {
-        return (c.line === lineNum) ||
-               (c.line === undefined && lineNum === GrDiffLine.FILE);
-      };
-    }
-    const leftComments =
-        comments[GrDiffBuilder.Side.LEFT].filter(byLineNum(line.beforeNumber));
-    const rightComments =
-        comments[GrDiffBuilder.Side.RIGHT].filter(byLineNum(line.afterNumber));
-
-    leftComments.forEach(c => { c.__commentSide = 'left'; });
-    rightComments.forEach(c => { c.__commentSide = 'right'; });
-
-    let result;
-
-    switch (opt_side) {
-      case GrDiffBuilder.Side.LEFT:
-        result = leftComments;
-        break;
-      case GrDiffBuilder.Side.RIGHT:
-        result = rightComments;
-        break;
-      default:
-        result = leftComments.concat(rightComments);
-        break;
-    }
-
-    return result;
-  };
-
-  /**
-   * @param {Array<Object>} comments
-   * @param {string} patchForNewThreads
-   */
-  GrDiffBuilder.prototype._getThreads = function(comments, patchForNewThreads) {
-    const sortedComments = comments.slice(0).sort((a, b) => {
-      if (b.__draft && !a.__draft ) { return 0; }
-      if (a.__draft && !b.__draft ) { return 1; }
-      return util.parseDate(a.updated) - util.parseDate(b.updated);
-    });
-
-    const threads = [];
-    for (const comment of sortedComments) {
-      // If the comment is in reply to another comment, find that comment's
-      // thread and append to it.
-      if (comment.in_reply_to) {
-        const thread = threads.find(thread =>
-            thread.comments.some(c => c.id === comment.in_reply_to));
-        if (thread) {
-          thread.comments.push(comment);
-          continue;
-        }
-      }
-
-      // Otherwise, this comment starts its own thread.
-      const newThread = {
-        start_datetime: comment.updated,
-        comments: [comment],
-        commentSide: comment.__commentSide,
-        /**
-         * Determines what the patchNum of a thread should be. Use patchNum from
-         * comment if it exists, otherwise the property of the thread group.
-         * This is needed for switching between side-by-side and unified views
-         * when there are unsaved drafts.
-         */
-        patchNum: comment.patch_set || patchForNewThreads,
-        rootId: comment.id || comment.__draftID,
-      };
-      if (comment.range) {
-        newThread.range = Object.assign({}, comment.range);
-      }
-      threads.push(newThread);
-    }
-    return threads;
-  };
-
-  /**
-   * Returns the patch number that new comment threads should be attached to.
-   *
-   * @param {GrDiffLine} line The line new thread will be attached to.
-   * @param {string=} opt_side Set to LEFT to force adding it to the LEFT side -
-   *     will be ignored if the left is a parent or a merge parent
-   * @return {number} Patch set to attach the new thread to
-   */
-  GrDiffBuilder.prototype._determinePatchNumForNewThreads = function(
-      patchRange, line, opt_side) {
-    if ((line.type === GrDiffLine.Type.REMOVE ||
-         opt_side === GrDiffBuilder.Side.LEFT) &&
-        patchRange.basePatchNum !== 'PARENT' &&
-        !Gerrit.PatchSetBehavior.isMergeParent(patchRange.basePatchNum)) {
-      return patchRange.basePatchNum;
-    } else {
-      return patchRange.patchNum;
-    }
-  };
-
-  /**
-   * Returns whether the comments on the given line are on a (merge) parent.
-   *
-   * @param {string} firstCommentSide
-   * @param {{basePatchNum: number, patchNum: number}} patchRange
-   * @param {GrDiffLine} line The line the comments are on.
-   * @param {string=} opt_side
-   * @return {boolean} True iff the comments on the given line are on a (merge)
-   *    parent.
-   */
-  GrDiffBuilder.prototype._determineIsOnParent = function(
-      firstCommentSide, patchRange, line, opt_side) {
-    return ((line.type === GrDiffLine.Type.REMOVE ||
-             opt_side === GrDiffBuilder.Side.LEFT) &&
-            (patchRange.basePatchNum === 'PARENT' ||
-             Gerrit.PatchSetBehavior.isMergeParent(
-                 patchRange.basePatchNum))) ||
-          firstCommentSide === 'PARENT';
-  };
-
-  /**
-   * @param {GrDiffLine} line
-   * @param {string=} opt_side
-   * @return {!Object}
-   */
-  GrDiffBuilder.prototype._commentThreadGroupForLine = function(
-      line, opt_side) {
-    const comments =
-    this._getCommentsForLine(this._comments, line, opt_side);
-    if (!comments || comments.length === 0) {
-      return null;
-    }
-
-    const patchNum = this._determinePatchNumForNewThreads(
-        this._comments.meta.patchRange, line, opt_side);
-    const isOnParent = this._determineIsOnParent(
-        comments[0].side, this._comments.meta.patchRange, line, opt_side);
-
-    const threadGroupEl = this._createThreadGroupFn(patchNum, isOnParent,
-        opt_side);
-    threadGroupEl.threads = this._getThreads(comments, patchNum);
-    if (opt_side) {
-      threadGroupEl.setAttribute('data-side', opt_side);
-    }
-    return threadGroupEl;
-  };
-
   GrDiffBuilder.prototype._createLineEl = function(
       line, number, type, opt_class) {
     const td = this._createElement('td');
@@ -492,7 +345,8 @@
     return td;
   };
 
-  GrDiffBuilder.prototype._createTextEl = function(line, opt_side) {
+  GrDiffBuilder.prototype._createTextEl = function(
+      lineNumberEl, line, opt_side) {
     const td = this._createElement('td');
     if (line.type !== GrDiffLine.Type.BLANK) {
       td.classList.add('content');
@@ -509,7 +363,7 @@
     }
 
     for (const layer of this.layers) {
-      layer.annotate(contentText, line);
+      layer.annotate(contentText, lineNumberEl, line);
     }
 
     td.appendChild(contentText);
@@ -741,6 +595,19 @@
       }
     }
     return blameTd;
+  };
+
+  /**
+   * Finds the line number element given the content element by walking up the
+   * DOM tree to the diff row and then querying for a .lineNum element on the
+   * requested side.
+   *
+   * TODO(brohlfs): Consolidate this with getLineEl... methods in html file.
+   */
+  GrDiffBuilder.prototype._getLineNumberEl = function(content, side) {
+    let row = content;
+    while (row && !row.classList.contains('diff-row')) row = row.parentElement;
+    return row ? row.querySelector('.lineNum.' + side) : null;
   };
 
   window.GrDiffBuilder = GrDiffBuilder;

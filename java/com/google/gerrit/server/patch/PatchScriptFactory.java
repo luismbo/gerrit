@@ -29,7 +29,6 @@ import com.google.gerrit.reviewdb.client.Comment;
 import com.google.gerrit.reviewdb.client.Patch;
 import com.google.gerrit.reviewdb.client.Patch.ChangeType;
 import com.google.gerrit.reviewdb.client.PatchSet;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CommentsUtil;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.PatchSetUtil;
@@ -44,7 +43,6 @@ import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.project.InvalidChangeOperationException;
 import com.google.gerrit.server.project.NoSuchChangeException;
 import com.google.gerrit.server.project.ProjectCache;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
 import com.google.inject.assistedinject.AssistedInject;
@@ -82,7 +80,6 @@ public class PatchScriptFactory implements Callable<PatchScript> {
   private final PatchSetUtil psUtil;
   private final Provider<PatchScriptBuilder> builderFactory;
   private final PatchListCache patchListCache;
-  private final ReviewDb db;
   private final CommentsUtil commentsUtil;
 
   private final String fileName;
@@ -112,7 +109,6 @@ public class PatchScriptFactory implements Callable<PatchScript> {
       PatchSetUtil psUtil,
       Provider<PatchScriptBuilder> builderFactory,
       PatchListCache patchListCache,
-      ReviewDb db,
       CommentsUtil commentsUtil,
       ChangeEditUtil editReader,
       Provider<CurrentUser> userProvider,
@@ -127,7 +123,6 @@ public class PatchScriptFactory implements Callable<PatchScript> {
     this.psUtil = psUtil;
     this.builderFactory = builderFactory;
     this.patchListCache = patchListCache;
-    this.db = db;
     this.notes = notes;
     this.commentsUtil = commentsUtil;
     this.editReader = editReader;
@@ -150,7 +145,6 @@ public class PatchScriptFactory implements Callable<PatchScript> {
       PatchSetUtil psUtil,
       Provider<PatchScriptBuilder> builderFactory,
       PatchListCache patchListCache,
-      ReviewDb db,
       CommentsUtil commentsUtil,
       ChangeEditUtil editReader,
       Provider<CurrentUser> userProvider,
@@ -165,7 +159,6 @@ public class PatchScriptFactory implements Callable<PatchScript> {
     this.psUtil = psUtil;
     this.builderFactory = builderFactory;
     this.patchListCache = patchListCache;
-    this.db = db;
     this.notes = notes;
     this.commentsUtil = commentsUtil;
     this.editReader = editReader;
@@ -193,18 +186,18 @@ public class PatchScriptFactory implements Callable<PatchScript> {
 
   @Override
   public PatchScript call()
-      throws OrmException, LargeObjectException, AuthException, InvalidChangeOperationException,
-          IOException, PermissionBackendException {
+      throws LargeObjectException, AuthException, InvalidChangeOperationException, IOException,
+          PermissionBackendException {
     if (parentNum < 0) {
       validatePatchSetId(psa);
     }
     validatePatchSetId(psb);
 
-    PatchSet psEntityA = psa != null ? psUtil.get(db, notes, psa) : null;
-    PatchSet psEntityB = psb.get() == 0 ? new PatchSet(psb) : psUtil.get(db, notes, psb);
+    PatchSet psEntityA = psa != null ? psUtil.get(notes, psa) : null;
+    PatchSet psEntityB = psb.get() == 0 ? new PatchSet(psb) : psUtil.get(notes, psb);
     if (psEntityA != null || psEntityB != null) {
       try {
-        permissionBackend.currentUser().change(notes).database(db).check(ChangePermission.READ);
+        permissionBackend.currentUser().change(notes).check(ChangePermission.READ);
       } catch (AuthException e) {
         throw new NoSuchChangeException(changeId);
       }
@@ -265,7 +258,7 @@ public class PatchScriptFactory implements Callable<PatchScript> {
     return b;
   }
 
-  private ObjectId toObjectId(PatchSet ps) throws AuthException, IOException, OrmException {
+  private ObjectId toObjectId(PatchSet ps) throws AuthException, IOException {
     if (ps.getId().get() == 0) {
       return getEditRev();
     }
@@ -281,7 +274,7 @@ public class PatchScriptFactory implements Callable<PatchScript> {
     }
   }
 
-  private ObjectId getEditRev() throws AuthException, IOException, OrmException {
+  private ObjectId getEditRev() throws AuthException, IOException {
     edit = editReader.byChange(notes);
     if (edit.isPresent()) {
       return edit.get().getEditCommit();
@@ -297,8 +290,7 @@ public class PatchScriptFactory implements Callable<PatchScript> {
     }
   }
 
-  private void loadCommentsAndHistory(ChangeType changeType, String oldName, String newName)
-      throws OrmException {
+  private void loadCommentsAndHistory(ChangeType changeType, String oldName, String newName) {
     Map<Patch.Key, Patch> byKey = new HashMap<>();
 
     if (loadHistory) {
@@ -308,7 +300,7 @@ public class PatchScriptFactory implements Callable<PatchScript> {
       // proper rename detection between the patch sets.
       //
       history = new ArrayList<>();
-      for (PatchSet ps : psUtil.byChange(db, notes)) {
+      for (PatchSet ps : psUtil.byChange(notes)) {
         String name = fileName;
         if (psa != null) {
           switch (changeType) {
@@ -390,8 +382,8 @@ public class PatchScriptFactory implements Callable<PatchScript> {
     }
   }
 
-  private void loadPublished(Map<Patch.Key, Patch> byKey, String file) throws OrmException {
-    for (Comment c : commentsUtil.publishedByChangeFile(db, notes, changeId, file)) {
+  private void loadPublished(Map<Patch.Key, Patch> byKey, String file) {
+    for (Comment c : commentsUtil.publishedByChangeFile(notes, file)) {
       comments.include(notes.getChangeId(), c);
       PatchSet.Id psId = new PatchSet.Id(notes.getChangeId(), c.key.patchSetId);
       Patch.Key pKey = new Patch.Key(psId, c.key.filename);
@@ -402,9 +394,8 @@ public class PatchScriptFactory implements Callable<PatchScript> {
     }
   }
 
-  private void loadDrafts(Map<Patch.Key, Patch> byKey, Account.Id me, String file)
-      throws OrmException {
-    for (Comment c : commentsUtil.draftByChangeFileAuthor(db, notes, file, me)) {
+  private void loadDrafts(Map<Patch.Key, Patch> byKey, Account.Id me, String file) {
+    for (Comment c : commentsUtil.draftByChangeFileAuthor(notes, file, me)) {
       comments.include(notes.getChangeId(), c);
       PatchSet.Id psId = new PatchSet.Id(notes.getChangeId(), c.key.patchSetId);
       Patch.Key pKey = new Patch.Key(psId, c.key.filename);

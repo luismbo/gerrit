@@ -17,6 +17,7 @@ package com.google.gerrit.server.restapi.change;
 import com.google.common.collect.Iterables;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.extensions.client.ListChangesOption;
+import com.google.gerrit.extensions.client.ListOption;
 import com.google.gerrit.extensions.common.ChangeInfo;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
@@ -31,7 +32,6 @@ import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gerrit.server.query.change.ChangeQueryBuilder;
 import com.google.gerrit.server.query.change.ChangeQueryProcessor;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -70,7 +70,7 @@ public class QueryChanges implements RestReadView<TopLevelResource>, DynamicOpti
 
   @Option(name = "-O", usage = "Output option flags, in hex")
   void setOptionFlagsHex(String hex) {
-    options.addAll(ListChangesOption.fromBits(Integer.parseInt(hex, 16)));
+    options.addAll(ListOption.fromBits(ListChangesOption.class, Integer.parseInt(hex, 16)));
   }
 
   @Option(
@@ -80,6 +80,11 @@ public class QueryChanges implements RestReadView<TopLevelResource>, DynamicOpti
       usage = "Number of changes to skip")
   public void setStart(int start) {
     imp.setStart(start);
+  }
+
+  @Option(name = "--no-limit", usage = "Return all results, overriding the default limit")
+  public void setNoLimit(boolean on) {
+    imp.setNoLimit(on);
   }
 
   @Override
@@ -109,7 +114,7 @@ public class QueryChanges implements RestReadView<TopLevelResource>, DynamicOpti
 
   @Override
   public List<?> apply(TopLevelResource rsrc)
-      throws BadRequestException, AuthException, OrmException, PermissionBackendException {
+      throws BadRequestException, AuthException, PermissionBackendException {
     List<List<ChangeInfo>> out;
     try {
       out = query();
@@ -122,8 +127,7 @@ public class QueryChanges implements RestReadView<TopLevelResource>, DynamicOpti
     return out.size() == 1 ? out.get(0) : out;
   }
 
-  private List<List<ChangeInfo>> query()
-      throws OrmException, QueryParseException, PermissionBackendException {
+  private List<List<ChangeInfo>> query() throws QueryParseException, PermissionBackendException {
     if (imp.isDisabled()) {
       throw new QueryParseException("query disabled");
     }
@@ -137,7 +141,8 @@ public class QueryChanges implements RestReadView<TopLevelResource>, DynamicOpti
 
     int cnt = queries.size();
     List<QueryResult<ChangeData>> results = imp.query(qb.parse(queries));
-    List<List<ChangeInfo>> res = json.create(options, this.imp).format(results);
+    List<List<ChangeInfo>> res =
+        json.create(options, this.imp.getAttributesFactory()).format(results);
     for (int n = 0; n < cnt; n++) {
       List<ChangeInfo> info = res.get(n);
       if (results.get(n).more() && !info.isEmpty()) {

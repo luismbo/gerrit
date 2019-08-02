@@ -36,6 +36,8 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 /**
  * A set of members that can be modified as plugins reload.
@@ -135,7 +137,7 @@ public class DynamicSet<T> implements Iterable<T> {
   }
 
   public static <T> DynamicSet<T> emptySet() {
-    return new DynamicSet<>(Collections.<AtomicReference<Extension<T>>>emptySet());
+    return new DynamicSet<>(Collections.emptySet());
   }
 
   private final CopyOnWriteArrayList<AtomicReference<Extension<T>>> items;
@@ -167,10 +169,8 @@ public class DynamicSet<T> implements Iterable<T> {
 
   public Iterable<Extension<T>> entries() {
     final Iterator<AtomicReference<Extension<T>>> itr = items.iterator();
-    return new Iterable<Extension<T>>() {
-      @Override
-      public Iterator<Extension<T>> iterator() {
-        return new Iterator<Extension<T>>() {
+    return () ->
+        new Iterator<Extension<T>>() {
           private Extension<T> next;
 
           @Override
@@ -199,8 +199,6 @@ public class DynamicSet<T> implements Iterable<T> {
             throw new UnsupportedOperationException();
           }
         };
-      }
-    };
   }
 
   /**
@@ -264,12 +262,9 @@ public class DynamicSet<T> implements Iterable<T> {
     final AtomicReference<Extension<T>> ref =
         new AtomicReference<>(new Extension<>(pluginName, item));
     items.add(ref);
-    return new RegistrationHandle() {
-      @Override
-      public void remove() {
-        if (ref.compareAndSet(ref.get(), null)) {
-          items.remove(ref);
-        }
+    return () -> {
+      if (ref.compareAndSet(ref.get(), null)) {
+        items.remove(ref);
       }
     };
   }
@@ -289,6 +284,10 @@ public class DynamicSet<T> implements Iterable<T> {
     AtomicReference<Extension<T>> ref = new AtomicReference<>(new Extension<>(pluginName, item));
     items.add(ref);
     return new ReloadableHandle(ref, key, ref.get());
+  }
+
+  public Stream<T> stream() {
+    return StreamSupport.stream(spliterator(), false);
   }
 
   private class ReloadableHandle implements ReloadableRegistrationHandle<T> {

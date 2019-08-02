@@ -72,9 +72,9 @@ limitations under the License.
           <tr class="diff-row side-by-side" left-type="remove" right-type="add">
             <td class="left lineNum" data-value="140"></td>
             <!-- Next tag is formatted to eliminate zero-length text nodes. -->
-            <td class="content remove"><div class="contentText">na💢ti <hl class="foo">te, inquit</hl>, sumus <hl class="bar">aliquando</hl> otiosum, <hl>certe</hl> a <hl><span class="tab-indicator" style="tab-size:8;">	</span></hl>udiam, <hl>quid</hl> sit, <span class="tab-indicator" style="tab-size:8;">	</span>quod <hl>Epicurum</hl></div><gr-diff-comment-thread>
+            <td class="content remove"><div class="contentText">na💢ti <hl class="foo">te, inquit</hl>, sumus <hl class="bar">aliquando</hl> otiosum, <hl>certe</hl> a <hl><span class="tab-indicator" style="tab-size:8;">	</span></hl>udiam, <hl>quid</hl> sit, <span class="tab-indicator" style="tab-size:8;">	</span>quod <hl>Epicurum</hl></div><div class="comment-thread">
                 [Yet another random diff thread content here]
-              </gr-diff-comment-thread></td>
+            </div></td>
             <td class="right lineNum" data-value="120"></td>
             <!-- Next tag is formatted to eliminate zero-length text nodes. -->
             <td class="content add"><div class="contentText">nacti , <hl>,</hl> sumus <hl><span class="tab-indicator" style="tab-size:8;">	</span></hl> otiosum,  <span class="tab-indicator" style="tab-size:8;">	</span> audiam,  sit, quod</div></td>
@@ -158,33 +158,6 @@ limitations under the License.
       sandbox.restore();
     });
 
-    suite('selectionchange event handling', () => {
-      const emulateSelection = function() {
-        document.dispatchEvent(new CustomEvent('selectionchange'));
-        element.flushDebouncer('selectionChange');
-        element.flushDebouncer('removeActionBox');
-      };
-
-      setup(() => {
-        sandbox.stub(element, '_handleSelection');
-        sandbox.stub(element, '_removeActionBox');
-      });
-
-      test('enabled if logged in', () => {
-        element.loggedIn = true;
-        emulateSelection();
-        assert.isTrue(element._handleSelection.called);
-        assert.isTrue(element._removeActionBox.called);
-      });
-
-      test('ignored if logged out', () => {
-        element.loggedIn = false;
-        emulateSelection();
-        assert.isFalse(element._handleSelection.called);
-        assert.isFalse(element._removeActionBox.called);
-      });
-    });
-
     suite('comment events', () => {
       let builder;
 
@@ -197,27 +170,65 @@ limitations under the License.
         element._cachedDiffBuilder = builder;
       });
 
-      test('comment-mouse-over from line comments is ignored', () => {
+      test('comment-thread-mouseenter from line comments is ignored', () => {
+        const threadEl = document.createElement('div');
+        threadEl.className = 'comment-thread';
+        threadEl.setAttribute('comment-side', 'right');
+        threadEl.setAttribute('line-num', 3);
+        element.appendChild(threadEl);
+        element.commentRanges = [{side: 'right'}];
+
         sandbox.stub(element, 'set');
-        element.fire('comment-mouse-over', {comment: {}});
+        threadEl.dispatchEvent(
+            new CustomEvent('comment-thread-mouseenter', {bubbles: true}));
         assert.isFalse(element.set.called);
       });
 
-      test('comment-mouse-over from ranged comment causes set', () => {
+      test('comment-thread-mouseenter from ranged comment causes set', () => {
+        const threadEl = document.createElement('div');
+        threadEl.className = 'comment-thread';
+        threadEl.setAttribute('comment-side', 'right');
+        threadEl.setAttribute('line-num', 3);
+        threadEl.setAttribute('range', JSON.stringify({
+          start_line: 3,
+          start_character: 4,
+          end_line: 5,
+          end_character: 6,
+        }));
+        element.appendChild(threadEl);
+        element.commentRanges = [{side: 'right', range: {
+          start_line: 3,
+          start_character: 4,
+          end_line: 5,
+          end_character: 6,
+        }}];
+
         sandbox.stub(element, 'set');
-        sandbox.stub(element, '_indexOfComment').returns(0);
-        element.fire('comment-mouse-over', {comment: {range: {}}});
+        threadEl.dispatchEvent(
+            new CustomEvent('comment-thread-mouseenter', {bubbles: true}));
         assert.isTrue(element.set.called);
+        const args = element.set.lastCall.args;
+        assert.deepEqual(args[0], ['commentRanges', 0, 'hovering']);
+        assert.deepEqual(args[1], true);
       });
 
-      test('comment-mouse-out from line comments is ignored', () => {
-        element.fire('comment-mouse-over', {comment: {}});
-        assert.isFalse(builder.getContentsByLineRange.called);
+      test('comment-thread-mouseleave from line comments is ignored', () => {
+        const threadEl = document.createElement('div');
+        threadEl.className = 'comment-thread';
+        threadEl.setAttribute('comment-side', 'right');
+        threadEl.setAttribute('line-num', 3);
+        element.appendChild(threadEl);
+        element.commentRanges = [{side: 'right'}];
+
+        sandbox.stub(element, 'set');
+        threadEl.dispatchEvent(
+            new CustomEvent('comment-thread-mouseleave', {bubbles: true}));
+        assert.isFalse(element.set.called);
       });
 
-      test('on create-comment action box is removed', () => {
+      test('on create-range-comment action box is removed', () => {
         sandbox.stub(element, '_removeActionBox');
-        element.fire('create-comment', {
+        element.fire('create-range-comment', {
           comment: {
             range: {},
           },
@@ -255,7 +266,7 @@ limitations under the License.
         range.setStart(startNode, startOffset);
         range.setEnd(endNode, endOffset);
         selection.addRange(range);
-        element._handleSelection();
+        element._handleSelection(selection);
       };
 
       const getActionRange = () =>
@@ -318,10 +329,10 @@ limitations under the License.
         const actionBox = element.$$('gr-selection-action-box');
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 138,
-          startChar: 5,
-          endLine: 138,
-          endChar: 12,
+          start_line: 138,
+          start_character: 5,
+          end_line: 138,
+          end_character: 12,
         });
         assert.equal(getActionSide(), 'left');
         assert.notOk(actionBox.positionBelow);
@@ -337,10 +348,10 @@ limitations under the License.
         const actionBox = element.$$('gr-selection-action-box');
 
         assert.deepEqual(getActionRange(), {
-          startLine: 119,
-          startChar: 10,
-          endLine: 120,
-          endChar: 36,
+          start_line: 119,
+          start_character: 10,
+          end_line: 120,
+          end_character: 36,
         });
         assert.equal(getActionSide(), 'right');
         assert.notOk(actionBox.positionBelow);
@@ -362,18 +373,18 @@ limitations under the License.
         getRangeAtStub
             .onFirstCall().returns(startRange)
             .onSecondCall().returns(endRange);
-        sandbox.stub(window, 'getSelection').returns({
+        const selection = {
           rangeCount: 2,
           getRangeAt: getRangeAtStub,
           removeAllRanges: sandbox.stub(),
-        });
-        element._handleSelection();
+        };
+        element._handleSelection(selection);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 119,
-          startChar: 10,
-          endLine: 120,
-          endChar: 36,
+          start_line: 119,
+          start_character: 10,
+          end_line: 120,
+          end_character: 36,
         });
       });
 
@@ -383,10 +394,10 @@ limitations under the License.
         emulateSelection(startContent.firstChild, 10, endContent.firstChild, 2);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 119,
-          startChar: 10,
-          endLine: 120,
-          endChar: 2,
+          start_line: 119,
+          start_character: 10,
+          end_line: 120,
+          end_character: 2,
         });
         assert.equal(getActionSide(), 'right');
       });
@@ -404,10 +415,10 @@ limitations under the License.
         emulateSelection(hl.firstChild, 2, hl.nextSibling, 7);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 140,
-          startChar: 8,
-          endLine: 140,
-          endChar: 23,
+          start_line: 140,
+          start_character: 8,
+          end_line: 140,
+          end_character: 23,
         });
         assert.equal(getActionSide(), 'left');
       });
@@ -418,10 +429,10 @@ limitations under the License.
         emulateSelection(hl.previousSibling, 2, hl.firstChild, 3);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 140,
-          startChar: 18,
-          endLine: 140,
-          endChar: 27,
+          start_line: 140,
+          start_character: 18,
+          end_line: 140,
+          end_character: 27,
         });
       });
 
@@ -431,10 +442,10 @@ limitations under the License.
         emulateSelection(content.firstChild, 2, hl.firstChild, 2);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 140,
-          startChar: 2,
-          endLine: 140,
-          endChar: 61,
+          start_line: 140,
+          start_character: 2,
+          end_line: 140,
+          end_character: 61,
         });
         assert.equal(getActionSide(), 'left');
       });
@@ -465,15 +476,15 @@ limitations under the License.
       test('starts in comment thread element', () => {
         const startContent = stubContent(140, 'left');
         const comment = startContent.parentElement.querySelector(
-            'gr-diff-comment-thread');
+            '.comment-thread');
         const endContent = stubContent(141, 'left');
         emulateSelection(comment.firstChild, 2, endContent.firstChild, 4);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 140,
-          startChar: 83,
-          endLine: 141,
-          endChar: 4,
+          start_line: 140,
+          start_character: 83,
+          end_line: 141,
+          end_character: 4,
         });
         assert.equal(getActionSide(), 'left');
       });
@@ -481,14 +492,14 @@ limitations under the License.
       test('ends in comment thread element', () => {
         const content = stubContent(140, 'left');
         const comment = content.parentElement.querySelector(
-            'gr-diff-comment-thread');
+            '.comment-thread');
         emulateSelection(content.firstChild, 4, comment.firstChild, 1);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 140,
-          startChar: 4,
-          endLine: 140,
-          endChar: 83,
+          start_line: 140,
+          start_character: 4,
+          end_line: 140,
+          end_character: 83,
         });
         assert.equal(getActionSide(), 'left');
       });
@@ -517,10 +528,10 @@ limitations under the License.
         emulateSelection(startContent.firstChild, 3, endContent.firstChild, 14);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 130,
-          startChar: 3,
-          endLine: 146,
-          endChar: 14,
+          start_line: 130,
+          start_character: 3,
+          end_line: 146,
+          end_character: 14,
         });
         assert.equal(getActionSide(), 'right');
       });
@@ -531,10 +542,10 @@ limitations under the License.
             content.firstChild, 1, content.querySelector('span'), 0);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 140,
-          startChar: 1,
-          endLine: 140,
-          endChar: 51,
+          start_line: 140,
+          start_character: 1,
+          end_line: 140,
+          end_character: 51,
         });
         assert.equal(getActionSide(), 'left');
       });
@@ -546,10 +557,10 @@ limitations under the License.
             content.querySelectorAll('span')[1].nextSibling, 1);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 140,
-          startChar: 51,
-          endLine: 140,
-          endChar: 71,
+          start_line: 140,
+          start_character: 51,
+          end_line: 140,
+          end_character: 71,
         });
         assert.equal(getActionSide(), 'left');
       });
@@ -582,10 +593,10 @@ limitations under the License.
         emulateSelection(startContent.firstChild, 0, endContent.firstChild, 0);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 119,
-          startChar: 0,
-          endLine: 119,
-          endChar: element._getLength(startContent),
+          start_line: 119,
+          start_character: 0,
+          end_line: 119,
+          end_character: element._getLength(startContent),
         });
         assert.equal(getActionSide(), 'right');
       });
@@ -597,10 +608,10 @@ limitations under the License.
             endContent.parentElement.previousElementSibling, 0);
         assert.isTrue(element.isRangeSelected());
         assert.deepEqual(getActionRange(), {
-          startLine: 146,
-          startChar: 0,
-          endLine: 146,
-          endChar: 84,
+          start_line: 146,
+          start_character: 0,
+          end_line: 146,
+          end_character: 84,
         });
         assert.equal(getActionSide(), 'right');
       });

@@ -18,12 +18,15 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.PushOneCommit;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperations;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.extensions.api.projects.ConfigInput;
 import com.google.gerrit.extensions.client.GeneralPreferencesInfo;
 import com.google.gerrit.extensions.client.InheritableBoolean;
 import com.google.gerrit.extensions.common.ChangeInfo;
 import com.google.gerrit.extensions.common.ChangeInput;
 import com.google.gerrit.reviewdb.client.Project;
+import com.google.inject.Inject;
 import org.eclipse.jgit.internal.storage.dfs.InMemoryRepository;
 import org.eclipse.jgit.junit.TestRepository;
 import org.junit.After;
@@ -31,21 +34,24 @@ import org.junit.Before;
 import org.junit.Test;
 
 public class WorkInProgressByDefaultIT extends AbstractDaemonTest {
+  @Inject private ProjectOperations projectOperations;
+  @Inject private RequestScopeOperations requestScopeOperations;
+
   private Project.NameKey project1;
   private Project.NameKey project2;
 
   @Before
   public void setUp() throws Exception {
-    project1 = createProject("project-1");
-    project2 = createProject("project-2", project1);
+    project1 = projectOperations.newProject().create();
+    project2 = projectOperations.newProject().parent(project1).create();
   }
 
   @After
   public void tearDown() throws Exception {
-    setApiUser(admin);
-    GeneralPreferencesInfo prefs = gApi.accounts().id(admin.id.get()).getPreferences();
+    requestScopeOperations.setApiUser(admin.id());
+    GeneralPreferencesInfo prefs = gApi.accounts().id(admin.id().get()).getPreferences();
     prefs.workInProgressByDefault = false;
-    gApi.accounts().id(admin.id.get()).setPreferences(prefs);
+    gApi.accounts().id(admin.id().get()).setPreferences(prefs);
   }
 
   @Test
@@ -139,9 +145,9 @@ public class WorkInProgressByDefaultIT extends AbstractDaemonTest {
   }
 
   private void setWorkInProgressByDefaultForUser() throws Exception {
-    GeneralPreferencesInfo prefs = gApi.accounts().id(admin.id.get()).getPreferences();
+    GeneralPreferencesInfo prefs = gApi.accounts().id(admin.id().get()).getPreferences();
     prefs.workInProgressByDefault = true;
-    gApi.accounts().id(admin.id.get()).setPreferences(prefs);
+    gApi.accounts().id(admin.id().get()).setPreferences(prefs);
   }
 
   private PushOneCommit.Result createChange(Project.NameKey p) throws Exception {
@@ -150,7 +156,7 @@ public class WorkInProgressByDefaultIT extends AbstractDaemonTest {
 
   private PushOneCommit.Result createChange(Project.NameKey p, String r) throws Exception {
     TestRepository<InMemoryRepository> testRepo = cloneProject(p);
-    PushOneCommit push = pushFactory.create(db, admin.getIdent(), testRepo);
+    PushOneCommit push = pushFactory.create(admin.newIdent(), testRepo);
     PushOneCommit.Result result = push.to(r);
     result.assertOkStatus();
     return result;

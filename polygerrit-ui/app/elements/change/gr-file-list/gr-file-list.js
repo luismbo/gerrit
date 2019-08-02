@@ -63,6 +63,7 @@
 
   Polymer({
     is: 'gr-file-list',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when a draft refresh should get triggered
@@ -218,7 +219,7 @@
         [this.Shortcut.TOGGLE_FILE_REVIEWED]: '_handleToggleFileReviewed',
         [this.Shortcut.TOGGLE_LEFT_PANE]: '_handleToggleLeftPane',
 
-        // Final two are actually handled by gr-diff-comment-thread.
+        // Final two are actually handled by gr-comment-thread.
         [this.Shortcut.EXPAND_ALL_COMMENT_THREADS]: null,
         [this.Shortcut.COLLAPSE_ALL_COMMENT_THREADS]: null,
       };
@@ -291,7 +292,9 @@
     },
 
     get diffs() {
-      return Polymer.dom(this.root).querySelectorAll('gr-diff-host');
+      // Polymer2: querySelectorAll returns NodeList instead of Array.
+      return Array.from(
+          Polymer.dom(this.root).querySelectorAll('gr-diff-host'));
     },
 
     openDiffPrefs() {
@@ -858,7 +861,9 @@
 
     _filesChanged() {
       Polymer.dom.flush();
-      const files = Polymer.dom(this.root).querySelectorAll('.file-row');
+      // Polymer2: querySelectorAll returns NodeList instead of Array.
+      const files = Array.from(
+          Polymer.dom(this.root).querySelectorAll('.file-row'));
       this.$.fileCursor.stops = files;
       this.$.fileCursor.setCursorAtIndex(this.selectedIndex, true);
     },

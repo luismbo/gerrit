@@ -18,11 +18,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.gerrit.extensions.common.CommentInfo;
 import com.google.gerrit.extensions.restapi.RestReadView;
 import com.google.gerrit.reviewdb.client.Comment;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CommentsUtil;
 import com.google.gerrit.server.change.RevisionResource;
 import com.google.gerrit.server.permissions.PermissionBackendException;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -31,21 +29,18 @@ import java.util.Map;
 
 @Singleton
 public class ListRevisionDrafts implements RestReadView<RevisionResource> {
-  protected final Provider<ReviewDb> db;
   protected final Provider<CommentJson> commentJson;
   protected final CommentsUtil commentsUtil;
 
   @Inject
-  ListRevisionDrafts(
-      Provider<ReviewDb> db, Provider<CommentJson> commentJson, CommentsUtil commentsUtil) {
-    this.db = db;
+  ListRevisionDrafts(Provider<CommentJson> commentJson, CommentsUtil commentsUtil) {
     this.commentJson = commentJson;
     this.commentsUtil = commentsUtil;
   }
 
-  protected Iterable<Comment> listComments(RevisionResource rsrc) throws OrmException {
+  protected Iterable<Comment> listComments(RevisionResource rsrc) {
     return commentsUtil.draftByPatchSetAuthor(
-        db.get(), rsrc.getPatchSet().getId(), rsrc.getAccountId(), rsrc.getNotes());
+        rsrc.getPatchSet().getId(), rsrc.getAccountId(), rsrc.getNotes());
   }
 
   protected boolean includeAuthorInfo() {
@@ -54,7 +49,7 @@ public class ListRevisionDrafts implements RestReadView<RevisionResource> {
 
   @Override
   public Map<String, List<CommentInfo>> apply(RevisionResource rsrc)
-      throws OrmException, PermissionBackendException {
+      throws PermissionBackendException {
     return commentJson
         .get()
         .setFillAccounts(includeAuthorInfo())
@@ -63,7 +58,7 @@ public class ListRevisionDrafts implements RestReadView<RevisionResource> {
   }
 
   public ImmutableList<CommentInfo> getComments(RevisionResource rsrc)
-      throws OrmException, PermissionBackendException {
+      throws PermissionBackendException {
     return commentJson
         .get()
         .setFillAccounts(includeAuthorInfo())

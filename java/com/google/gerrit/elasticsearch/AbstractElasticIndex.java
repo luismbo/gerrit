@@ -15,15 +15,16 @@
 package com.google.gerrit.elasticsearch;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.gson.FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.apache.commons.codec.binary.Base64.decodeBase64;
 
 import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.FluentIterable;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Streams;
 import com.google.common.flogger.FluentLogger;
 import com.google.common.io.CharStreams;
 import com.google.gerrit.common.Nullable;
@@ -31,6 +32,7 @@ import com.google.gerrit.elasticsearch.ElasticMapping.MappingProperties;
 import com.google.gerrit.elasticsearch.builders.QueryBuilder;
 import com.google.gerrit.elasticsearch.builders.SearchSourceBuilder;
 import com.google.gerrit.elasticsearch.bulk.DeleteRequest;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.index.FieldDef;
 import com.google.gerrit.index.FieldType;
 import com.google.gerrit.index.Index;
@@ -38,8 +40,12 @@ import com.google.gerrit.index.QueryOptions;
 import com.google.gerrit.index.Schema;
 import com.google.gerrit.index.query.DataSource;
 import com.google.gerrit.index.query.FieldBundle;
+import com.google.gerrit.index.query.ListResultSet;
 import com.google.gerrit.index.query.Predicate;
 import com.google.gerrit.index.query.QueryParseException;
+import com.google.gerrit.index.query.ResultSet;
+import com.google.gerrit.proto.Protos;
+import com.google.gerrit.reviewdb.converter.ProtoConverter;
 import com.google.gerrit.server.config.SitePaths;
 import com.google.gerrit.server.index.IndexUtils;
 import com.google.gson.Gson;
@@ -48,9 +54,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.google.gwtorm.protobuf.ProtobufCodec;
-import com.google.gwtorm.server.OrmException;
-import com.google.gwtorm.server.ResultSet;
+import com.google.protobuf.MessageLite;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -60,7 +64,6 @@ import java.net.URLEncoder;
 import java.sql.Timestamp;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -85,14 +88,22 @@ abstract class AbstractElasticIndex<K, V> implements Index<K, V> {
   protected static final String SETTINGS = "settings";
 
   protected static <T> List<T> decodeProtos(
-      JsonObject doc, String fieldName, ProtobufCodec<T> codec) {
+      JsonObject doc, String fieldName, ProtoConverter<?, T> converter) {
     JsonArray field = doc.getAsJsonArray(fieldName);
     if (field == null) {
       return null;
     }
-    return FluentIterable.from(field)
-        .transform(i -> codec.decode(decodeBase64(i.toString())))
-        .toList();
+    return Streams.stream(field)
+        .map(JsonElement::toString)
+        .map(Base64::decodeBase64)
+        .map(bytes -> parseProtoFrom(bytes, converter))
+        .collect(toImmutableList());
+  }
+
+  protected static <P extends MessageLite, T> T parseProtoFrom(
+      byte[] bytes, ProtoConverter<P, T> converter) {
+    P message = Protos.parseUnchecked(converter.getParser(), bytes);
+    return converter.fromProto(message);
   }
 
   static String getContent(Response response) throws IOException {
@@ -156,45 +167,45 @@ abstract class AbstractElasticIndex<K, V> implements Index<K, V> {
   }
 
   @Override
-  public void markReady(boolean ready) throws IOException {
+  public void markReady(boolean ready) {
     IndexUtils.setReady(sitePaths, indexNameRaw, schema.getVersion(), ready);
   }
 
   @Override
-  public void delete(K id) throws IOException {
+  public void delete(K id) {
     String uri = getURI(type, BULK);
     Response response = postRequest(uri, getDeleteActions(id), getRefreshParam());
     int statusCode = response.getStatusLine().getStatusCode();
     if (statusCode != HttpStatus.SC_OK) {
-      throw new IOException(
+      throw new StorageException(
           String.format("Failed to delete %s from index %s: %s", id, indexName, statusCode));
     }
   }
 
   @Override
-  public void deleteAll() throws IOException {
+  public void deleteAll() {
     // Delete the index, if it exists.
-    String endpoint = indexName + client.adapter().indicesExistParam();
+    String endpoint = indexName + client.adapter().indicesExistParams();
     Response response = performRequest("HEAD", endpoint);
     int statusCode = response.getStatusLine().getStatusCode();
     if (statusCode == HttpStatus.SC_OK) {
       response = performRequest("DELETE", indexName);
       statusCode = response.getStatusLine().getStatusCode();
       if (statusCode != HttpStatus.SC_OK) {
-        throw new IOException(
+        throw new StorageException(
             String.format("Failed to delete index %s: %s", indexName, statusCode));
       }
     }
 
     // Recreate the index.
-    String indexCreationFields = concatJsonString(getSettings(), getMappings());
+    String indexCreationFields = concatJsonString(getSettings(client.adapter()), getMappings());
     response =
         performRequest(
             "PUT", indexName + client.adapter().includeTypeNameParam(), indexCreationFields);
     statusCode = response.getStatusLine().getStatusCode();
     if (statusCode != HttpStatus.SC_OK) {
       String error = String.format("Failed to create index %s: %s", indexName, statusCode);
-      throw new IOException(error);
+      throw new StorageException(error);
     }
   }
 
@@ -202,8 +213,8 @@ abstract class AbstractElasticIndex<K, V> implements Index<K, V> {
 
   protected abstract String getMappings();
 
-  private String getSettings() {
-    return gson.toJson(ImmutableMap.of(SETTINGS, ElasticSetting.createSetting(config)));
+  private String getSettings(ElasticQueryAdapter adapter) {
+    return gson.toJson(ImmutableMap.of(SETTINGS, ElasticSetting.createSetting(config, adapter)));
   }
 
   protected abstract String getId(V v);
@@ -213,10 +224,15 @@ abstract class AbstractElasticIndex<K, V> implements Index<K, V> {
   }
 
   protected String getMappingsFor(String type, MappingProperties properties) {
-    JsonObject mappingType = new JsonObject();
-    mappingType.add(type, gson.toJsonTree(properties));
     JsonObject mappings = new JsonObject();
-    mappings.add(MAPPINGS, gson.toJsonTree(mappingType));
+
+    if (client.adapter().omitType()) {
+      mappings.add(MAPPINGS, gson.toJsonTree(properties));
+    } else {
+      JsonObject mappingType = new JsonObject();
+      mappingType.add(type, gson.toJsonTree(properties));
+      mappings.add(MAPPINGS, gson.toJsonTree(mappingType));
+    }
     return gson.toJson(mappings);
   }
 
@@ -289,28 +305,31 @@ abstract class AbstractElasticIndex<K, V> implements Index<K, V> {
   protected JsonArray getSortArray(String idFieldName) {
     JsonObject properties = new JsonObject();
     properties.addProperty(ORDER, "asc");
-    client.adapter().setIgnoreUnmapped(properties);
 
     JsonArray sortArray = new JsonArray();
     addNamedElement(idFieldName, properties, sortArray);
     return sortArray;
   }
 
-  protected String getURI(String type, String request) throws UnsupportedEncodingException {
-    String encodedIndexName = URLEncoder.encode(indexName, UTF_8.toString());
-    if (SEARCH.equals(request) && client.adapter().omitTypeFromSearch()) {
-      return encodedIndexName + "/" + request;
+  protected String getURI(String type, String request) {
+    try {
+      String encodedIndexName = URLEncoder.encode(indexName, UTF_8.toString());
+      if (SEARCH.equals(request) && client.adapter().omitType()) {
+        return encodedIndexName + "/" + request;
+      }
+      String encodedTypeIfAny =
+          client.adapter().omitType() ? "" : "/" + URLEncoder.encode(type, UTF_8.toString());
+      return encodedIndexName + encodedTypeIfAny + "/" + request;
+    } catch (UnsupportedEncodingException e) {
+      throw new StorageException(e);
     }
-    String encodedType = URLEncoder.encode(type, UTF_8.toString());
-    return encodedIndexName + "/" + encodedType + "/" + request;
   }
 
-  protected Response postRequest(String uri, Object payload) throws IOException {
+  protected Response postRequest(String uri, Object payload) {
     return performRequest("POST", uri, payload);
   }
 
-  protected Response postRequest(String uri, Object payload, Map<String, String> params)
-      throws IOException {
+  protected Response postRequest(String uri, Object payload, Map<String, String> params) {
     return performRequest("POST", uri, payload, params);
   }
 
@@ -318,18 +337,16 @@ abstract class AbstractElasticIndex<K, V> implements Index<K, V> {
     return target.substring(0, target.length() - 1) + "," + addition.substring(1);
   }
 
-  private Response performRequest(String method, String uri) throws IOException {
+  private Response performRequest(String method, String uri) {
     return performRequest(method, uri, null);
   }
 
-  private Response performRequest(String method, String uri, @Nullable Object payload)
-      throws IOException {
+  private Response performRequest(String method, String uri, @Nullable Object payload) {
     return performRequest(method, uri, payload, Collections.emptyMap());
   }
 
   private Response performRequest(
-      String method, String uri, @Nullable Object payload, Map<String, String> params)
-      throws IOException {
+      String method, String uri, @Nullable Object payload, Map<String, String> params) {
     Request request = new Request(method, uri.startsWith("/") ? uri : "/" + uri);
     if (payload != null) {
       String payloadStr = payload instanceof String ? (String) payload : payload.toString();
@@ -338,7 +355,11 @@ abstract class AbstractElasticIndex<K, V> implements Index<K, V> {
     for (Map.Entry<String, String> entry : params.entrySet()) {
       request.addParameter(entry.getKey(), entry.getValue());
     }
-    return client.get().performRequest(request);
+    try {
+      return client.get().performRequest(request);
+    } catch (IOException e) {
+      throw new StorageException(e);
+    }
   }
 
   protected class ElasticQuerySource implements DataSource<V> {
@@ -366,18 +387,17 @@ abstract class AbstractElasticIndex<K, V> implements Index<K, V> {
     }
 
     @Override
-    public ResultSet<V> read() throws OrmException {
+    public ResultSet<V> read() {
       return readImpl((doc) -> AbstractElasticIndex.this.fromDocument(doc, opts.fields()));
     }
 
     @Override
-    public ResultSet<FieldBundle> readRaw() throws OrmException {
+    public ResultSet<FieldBundle> readRaw() {
       return readImpl(AbstractElasticIndex.this::toFieldBundle);
     }
 
-    private <T> ResultSet<T> readImpl(Function<JsonObject, T> mapper) throws OrmException {
+    private <T> ResultSet<T> readImpl(Function<JsonObject, T> mapper) {
       try {
-        List<T> results = Collections.emptyList();
         String uri = getURI(index, SEARCH);
         Response response =
             performRequest(HttpPost.METHOD_NAME, uri, search, Collections.emptyMap());
@@ -388,36 +408,21 @@ abstract class AbstractElasticIndex<K, V> implements Index<K, V> {
               new JsonParser().parse(content).getAsJsonObject().getAsJsonObject("hits");
           if (obj.get("hits") != null) {
             JsonArray json = obj.getAsJsonArray("hits");
-            results = Lists.newArrayListWithCapacity(json.size());
+            ImmutableList.Builder<T> results = ImmutableList.builderWithExpectedSize(json.size());
             for (int i = 0; i < json.size(); i++) {
               T mapperResult = mapper.apply(json.get(i).getAsJsonObject());
               if (mapperResult != null) {
                 results.add(mapperResult);
               }
             }
+            return new ListResultSet<>(results.build());
           }
         } else {
           logger.atSevere().log(statusLine.getReasonPhrase());
         }
-        final List<T> r = Collections.unmodifiableList(results);
-        return new ResultSet<T>() {
-          @Override
-          public Iterator<T> iterator() {
-            return r.iterator();
-          }
-
-          @Override
-          public List<T> toList() {
-            return r;
-          }
-
-          @Override
-          public void close() {
-            // Do nothing.
-          }
-        };
+        return new ListResultSet<>(ImmutableList.of());
       } catch (IOException e) {
-        throw new OrmException(e);
+        throw new StorageException(e);
       }
     }
   }

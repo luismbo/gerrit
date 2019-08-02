@@ -14,8 +14,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-<style is="custom-style">
-:root {
+<custom-style><style is="custom-style">
+html {
   /* Following vars have LTS for plugin API. */
   --primary-text-color: #000;
   --header-background-color: #eee;
@@ -133,10 +133,12 @@ limitations under the License.
   --syntax-selector-attr-color: #FA8602;
   --syntax-template-tag-color: #FA8602;
   --syntax-param-color: var(--primary-text-color);
+
+  --reply-overlay-z-index: 1000;
 }
 @media screen and (max-width: 50em) {
-  :root {
+  html {
     --default-horizontal-margin: .7rem;
   }
 }
-</style>
+</style></custom-style>

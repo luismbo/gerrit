@@ -16,14 +16,15 @@ package com.google.gerrit.server.git;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.extensions.proto.ProtoTruth.assertThat;
-import static com.google.gerrit.server.cache.testing.SerializedClassSubject.assertThatSerializedClass;
+import static com.google.gerrit.proto.testing.SerializedClassSubject.assertThatSerializedClass;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.server.cache.proto.Cache.TagSetHolderProto;
+import com.google.gerrit.testing.GerritBaseTests;
 import org.junit.Test;
 
-public class TagSetHolderTest {
+public class TagSetHolderTest extends GerritBaseTests {
   @Test
   public void serializerWithTagSet() throws Exception {
     TagSetHolder holder = new TagSetHolder(new Project.NameKey("project"));

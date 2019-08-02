@@ -14,9 +14,6 @@
 
 package com.google.gerrit.elasticsearch;
 
-import static com.google.gerrit.reviewdb.server.ReviewDbCodecs.APPROVAL_CODEC;
-import static com.google.gerrit.reviewdb.server.ReviewDbCodecs.CHANGE_CODEC;
-import static com.google.gerrit.reviewdb.server.ReviewDbCodecs.PATCH_SET_CODEC;
 import static com.google.gerrit.server.index.change.ChangeIndexRewriter.CLOSED_STATUSES;
 import static com.google.gerrit.server.index.change.ChangeIndexRewriter.OPEN_STATUSES;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -36,6 +33,7 @@ import com.google.gerrit.elasticsearch.bulk.BulkRequest;
 import com.google.gerrit.elasticsearch.bulk.DeleteRequest;
 import com.google.gerrit.elasticsearch.bulk.IndexRequest;
 import com.google.gerrit.elasticsearch.bulk.UpdateRequest;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.index.QueryOptions;
 import com.google.gerrit.index.Schema;
 import com.google.gerrit.index.query.DataSource;
@@ -43,9 +41,10 @@ import com.google.gerrit.index.query.Predicate;
 import com.google.gerrit.index.query.QueryParseException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
-import com.google.gerrit.reviewdb.client.Change.Id;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
+import com.google.gerrit.reviewdb.converter.ChangeProtoConverter;
+import com.google.gerrit.reviewdb.converter.PatchSetApprovalProtoConverter;
+import com.google.gerrit.reviewdb.converter.PatchSetProtoConverter;
 import com.google.gerrit.server.ReviewerByEmailSet;
 import com.google.gerrit.server.ReviewerSet;
 import com.google.gerrit.server.StarredChangesUtil;
@@ -59,11 +58,8 @@ import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
-import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -93,47 +89,40 @@ class ElasticChangeIndex extends AbstractElasticIndex<Change.Id, ChangeData>
   private static final String CLOSED_CHANGES = "closed_" + CHANGES;
 
   private final ChangeMapping mapping;
-  private final Provider<ReviewDb> db;
   private final ChangeData.Factory changeDataFactory;
   private final Schema<ChangeData> schema;
 
   @Inject
   ElasticChangeIndex(
       ElasticConfiguration cfg,
-      Provider<ReviewDb> db,
       ChangeData.Factory changeDataFactory,
       SitePaths sitePaths,
       ElasticRestClientProvider clientBuilder,
       @Assisted Schema<ChangeData> schema) {
     super(cfg, sitePaths, schema, clientBuilder, CHANGES);
-    this.db = db;
     this.changeDataFactory = changeDataFactory;
     this.schema = schema;
     mapping = new ChangeMapping(schema, client.adapter());
   }
 
   @Override
-  public void replace(ChangeData cd) throws IOException {
+  public void replace(ChangeData cd) {
     String deleteIndex;
     String insertIndex;
 
-    try {
-      if (cd.change().getStatus().isOpen()) {
-        insertIndex = OPEN_CHANGES;
-        deleteIndex = CLOSED_CHANGES;
-      } else {
-        insertIndex = CLOSED_CHANGES;
-        deleteIndex = OPEN_CHANGES;
-      }
-    } catch (OrmException e) {
-      throw new IOException(e);
+    if (cd.change().isNew()) {
+      insertIndex = OPEN_CHANGES;
+      deleteIndex = CLOSED_CHANGES;
+    } else {
+      insertIndex = CLOSED_CHANGES;
+      deleteIndex = OPEN_CHANGES;
     }
 
     ElasticQueryAdapter adapter = client.adapter();
     BulkRequest bulk =
         new IndexRequest(getId(cd), indexName, adapter.getType(insertIndex), adapter)
             .add(new UpdateRequest<>(schema, cd));
-    if (!adapter.usePostV5Type()) {
+    if (adapter.deleteToReplace()) {
       bulk.add(new DeleteRequest(cd.getId().toString(), indexName, deleteIndex, adapter));
     }
 
@@ -141,7 +130,7 @@ class ElasticChangeIndex extends AbstractElasticIndex<Change.Id, ChangeData>
     Response response = postRequest(uri, bulk, getRefreshParam());
     int statusCode = response.getStatusLine().getStatusCode();
     if (statusCode != HttpStatus.SC_OK) {
-      throw new IOException(
+      throw new StorageException(
           String.format(
               "Failed to replace change %s in index %s: %s", cd.getId(), indexName, statusCode));
     }
@@ -152,17 +141,19 @@ class ElasticChangeIndex extends AbstractElasticIndex<Change.Id, ChangeData>
       throws QueryParseException {
     Set<Change.Status> statuses = ChangeIndexRewriter.getPossibleStatus(p);
     List<String> indexes = Lists.newArrayListWithCapacity(2);
-    if (client.adapter().usePostV5Type()) {
-      if (!Sets.intersection(statuses, OPEN_STATUSES).isEmpty()
-          || !Sets.intersection(statuses, CLOSED_STATUSES).isEmpty()) {
-        indexes.add(ElasticQueryAdapter.POST_V5_TYPE);
-      }
-    } else {
-      if (!Sets.intersection(statuses, OPEN_STATUSES).isEmpty()) {
-        indexes.add(OPEN_CHANGES);
-      }
-      if (!Sets.intersection(statuses, CLOSED_STATUSES).isEmpty()) {
-        indexes.add(CLOSED_CHANGES);
+    if (!client.adapter().omitType()) {
+      if (client.adapter().useV6Type()) {
+        if (!Sets.intersection(statuses, OPEN_STATUSES).isEmpty()
+            || !Sets.intersection(statuses, CLOSED_STATUSES).isEmpty()) {
+          indexes.add(ElasticQueryAdapter.V6_TYPE);
+        }
+      } else {
+        if (!Sets.intersection(statuses, OPEN_STATUSES).isEmpty()) {
+          indexes.add(OPEN_CHANGES);
+        }
+        if (!Sets.intersection(statuses, CLOSED_STATUSES).isEmpty()) {
+          indexes.add(CLOSED_CHANGES);
+        }
       }
     }
 
@@ -173,7 +164,6 @@ class ElasticChangeIndex extends AbstractElasticIndex<Change.Id, ChangeData>
   private JsonArray getSortArray() {
     JsonObject properties = new JsonObject();
     properties.addProperty(ORDER, "desc");
-    client.adapter().setIgnoreUnmapped(properties);
 
     JsonArray sortArray = new JsonArray();
     addNamedElement(ChangeField.UPDATED.getName(), properties, sortArray);
@@ -186,17 +176,17 @@ class ElasticChangeIndex extends AbstractElasticIndex<Change.Id, ChangeData>
   }
 
   @Override
-  protected String getDeleteActions(Id c) {
-    if (client.adapter().usePostV5Type()) {
-      return delete(ElasticQueryAdapter.POST_V5_TYPE, c);
+  protected String getDeleteActions(Change.Id c) {
+    if (!client.adapter().useV5Type()) {
+      return delete(client.adapter().getType(), c);
     }
     return delete(OPEN_CHANGES, c) + delete(CLOSED_CHANGES, c);
   }
 
   @Override
   protected String getMappings() {
-    if (client.adapter().usePostV5Type()) {
-      return getMappingsFor(ElasticQueryAdapter.POST_V5_TYPE, mapping.changes);
+    if (!client.adapter().useV5Type()) {
+      return getMappingsFor(client.adapter().getType(), mapping.changes);
     }
     return gson.toJson(ImmutableMap.of(MAPPINGS, mapping));
   }
@@ -219,22 +209,24 @@ class ElasticChangeIndex extends AbstractElasticIndex<Change.Id, ChangeData>
       int id = source.get(ChangeField.LEGACY_ID.getName()).getAsInt();
       // IndexUtils#changeFields ensures either CHANGE or PROJECT is always present.
       String projectName = requireNonNull(source.get(ChangeField.PROJECT.getName()).getAsString());
-      return changeDataFactory.create(
-          db.get(), new Project.NameKey(projectName), new Change.Id(id));
+      return changeDataFactory.create(new Project.NameKey(projectName), new Change.Id(id));
     }
 
     ChangeData cd =
         changeDataFactory.create(
-            db.get(), CHANGE_CODEC.decode(Base64.decodeBase64(c.getAsString())));
+            parseProtoFrom(Base64.decodeBase64(c.getAsString()), ChangeProtoConverter.INSTANCE));
 
     // Any decoding that is done here must also be done in {@link LuceneChangeIndex}.
 
     // Patch sets.
-    cd.setPatchSets(decodeProtos(source, ChangeField.PATCH_SET.getName(), PATCH_SET_CODEC));
+    cd.setPatchSets(
+        decodeProtos(source, ChangeField.PATCH_SET.getName(), PatchSetProtoConverter.INSTANCE));
 
     // Approvals.
     if (source.get(ChangeField.APPROVAL.getName()) != null) {
-      cd.setCurrentApprovals(decodeProtos(source, ChangeField.APPROVAL.getName(), APPROVAL_CODEC));
+      cd.setCurrentApprovals(
+          decodeProtos(
+              source, ChangeField.APPROVAL.getName(), PatchSetApprovalProtoConverter.INSTANCE));
     } else if (fields.contains(ChangeField.APPROVAL.getName())) {
       cd.setCurrentApprovals(Collections.emptyList());
     }

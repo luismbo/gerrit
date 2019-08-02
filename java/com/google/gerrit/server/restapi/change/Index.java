@@ -17,7 +17,6 @@ package com.google.gerrit.server.restapi.change;
 import com.google.gerrit.extensions.common.Input;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.Response;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.index.change.ChangeIndexer;
 import com.google.gerrit.server.permissions.GlobalPermission;
@@ -26,27 +25,18 @@ import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.Singleton;
 import java.io.IOException;
 
 @Singleton
 public class Index extends RetryingRestModifyView<ChangeResource, Input, Response<?>> {
-
-  private final Provider<ReviewDb> db;
   private final PermissionBackend permissionBackend;
   private final ChangeIndexer indexer;
 
   @Inject
-  Index(
-      Provider<ReviewDb> db,
-      RetryHelper retryHelper,
-      PermissionBackend permissionBackend,
-      ChangeIndexer indexer) {
+  Index(RetryHelper retryHelper, PermissionBackend permissionBackend, ChangeIndexer indexer) {
     super(retryHelper);
-    this.db = db;
     this.permissionBackend = permissionBackend;
     this.indexer = indexer;
   }
@@ -54,9 +44,9 @@ public class Index extends RetryingRestModifyView<ChangeResource, Input, Respons
   @Override
   protected Response<?> applyImpl(
       BatchUpdate.Factory updateFactory, ChangeResource rsrc, Input input)
-      throws IOException, AuthException, OrmException, PermissionBackendException {
+      throws IOException, AuthException, PermissionBackendException {
     permissionBackend.currentUser().check(GlobalPermission.MAINTAIN_SERVER);
-    indexer.index(db.get(), rsrc.getChange());
+    indexer.index(rsrc.getChange());
     return Response.none();
   }
 }

@@ -22,6 +22,7 @@
 
   Polymer({
     is: 'gr-autocomplete',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when a value is chosen.
@@ -210,7 +211,8 @@
     },
 
     get _inputElement() {
-      return this.$.input;
+      // Polymer2: this.$ can be undefined when this is first evaluated.
+      return this.$ && this.$.input;
     },
 
     /**

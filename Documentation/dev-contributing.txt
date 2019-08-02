@@ -17,10 +17,10 @@ link:https://gerrit-review.googlesource.com/#/settings/agreements[Agreements]
 tab on the settings page
 * Click 'New Contributor Agreement' and follow the instructions
 
-For reference, the actual agreements are linked below
+For reference, the actual agreements are linked below:
 
-* link:https://cla.developers.google.com/about/android-individual[Individual Agreement]
-* link:https://source.android.com/source/cla-corporate.pdf[Corporate Agreement]
+* link:https://cla.developers.google.com/about/google-individual[Individual Agreement]
+* link:https://cla.developers.google.com/about/google-corporate[Corporate Agreement]
 
 == Code Review
 As Gerrit is a code review tool, naturally contributions will
@@ -166,7 +166,7 @@ To format Java source code, Gerrit uses the
 link:https://github.com/google/google-java-format[`google-java-format`]
 tool (version 1.7), and to format Bazel BUILD, WORKSPACE and .bzl files the
 link:https://github.com/bazelbuild/buildtools/tree/master/buildifier[`buildifier`]
-tool (version 0.20.0).
+tool (version 0.26.0).
 These tools automatically apply format according to the style guides; this
 streamlines code review by reducing the need for time-consuming, tedious,
 and contentious discussions about trivial issues like whitespace.
@@ -250,7 +250,6 @@ back and consult this section when creating them.
 Here are some design level objectives that you should keep in mind
 when coding:
 
-  * ORM entity objects should match exactly one row in the database.
   * Most client pages should perform only one RPC to load so as to
     keep latencies down.  Exceptions would apply to RPCs which need
     to load large data sets if splitting them out will help the
@@ -269,11 +268,11 @@ when coding:
   * Don't leave repository objects (git or schema) open.  A .close()
     after every open should be placed in a finally{} block.
   * Don't leave UI components, which can cause new actions to occur,
-    enabled during RPCs which update the DB.  This is to prevent
-    people from submitting actions more than once when operating
-    on slow links.  If the action buttons are disabled, they cannot
-    be resubmitted and the user can see that Gerrit is still busy.
-  * GWT EventBus is the new way forward.
+    enabled during RPCs which update Git repositories, including NoteDb.
+    This is to prevent people from submitting actions more than once
+    when operating on slow links.  If the action buttons are disabled,
+    they cannot be resubmitted and the user can see that Gerrit is still
+    busy.
   * ...and so is Guava (previously known as Google Collections).
 
 
@@ -322,31 +321,44 @@ especially if changing one without the other will break something!
 [[process]]
 == Process
 
+[[dev-in-stable-branches]]
+=== Development in stable branches
+
+As their name suggests stable branches are intended to be stable. This means that generally
+only bug-fixes should be done on stable branches, however this is not strictly enforced and
+exceptions may apply:
+
+  * When a stable branch is initially created to prepare a new release the Gerrit community
+    discusses on the mailing list if there are pending features which should still make it into the
+    release. Those features are blocking the release and should be implemented on the stable
+    branch before the first release candidate is created.
+  * To stabilize the code before doing a major release several release candidates are created. Once
+    the first release candidate was done no more features should be accepted on the stable branch.
+    If more features are found to be required they should be discussed with the Gerrit maintainers
+    and should only be allowed if the risk of breaking things is considered to be low.
+  * Once a major release is done only bug-fixes and documentation updates should be done on the
+    stable branch. These updates will be included in the next minor release.
+  * For minor releases new features are only acceptable if they are important to the Gerrit
+    community, if they are backwards compatible and the risk of breaking things is low and if there
+    are no objections from the Gerrit community.
+  * In cases of doubt it's the responsibility of the release maintainer to evaluate the risk of new
+    features and make a decision based on these rules and opinions from the Gerrit community.
+  * The older a stable branch is the more stable it should be. This means old stable branches
+    should only receive bug-fixes that are either important or low risk. Security fixes, including
+    security updates for third party dependencies, are always considered as important and hence can
+    always be done on stable branches.
+
 === Backporting to stable branches
 
 From time to time bug fix releases are made for existing stable branches.
 
-Developers concerned with stable branches are encouraged to backport or push
-patchsets to these branches, even if no new release is planned.
+Developers concerned with stable branches are encouraged to backport or push fixes to these
+branches, even if no new release is planned. Backporting features is only possible in compliance
+with the rules link:#dev-in-stable-branches[above].
 
-Fixes that are known to be needed for a particular release should be pushed
-for review on that release's stable branch.  It will then be included in
-the master branch when the stable branch is merged back.
-
-=== Updating to new version of GWT
-
-When updating to a new version of GWT, there are several things that also need
-to be updated or at least checked.
-
-* Update common and plugin dependencies in `tools/gwt-constants.defs`.
-* Update to the same GWT version in the cookbook plugin and optionally in other
-plugins that have a dependency on GWT.
-* Update the GWT version in the archetype metadata in the
-`gerrit-plugin-gwt-archetype`.
-* Update the version of `gwt-maven-plugin` in the example pom.xml file in
-link:dev-plugins.html[dev-plugins].
-* Update to the same GWT version in the `gwtjsonrpc` project, and release a
-new version.
+Fixes that are known to be needed for a particular release should be pushed for review on that
+release's stable branch. They will then be included into the master branch when the stable branch
+is merged back.
 
 === Finding starter projects to work on
 
@@ -379,20 +391,21 @@ is that we have a structured process for deprecation that users, administrators 
 developers can agree and rely on.
 
 General process:
-* Make sure that the feature (e.g. a field on the API) is not needed anymore or blocks
-  further development or improvement. If in doubt, consult the mailing list.
-* If you can provide a schema migration that moves users to a comparable feature, do
-  so and stop here.
-* Mark the feature as deprecated in the documentation and release notes.
-* If possible, mark the feature deprecated in any user-visible interface. For example,
-  if you are deprecating a Git push option, add a message to the Git response if
-  the user provided the option informing them about deprecation.
-* Annotate the code with `@Deprecated` and `@RemoveAfter(x.xx)` if applicable.
-  Alternatively, use `// DEPRECATED, remove after x.xx` (where x.xx is the version
-  number that has to be branched off before removing the feature)
-* Gate the feature behind a config that is off by default (forcing admins to turn
-  the deprecated feature on explicitly).
-* After the next release was branched off, remove any code that backed the feature.
+
+  * Make sure that the feature (e.g. a field on the API) is not needed anymore or blocks
+    further development or improvement. If in doubt, consult the mailing list.
+  * If you can provide a schema migration that moves users to a comparable feature, do
+    so and stop here.
+  * Mark the feature as deprecated in the documentation and release notes.
+  * If possible, mark the feature deprecated in any user-visible interface. For example,
+    if you are deprecating a Git push option, add a message to the Git response if
+    the user provided the option informing them about deprecation.
+  * Annotate the code with `@Deprecated` and `@RemoveAfter(x.xx)` if applicable.
+    Alternatively, use `// DEPRECATED, remove after x.xx` (where x.xx is the version
+    number that has to be branched off before removing the feature)
+  * Gate the feature behind a config that is off by default (forcing admins to turn
+    the deprecated feature on explicitly).
+  * After the next release was branched off, remove any code that backed the feature.
 
 You can optionally consult the mailing list to ask if there are users of the feature you
 wish to deprecate. If there are no major users, you can remove the feature without

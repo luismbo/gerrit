@@ -45,13 +45,15 @@ npm_binary = repository_rule(
     implementation = _npm_binary_impl,
 )
 
+ComponentInfo = provider()
+
 # for use in repo rules.
 def _run_npm_binary_str(ctx, tarball, args):
     python_bin = ctx.which("python")
     return " ".join([
-        python_bin,
-        ctx.path(ctx.attr._run_npm),
-        ctx.path(tarball),
+        str(python_bin),
+        str(ctx.path(ctx.attr._run_npm)),
+        str(ctx.path(tarball)),
     ] + args)
 
 def _bower_archive(ctx):
@@ -133,31 +135,29 @@ bower_archive = repository_rule(
 def _bower_component_impl(ctx):
     transitive_zipfiles = depset(
         direct = [ctx.file.zipfile],
-        transitive = [d.transitive_zipfiles for d in ctx.attr.deps],
+        transitive = [d[ComponentInfo].transitive_zipfiles for d in ctx.attr.deps],
     )
 
     transitive_licenses = depset(
         direct = [ctx.file.license],
-        transitive = [d.transitive_licenses for d in ctx.attr.deps],
+        transitive = [d[ComponentInfo].transitive_licenses for d in ctx.attr.deps],
     )
 
     transitive_versions = depset(
         direct = ctx.files.version_json,
-        transitive = [d.transitive_versions for d in ctx.attr.deps],
+        transitive = [d[ComponentInfo].transitive_versions for d in ctx.attr.deps],
     )
 
-    return struct(
-        transitive_licenses = transitive_licenses,
-        transitive_versions = transitive_versions,
-        transitive_zipfiles = transitive_zipfiles,
-    )
+    return [
+        ComponentInfo(
+            transitive_licenses = transitive_licenses,
+            transitive_versions = transitive_versions,
+            transitive_zipfiles = transitive_zipfiles,
+        ),
+    ]
 
 _common_attrs = {
-    "deps": attr.label_list(providers = [
-        "transitive_zipfiles",
-        "transitive_versions",
-        "transitive_licenses",
-    ]),
+    "deps": attr.label_list(providers = [ComponentInfo]),
 }
 
 def _js_component(ctx):
@@ -187,11 +187,13 @@ def _js_component(ctx):
     if ctx.file.license:
         licenses.append(ctx.file.license)
 
-    return struct(
-        transitive_licenses = depset(licenses),
-        transitive_versions = depset(),
-        transitive_zipfiles = list([ctx.outputs.zip]),
-    )
+    return [
+        ComponentInfo(
+            transitive_licenses = depset(licenses),
+            transitive_versions = depset(),
+            transitive_zipfiles = list([ctx.outputs.zip]),
+        ),
+    ]
 
 js_component = rule(
     _js_component,
@@ -233,16 +235,16 @@ def _bower_component_bundle_impl(ctx):
     """A bunch of bower components zipped up."""
     zips = depset()
     for d in ctx.attr.deps:
-        files = d.transitive_zipfiles
+        files = d[ComponentInfo].transitive_zipfiles
 
         # TODO(davido): Make sure the field always contains a depset
         if type(files) == "list":
             files = depset(files)
         zips = depset(transitive = [zips, files])
 
-    versions = depset(transitive = [d.transitive_versions for d in ctx.attr.deps])
+    versions = depset(transitive = [d[ComponentInfo].transitive_versions for d in ctx.attr.deps])
 
-    licenses = depset(transitive = [d.transitive_versions for d in ctx.attr.deps])
+    licenses = depset(transitive = [d[ComponentInfo].transitive_versions for d in ctx.attr.deps])
 
     out_zip = ctx.outputs.zip
     out_versions = ctx.outputs.version_json
@@ -272,11 +274,13 @@ def _bower_component_bundle_impl(ctx):
         command = "(echo '{' ; for j in  %s ; do cat $j; echo ',' ; done ; echo \\\"\\\":\\\"\\\"; echo '}') > %s" % (" ".join([v.path for v in versions.to_list()]), out_versions.path),
     )
 
-    return struct(
-        transitive_licenses = licenses,
-        transitive_versions = versions,
-        transitive_zipfiles = zips,
-    )
+    return [
+        ComponentInfo(
+            transitive_licenses = licenses,
+            transitive_versions = versions,
+            transitive_zipfiles = zips,
+        ),
+    ]
 
 bower_component_bundle = rule(
     _bower_component_bundle_impl,
@@ -304,7 +308,7 @@ def _bundle_impl(ctx):
     else:
         bundled = ctx.outputs.html
     destdir = ctx.outputs.html.path + ".dir"
-    zips = [z for d in ctx.attr.deps for z in d.transitive_zipfiles]
+    zips = [z for d in ctx.attr.deps for z in d[ComponentInfo].transitive_zipfiles.to_list()]
 
     hermetic_npm_binary = " ".join([
         "python",
@@ -404,7 +408,7 @@ _bundle_rule = rule(
         ),
         "pkg": attr.string(mandatory = True),
         "split": attr.bool(default = True),
-        "deps": attr.label_list(providers = ["transitive_zipfiles"]),
+        "deps": attr.label_list(providers = [ComponentInfo]),
         "_bundler_archive": attr.label(
             default = Label("@polymer-bundler//:%s" % _npm_tarball("polymer-bundler")),
             allow_single_file = True,
@@ -425,7 +429,7 @@ def bundle_assets(*args, **kwargs):
     """Combine html, js, css files and optionally split into js and html bundles."""
     _bundle_rule(pkg = native.package_name(), *args, **kwargs)
 
-def polygerrit_plugin(name, app, srcs = [], deps = [], assets = None, plugin_name = None, **kwargs):
+def polygerrit_plugin(name, app, srcs = [], deps = [], externs = [], assets = None, plugin_name = None, **kwargs):
     """Bundles plugin dependencies for deployment.
 
     This rule bundles all Polymer elements and JS dependencies into .html and .js files.
@@ -435,6 +439,7 @@ def polygerrit_plugin(name, app, srcs = [], deps = [], assets = None, plugin_nam
     Args:
       name: String, rule name.
       app: String, the main or root source file.
+      externs: Fileset, external definitions that should not be bundled.
       assets: Fileset, additional files to be used by plugin in runtime, exported to "plugins/${name}/static".
       plugin_name: String, plugin name. ${name} is used if not provided.
     """
@@ -460,7 +465,7 @@ def polygerrit_plugin(name, app, srcs = [], deps = [], assets = None, plugin_nam
 
     closure_js_library(
         name = name + "_closure_lib",
-        srcs = js_srcs,
+        srcs = js_srcs + externs,
         convention = "GOOGLE",
         no_closure_library = True,
         deps = [

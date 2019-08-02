@@ -24,7 +24,6 @@ import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.server.query.change.ChangeData;
-import com.google.gwtorm.server.OrmException;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -61,14 +60,12 @@ public class ChangeSet {
   }
 
   public ChangeSet(Iterable<ChangeData> changes, Iterable<ChangeData> hiddenChanges) {
-    changeData = index(changes, ImmutableList.<Change.Id>of());
+    changeData = index(changes, ImmutableList.of());
     nonVisibleChanges = index(hiddenChanges, changeData.keySet());
   }
 
   public ChangeSet(ChangeData change, boolean visible) {
-    this(
-        visible ? ImmutableList.of(change) : ImmutableList.<ChangeData>of(),
-        ImmutableList.of(change));
+    this(visible ? ImmutableList.of(change) : ImmutableList.of(), ImmutableList.of(change));
   }
 
   public ImmutableSet<Change.Id> ids() {
@@ -79,7 +76,7 @@ public class ChangeSet {
     return changeData;
   }
 
-  public ListMultimap<Branch.NameKey, ChangeData> changesByBranch() throws OrmException {
+  public ListMultimap<Branch.NameKey, ChangeData> changesByBranch() {
     ListMultimap<Branch.NameKey, ChangeData> ret =
         MultimapBuilder.hashKeys().arrayListValues().build();
     for (ChangeData cd : changeData.values()) {

@@ -34,6 +34,7 @@ import com.google.gerrit.acceptance.GitUtil;
 import com.google.gerrit.acceptance.NoHttpd;
 import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.TestAccount;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.changes.CherryPickInput;
@@ -46,6 +47,7 @@ import com.google.gerrit.extensions.common.CommitInfo;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.project.testing.Util;
+import com.google.inject.Inject;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -58,6 +60,7 @@ import org.junit.Test;
 
 @NoHttpd
 public class StickyApprovalsIT extends AbstractDaemonTest {
+  @Inject private RequestScopeOperations requestScopeOperations;
 
   @Before
   public void setup() throws Exception {
@@ -419,8 +422,8 @@ public class StickyApprovalsIT extends AbstractDaemonTest {
         testRepo.amendRef("HEAD").insertChangeId(changeId.substring(1));
     commitBuilder
         .message("New subject " + System.nanoTime())
-        .author(admin.getIdent())
-        .committer(new PersonIdent(admin.getIdent(), testRepo.getDate()));
+        .author(admin.newIdent())
+        .committer(new PersonIdent(admin.newIdent(), testRepo.getDate()));
     commitBuilder.create();
     GitUtil.pushHead(testRepo, "refs/for/master", false);
     assertThat(getChangeKind(changeId)).isEqualTo(NO_CODE_CHANGE);
@@ -434,8 +437,8 @@ public class StickyApprovalsIT extends AbstractDaemonTest {
         testRepo.amendRef("HEAD").insertChangeId(changeId.substring(1));
     commitBuilder
         .message(commitMessage)
-        .author(admin.getIdent())
-        .committer(new PersonIdent(admin.getIdent(), testRepo.getDate()));
+        .author(admin.newIdent())
+        .committer(new PersonIdent(admin.newIdent(), testRepo.getDate()));
     commitBuilder.create();
     GitUtil.pushHead(testRepo, "refs/for/master", false);
     assertThat(getChangeKind(changeId)).isEqualTo(NO_CHANGE);
@@ -444,8 +447,7 @@ public class StickyApprovalsIT extends AbstractDaemonTest {
   private void rework(String changeId) throws Exception {
     PushOneCommit push =
         pushFactory.create(
-            db,
-            admin.getIdent(),
+            admin.newIdent(),
             testRepo,
             PushOneCommit.SUBJECT,
             PushOneCommit.FILE_NAME,
@@ -456,12 +458,11 @@ public class StickyApprovalsIT extends AbstractDaemonTest {
   }
 
   private void trivialRebase(String changeId) throws Exception {
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     testRepo.reset(getRemoteHead());
     PushOneCommit push =
         pushFactory.create(
-            db,
-            admin.getIdent(),
+            admin.newIdent(),
             testRepo,
             "Other Change",
             "a" + System.nanoTime() + ".txt",
@@ -487,7 +488,7 @@ public class StickyApprovalsIT extends AbstractDaemonTest {
 
     testRepo.reset(parent1.getCommit());
 
-    PushOneCommit merge = pushFactory.create(db, admin.getIdent(), testRepo);
+    PushOneCommit merge = pushFactory.create(admin.newIdent(), testRepo);
     merge.setParents(ImmutableList.of(parent1.getCommit(), parent2.getCommit()));
     PushOneCommit.Result result = merge.to("refs/for/master");
     result.assertOkStatus();
@@ -504,7 +505,7 @@ public class StickyApprovalsIT extends AbstractDaemonTest {
     testRepo.reset(parent1);
     PushOneCommit.Result newParent1 = createChange("new parent 1", "p1-1.txt", "content 1-1");
 
-    PushOneCommit merge = pushFactory.create(db, admin.getIdent(), testRepo, changeId);
+    PushOneCommit merge = pushFactory.create(admin.newIdent(), testRepo, changeId);
     merge.setParents(ImmutableList.of(newParent1.getCommit(), commitParent2));
     PushOneCommit.Result result = merge.to("refs/for/master");
     result.assertOkStatus();
@@ -528,8 +529,7 @@ public class StickyApprovalsIT extends AbstractDaemonTest {
     PushOneCommit.Result r =
         pushFactory
             .create(
-                db,
-                admin.getIdent(),
+                admin.newIdent(),
                 testRepo,
                 PushOneCommit.SUBJECT,
                 "other.txt",
@@ -556,21 +556,21 @@ public class StickyApprovalsIT extends AbstractDaemonTest {
   }
 
   private void vote(TestAccount user, String changeId, String label, int vote) throws Exception {
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     gApi.changes().id(changeId).current().review(new ReviewInput().label(label, vote));
   }
 
   private void vote(TestAccount user, String changeId, int codeReviewVote, int verifiedVote)
       throws Exception {
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     ReviewInput in =
         new ReviewInput().label("Code-Review", codeReviewVote).label("Verified", verifiedVote);
     gApi.changes().id(changeId).current().review(in);
   }
 
   private void deleteVote(TestAccount user, String changeId, String label) throws Exception {
-    setApiUser(user);
-    gApi.changes().id(changeId).reviewer(user.getId().toString()).deleteVote(label);
+    requestScopeOperations.setApiUser(user.id());
+    gApi.changes().id(changeId).reviewer(user.id().toString()).deleteVote(label);
   }
 
   private void assertVotes(ChangeInfo c, TestAccount user, int codeReviewVote, int verifiedVote) {
@@ -588,7 +588,7 @@ public class StickyApprovalsIT extends AbstractDaemonTest {
     Integer vote = 0;
     if (c.labels.get(label) != null && c.labels.get(label).all != null) {
       for (ApprovalInfo approval : c.labels.get(label).all) {
-        if (approval._accountId == user.id.get()) {
+        if (approval._accountId == user.id().get()) {
           vote = approval.value;
           break;
         }

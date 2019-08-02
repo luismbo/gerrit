@@ -28,7 +28,6 @@ import com.google.gerrit.extensions.restapi.Url;
 import com.google.gerrit.reviewdb.client.Comment;
 import com.google.gerrit.reviewdb.client.PatchLineComment.Status;
 import com.google.gerrit.reviewdb.client.PatchSet;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CommentsUtil;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.change.RevisionResource;
@@ -42,7 +41,6 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -51,7 +49,6 @@ import java.util.Collections;
 @Singleton
 public class CreateDraftComment
     extends RetryingRestModifyView<RevisionResource, DraftInput, Response<CommentInfo>> {
-  private final Provider<ReviewDb> db;
   private final Provider<CommentJson> commentJson;
   private final CommentsUtil commentsUtil;
   private final PatchSetUtil psUtil;
@@ -59,14 +56,12 @@ public class CreateDraftComment
 
   @Inject
   CreateDraftComment(
-      Provider<ReviewDb> db,
       RetryHelper retryHelper,
       Provider<CommentJson> commentJson,
       CommentsUtil commentsUtil,
       PatchSetUtil psUtil,
       PatchListCache patchListCache) {
     super(retryHelper);
-    this.db = db;
     this.commentJson = commentJson;
     this.commentsUtil = commentsUtil;
     this.psUtil = psUtil;
@@ -76,7 +71,7 @@ public class CreateDraftComment
   @Override
   protected Response<CommentInfo> applyImpl(
       BatchUpdate.Factory updateFactory, RevisionResource rsrc, DraftInput in)
-      throws RestApiException, UpdateException, OrmException, PermissionBackendException {
+      throws RestApiException, UpdateException, PermissionBackendException {
     if (Strings.isNullOrEmpty(in.path)) {
       throw new BadRequestException("path must be non-empty");
     } else if (in.message == null || in.message.trim().isEmpty()) {
@@ -88,7 +83,7 @@ public class CreateDraftComment
     }
 
     try (BatchUpdate bu =
-        updateFactory.create(db.get(), rsrc.getProject(), rsrc.getUser(), TimeUtil.nowTs())) {
+        updateFactory.create(rsrc.getProject(), rsrc.getUser(), TimeUtil.nowTs())) {
       Op op = new Op(rsrc.getPatchSet().getId(), in);
       bu.addOp(rsrc.getChange().getId(), op);
       bu.execute();
@@ -110,9 +105,9 @@ public class CreateDraftComment
 
     @Override
     public boolean updateChange(ChangeContext ctx)
-        throws ResourceNotFoundException, OrmException, UnprocessableEntityException,
+        throws ResourceNotFoundException, UnprocessableEntityException,
             PatchListNotAvailableException {
-      PatchSet ps = psUtil.get(ctx.getDb(), ctx.getNotes(), psId);
+      PatchSet ps = psUtil.get(ctx.getNotes(), psId);
       if (ps == null) {
         throw new ResourceNotFoundException("patch set not found: " + psId);
       }
@@ -126,9 +121,7 @@ public class CreateDraftComment
 
       setCommentRevId(comment, patchListCache, ctx.getChange(), ps);
 
-      commentsUtil.putComments(
-          ctx.getDb(), ctx.getUpdate(psId), Status.DRAFT, Collections.singleton(comment));
-      ctx.dontBumpLastUpdatedOn();
+      commentsUtil.putComments(ctx.getUpdate(psId), Status.DRAFT, Collections.singleton(comment));
       return true;
     }
   }

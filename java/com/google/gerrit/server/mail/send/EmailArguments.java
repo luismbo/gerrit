@@ -14,16 +14,15 @@
 
 package com.google.gerrit.server.mail.send;
 
+import com.google.gerrit.common.UsedAt;
 import com.google.gerrit.extensions.registration.DynamicItem;
 import com.google.gerrit.extensions.registration.DynamicSet;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.AnonymousUser;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.GerritPersonIdentProvider;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.IdentifiedUser.GenericFactory;
 import com.google.gerrit.server.PatchSetUtil;
-import com.google.gerrit.server.UsedAt;
 import com.google.gerrit.server.account.AccountCache;
 import com.google.gerrit.server.account.GroupBackend;
 import com.google.gerrit.server.config.AllProjectsName;
@@ -75,7 +74,6 @@ public class EmailArguments {
   final SitePaths site;
 
   final ChangeQueryBuilder queryBuilder;
-  final Provider<ReviewDb> db;
   final ChangeData.Factory changeDataFactory;
   final SoyTofu soyTofu;
   final EmailSettings settings;
@@ -106,7 +104,6 @@ public class EmailArguments {
       DynamicItem<UrlFormatter> urlFormatter,
       AllProjectsName allProjectsName,
       ChangeQueryBuilder queryBuilder,
-      Provider<ReviewDb> db,
       ChangeData.Factory changeDataFactory,
       @MailTemplates SoyTofu soyTofu,
       EmailSettings settings,
@@ -136,7 +133,6 @@ public class EmailArguments {
     this.urlFormatter = urlFormatter;
     this.allProjectsName = allProjectsName;
     this.queryBuilder = queryBuilder;
-    this.db = db;
     this.changeDataFactory = changeDataFactory;
     this.soyTofu = soyTofu;
     this.settings = settings;

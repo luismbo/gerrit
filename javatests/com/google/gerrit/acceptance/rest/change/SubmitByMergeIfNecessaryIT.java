@@ -15,25 +15,28 @@
 package com.google.gerrit.acceptance.rest.change;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.TruthJUnit.assume;
 import static com.google.gerrit.server.group.SystemGroupBackend.ANONYMOUS_USERS;
 import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS;
 
 import com.google.gerrit.acceptance.GitUtil;
 import com.google.gerrit.acceptance.PushOneCommit;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperations;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.changes.ChangeApi;
 import com.google.gerrit.extensions.api.changes.CherryPickInput;
 import com.google.gerrit.extensions.api.changes.ReviewInput;
-import com.google.gerrit.extensions.api.changes.SubmitInput;
 import com.google.gerrit.extensions.api.projects.BranchInput;
-import com.google.gerrit.extensions.client.ChangeStatus;
 import com.google.gerrit.extensions.client.SubmitType;
+import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BinaryResult;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
+import com.google.inject.Inject;
 import java.io.File;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -51,6 +54,8 @@ import org.eclipse.jgit.transport.RefSpec;
 import org.junit.Test;
 
 public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
+  @Inject private ProjectOperations projectOperations;
+  @Inject private RequestScopeOperations requestScopeOperations;
 
   @Override
   protected SubmitType getSubmitType() {
@@ -66,8 +71,8 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
     assertThat(updatedHead.getId()).isEqualTo(change.getCommit());
     assertThat(updatedHead.getParent(0)).isEqualTo(initialHead);
     assertSubmitter(change.getChangeId(), 1);
-    assertPersonEquals(admin.getIdent(), updatedHead.getAuthorIdent());
-    assertPersonEquals(admin.getIdent(), updatedHead.getCommitterIdent());
+    assertPersonEquals(admin.newIdent(), updatedHead.getAuthorIdent());
+    assertPersonEquals(admin.newIdent(), updatedHead.getCommitterIdent());
 
     assertRefUpdatedEvents(initialHead, updatedHead);
     assertChangeMergedEvents(change.getChangeId(), updatedHead.name());
@@ -95,8 +100,8 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
     assertThat(headAfterFirstSubmit.getShortMessage())
         .isEqualTo(change2.getCommit().getShortMessage());
     assertThat(headAfterFirstSubmit.getParent(0).getId()).isEqualTo(initialHead.getId());
-    assertPersonEquals(admin.getIdent(), headAfterFirstSubmit.getAuthorIdent());
-    assertPersonEquals(admin.getIdent(), headAfterFirstSubmit.getCommitterIdent());
+    assertPersonEquals(admin.newIdent(), headAfterFirstSubmit.getAuthorIdent());
+    assertPersonEquals(admin.newIdent(), headAfterFirstSubmit.getCommitterIdent());
 
     // We need to merge changes 3, 4 and 5.
     approve(change3.getChangeId());
@@ -109,7 +114,7 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
     assertThat(headAfterSecondSubmit.getParent(0).getShortMessage())
         .isEqualTo(change2.getCommit().getShortMessage());
 
-    assertPersonEquals(admin.getIdent(), headAfterSecondSubmit.getAuthorIdent());
+    assertPersonEquals(admin.newIdent(), headAfterSecondSubmit.getAuthorIdent());
     assertPersonEquals(serverIdent.get(), headAfterSecondSubmit.getCommitterIdent());
 
     // First change stays untouched.
@@ -132,9 +137,9 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
 
   @Test
   public void submitChangesAcrossRepos() throws Exception {
-    Project.NameKey p1 = createProject("project-where-we-submit");
-    Project.NameKey p2 = createProject("project-impacted-via-topic");
-    Project.NameKey p3 = createProject("project-impacted-indirectly-via-topic");
+    Project.NameKey p1 = projectOperations.newProject().create();
+    Project.NameKey p2 = projectOperations.newProject().create();
+    Project.NameKey p3 = projectOperations.newProject().create();
 
     RevCommit initialHead2 = getRemoteHead(p2, "master");
     RevCommit initialHead3 = getRemoteHead(p3, "master");
@@ -209,9 +214,9 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
 
   @Test
   public void submitChangesAcrossReposBlocked() throws Exception {
-    Project.NameKey p1 = createProject("project-where-we-submit");
-    Project.NameKey p2 = createProject("project-impacted-via-topic");
-    Project.NameKey p3 = createProject("project-impacted-indirectly-via-topic");
+    Project.NameKey p1 = projectOperations.newProject().create();
+    Project.NameKey p2 = projectOperations.newProject().create();
+    Project.NameKey p3 = projectOperations.newProject().create();
 
     TestRepository<?> repo1 = cloneProject(p1);
     TestRepository<?> repo2 = cloneProject(p2);
@@ -388,7 +393,7 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
             "3",
             "a-topic-here");
 
-    Project.NameKey p3 = createProject("project-related-to-change3");
+    Project.NameKey p3 = projectOperations.newProject().create();
     TestRepository<?> repo3 = cloneProject(p3);
     RevCommit repo3Head = getRemoteHead(p3, "master");
     PushOneCommit.Result change3b =
@@ -440,8 +445,7 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
     gApi.projects().name(project.get()).branch("stable").create(new BranchInput());
 
     // Push a change to master
-    PushOneCommit push =
-        pushFactory.create(db, user.getIdent(), testRepo, "small fix", "a.txt", "2");
+    PushOneCommit push = pushFactory.create(user.newIdent(), testRepo, "small fix", "a.txt", "2");
     PushOneCommit.Result change = push.to("refs/for/master");
     submit(change.getChangeId());
     RevCommit headAfterFirstSubmit = getRemoteLog(project, "master").get(0);
@@ -493,8 +497,7 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
     gApi.projects().name(project.get()).branch("stable").create(new BranchInput());
 
     // Propose a change for master, but leave it open for master!
-    PushOneCommit change =
-        pushFactory.create(db, user.getIdent(), testRepo, "small fix", "a.txt", "2");
+    PushOneCommit change = pushFactory.create(user.newIdent(), testRepo, "small fix", "a.txt", "2");
     PushOneCommit.Result change2result = change.to("refs/for/master");
 
     // Now cherry pick to stable
@@ -531,13 +534,13 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
   @Test
   public void dependencyOnOutdatedPatchSetPreventsMerge() throws Exception {
     // Create a change
-    PushOneCommit change = pushFactory.create(db, user.getIdent(), testRepo, "fix", "a.txt", "foo");
+    PushOneCommit change = pushFactory.create(user.newIdent(), testRepo, "fix", "a.txt", "foo");
     PushOneCommit.Result changeResult = change.to("refs/for/master");
     PatchSet.Id patchSetId = changeResult.getPatchSetId();
 
     // Create a successor change.
     PushOneCommit change2 =
-        pushFactory.create(db, user.getIdent(), testRepo, "feature", "b.txt", "bar");
+        pushFactory.create(user.newIdent(), testRepo, "feature", "b.txt", "bar");
     PushOneCommit.Result change2Result = change2.to("refs/for/master");
 
     // Create new patch set for first change.
@@ -573,12 +576,12 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
   @Test
   public void dependencyOnDeletedChangePreventsMerge() throws Exception {
     // Create a change
-    PushOneCommit change = pushFactory.create(db, user.getIdent(), testRepo, "fix", "a.txt", "foo");
+    PushOneCommit change = pushFactory.create(user.newIdent(), testRepo, "fix", "a.txt", "foo");
     PushOneCommit.Result changeResult = change.to("refs/for/master");
 
     // Create a successor change.
     PushOneCommit change2 =
-        pushFactory.create(db, user.getIdent(), testRepo, "feature", "b.txt", "bar");
+        pushFactory.create(user.newIdent(), testRepo, "feature", "b.txt", "bar");
     PushOneCommit.Result change2Result = change2.to("refs/for/master");
 
     // Delete first change.
@@ -596,7 +599,9 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
             + " depends on commit "
             + changeResult.getCommit().name()
             + " which cannot be merged."
-            + " Is the change of this commit not visible or was it deleted?");
+            + " Is the change of this commit not visible to '"
+            + admin.username()
+            + "' or was it deleted?");
 
     assertRefUpdatedEvents();
     assertChangeMergedEvents();
@@ -608,14 +613,13 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
     grant(project, "refs/*", Permission.SUBMIT, false, REGISTERED_USERS);
 
     // Create a change
-    PushOneCommit change =
-        pushFactory.create(db, admin.getIdent(), testRepo, "fix", "a.txt", "foo");
+    PushOneCommit change = pushFactory.create(admin.newIdent(), testRepo, "fix", "a.txt", "foo");
     PushOneCommit.Result changeResult = change.to("refs/for/master");
     approve(changeResult.getChangeId());
 
     // Create a successor change.
     PushOneCommit change2 =
-        pushFactory.create(db, admin.getIdent(), testRepo, "feature", "b.txt", "bar");
+        pushFactory.create(admin.newIdent(), testRepo, "feature", "b.txt", "bar");
     PushOneCommit.Result change2Result = change2.to("refs/for/master");
 
     // Move the first change to a destination branch that is non-visible to user so that user cannot
@@ -628,7 +632,7 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
     gApi.changes().id(changeResult.getChangeId()).move(secretBranch.get());
     block(secretBranch.get(), "read", ANONYMOUS_USERS);
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
 
     // Verify that user cannot see the first change.
     try {
@@ -650,33 +654,34 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
             + " depends on commit "
             + changeResult.getCommit().name()
             + " which cannot be merged."
-            + " Is the change of this commit not visible or was it deleted?");
+            + " Is the change of this commit not visible to '"
+            + user.username()
+            + "' or was it deleted?");
 
     assertRefUpdatedEvents();
     assertChangeMergedEvents();
   }
 
   @Test
-  public void dependencyOnHiddenChangeShouldPreventMergeButDoesnt() throws Exception {
+  public void dependencyOnHiddenChangePreventsMerge() throws Exception {
     grantLabel("Code-Review", -2, 2, project, "refs/heads/*", false, REGISTERED_USERS, false);
     grant(project, "refs/*", Permission.SUBMIT, false, REGISTERED_USERS);
 
     // Create a change
-    PushOneCommit change =
-        pushFactory.create(db, admin.getIdent(), testRepo, "fix", "a.txt", "foo");
+    PushOneCommit change = pushFactory.create(admin.newIdent(), testRepo, "fix", "a.txt", "foo");
     PushOneCommit.Result changeResult = change.to("refs/for/master");
     approve(changeResult.getChangeId());
 
     // Create a successor change.
     PushOneCommit change2 =
-        pushFactory.create(db, admin.getIdent(), testRepo, "feature", "b.txt", "bar");
+        pushFactory.create(admin.newIdent(), testRepo, "feature", "b.txt", "bar");
     PushOneCommit.Result change2Result = change2.to("refs/for/master");
     approve(change2Result.getChangeId());
 
     // Mark the first change private so that it's not visible to user.
     gApi.changes().id(changeResult.getChangeId()).setPrivate(true, "nobody should see this");
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
 
     // Verify that user cannot see the first change.
     try {
@@ -686,23 +691,84 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
       assertThat(e.getMessage()).isEqualTo("Not found: " + changeResult.getChangeId());
     }
 
-    // Submit the second change which has a dependency on the first change which is not visible to
-    // the user. We would expect the submit to fail, but instead the submit succeeds and the hidden
-    // change gets submitted too.
-    // TODO(ekempin): Make this submit fail.
-    gApi.changes().id(change2Result.getChangeId()).current().submit(new SubmitInput());
+    // Submit is expected to fail.
+    try {
+      gApi.changes().id(change2Result.getChangeId()).current().submit();
+      fail("expected failure");
+    } catch (AuthException e) {
+      assertThat(e.getMessage())
+          .isEqualTo(
+              "A change to be submitted with "
+                  + change2Result.getChange().getId().id
+                  + " is not visible");
+    }
+    assertRefUpdatedEvents();
+    assertChangeMergedEvents();
+  }
 
-    // Verify that both changes have been submitted.
-    setApiUser(admin);
-    assertThat(gApi.changes().id(changeResult.getChangeId()).get().status)
-        .isEqualTo(ChangeStatus.MERGED);
-    assertThat(gApi.changes().id(change2Result.getChangeId()).get().status)
-        .isEqualTo(ChangeStatus.MERGED);
+  @Test
+  public void dependencyOnHiddenChangeUsingTopicPreventsMerge() throws Exception {
+    // Construct a topic where a change included by topic depends on a private change that is not
+    // visible to the submitting user
+    // (c1) --- topic --- (c2b)
+    //                      |
+    //                    (c2a) <= private
+    assume().that(isSubmitWholeTopicEnabled()).isTrue();
+
+    Project.NameKey p1 = projectOperations.newProject().create();
+    Project.NameKey p2 = projectOperations.newProject().create();
+
+    grantLabel("Code-Review", -2, 2, p1, "refs/heads/*", false, REGISTERED_USERS, false);
+    grant(p1, "refs/*", Permission.SUBMIT, false, REGISTERED_USERS);
+    grantLabel("Code-Review", -2, 2, p2, "refs/heads/*", false, REGISTERED_USERS, false);
+    grant(p2, "refs/*", Permission.SUBMIT, false, REGISTERED_USERS);
+
+    TestRepository<?> repo1 = cloneProject(p1);
+    TestRepository<?> repo2 = cloneProject(p2);
+
+    PushOneCommit.Result change1 =
+        createChange(repo1, "master", "A fresh change in repo1", "a.txt", "1", "topic-to-submit");
+    approve(change1.getChangeId());
+    PushOneCommit push =
+        pushFactory.create(admin.newIdent(), repo2, "An ancestor change in repo2", "a.txt", "2");
+    PushOneCommit.Result change2a = push.to("refs/for/master");
+    approve(change2a.getChangeId());
+    PushOneCommit.Result change2b =
+        createChange(
+            repo2, "master", "A topic-linked change in repo2", "a.txt", "2", "topic-to-submit");
+    approve(change2b.getChangeId());
+
+    // Mark change2a private so that it's not visible to user.
+    gApi.changes().id(change2a.getChangeId()).setPrivate(true, "nobody should see this");
+
+    requestScopeOperations.setApiUser(user.id());
+
+    // Verify that user cannot see change2a
+    try {
+      gApi.changes().id(change2a.getChangeId()).get();
+      fail("expected failure");
+    } catch (ResourceNotFoundException e) {
+      assertThat(e.getMessage()).isEqualTo("Not found: " + change2a.getChangeId());
+    }
+
+    // Submit is expected to fail.
+    try {
+      gApi.changes().id(change1.getChangeId()).current().submit();
+      fail("expected failure");
+    } catch (AuthException e) {
+      assertThat(e.getMessage())
+          .isEqualTo(
+              "A change to be submitted with "
+                  + change1.getChange().getId().id
+                  + " is not visible");
+    }
+    assertRefUpdatedEvents();
+    assertChangeMergedEvents();
   }
 
   @Test
   public void testPreviewSubmitTgz() throws Exception {
-    Project.NameKey p1 = createProject("project-name");
+    Project.NameKey p1 = projectOperations.newProject().create();
 
     TestRepository<?> repo1 = cloneProject(p1);
     PushOneCommit.Result change1 = createChange(repo1, "master", "test", "a.txt", "1", "topic");
@@ -727,6 +793,6 @@ public class SubmitByMergeIfNecessaryIT extends AbstractSubmitByMerge {
         untarredFiles.add(entry.getName());
       }
     }
-    assertThat(untarredFiles).containsExactly(name("project-name") + ".git");
+    assertThat(untarredFiles).containsExactly(p1.get() + ".git");
   }
 }

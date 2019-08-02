@@ -309,6 +309,14 @@ default. Optional fields are:
 * `SKIP_MERGEABLE`: skip the `mergeable` field in
 link:#change-info[ChangeInfo]. For fast moving projects, this field must
 be recomputed often, which is slow for projects with big trees.
++
+When link:config-gerrit.html#change.api.excludeMergeableInChangeInfo[
+`change.api.excludeMergeableInChangeInfo`] is set in the `gerrit.config`,
+the `mergeable` field will always be omitted and `SKIP_MERGEABLE` has no
+effect.
++
+A change's mergeability can be requested separately by calling the
+link:#get-mergeable[get-mergeable] endpoint.
 --
 
 [[submittable]]
@@ -348,6 +356,11 @@ be recomputed often, which is slow for projects with big trees.
 --
 * `TRACKING_IDS`: include references to external tracking systems
   as link:#tracking-id-info[TrackingIdInfo].
+--
+
+[[no-limit]]
+--
+* `NO-LIMIT`: Return all results
 --
 
 .Request
@@ -2200,8 +2213,8 @@ if no review comment is added.
 'POST /changes/link:#change-id[\{change-id\}]/private'
 --
 
-Marks the change to be private. Changes may only be marked private by the
-owner or site administrators.
+Marks the change to be private. Only open changes can be marked private.
+Changes may only be marked private by the owner or site administrators.
 
 A message can be specified in the request body inside a
 link:#private-input[PrivateInput] entity.
@@ -5760,12 +5773,14 @@ change. The labels are lexicographically sorted.
 Whether the change was reviewed by the calling user.
 Only set if link:#reviewed[reviewed] is requested.
 |`submit_type`        |optional|
-The link:project-configuration.html#submit_type[submit type] of the change. +
+The link:config-project-config.html#submit-type[submit type] of the change. +
 Not set for merged changes.
 |`mergeable`          |optional|
 Whether the change is mergeable. +
 Not set for merged changes, if the change has not yet been tested, or
-if the link:#skip_mergeable[skip_mergeable] option is set.
+if the link:#skip_mergeable[skip_mergeable] option is set or when
+link:config-gerrit.html#change.api.excludeMergeableInChangeInfo[change.api.excludeMergeableInChangeInfo]
+is set.
 |`submittable`        |optional|
 Whether the change has been approved by the project submit rules. +
 Only set if link:#submittable[requested].
@@ -5773,8 +5788,12 @@ Only set if link:#submittable[requested].
 Number of inserted lines.
 |`deletions`          ||
 Number of deleted lines.
+|`total_comment_count`  |optional|
+Total number of inline comments across all patch sets. Not set if the current
+change index doesn't have the data.
 |`unresolved_comment_count`  |optional|
-Number of unresolved comments. Not set if the current change index doesn't have the data.
+Number of unresolved inline comment threads across all patch sets. Not set if
+the current change index doesn't have the data.
 |`_number`            ||The legacy numeric ID of the change.
 |`owner`              ||
 The owner of the change as an link:rest-api-accounts.html#account-info[

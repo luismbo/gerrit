@@ -17,20 +17,18 @@ package com.google.gerrit.server.change;
 import com.google.auto.value.AutoValue;
 import com.google.common.flogger.FluentLogger;
 import com.google.common.primitives.Ints;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
-import com.google.gerrit.reviewdb.client.Change.Status;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.RevId;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gerrit.server.query.change.InternalChangeQuery;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import java.io.IOException;
@@ -46,18 +44,15 @@ public class RebaseUtil {
 
   private final Provider<InternalChangeQuery> queryProvider;
   private final ChangeNotes.Factory notesFactory;
-  private final Provider<ReviewDb> dbProvider;
   private final PatchSetUtil psUtil;
 
   @Inject
   RebaseUtil(
       Provider<InternalChangeQuery> queryProvider,
       ChangeNotes.Factory notesFactory,
-      Provider<ReviewDb> dbProvider,
       PatchSetUtil psUtil) {
     this.queryProvider = queryProvider;
     this.notesFactory = notesFactory;
-    this.dbProvider = dbProvider;
     this.psUtil = psUtil;
   }
 
@@ -67,7 +62,7 @@ public class RebaseUtil {
       return true;
     } catch (RestApiException e) {
       return false;
-    } catch (OrmException | IOException e) {
+    } catch (StorageException | IOException e) {
       logger.atWarning().withCause(e).log(
           "Error checking if patch set %s on %s can be rebased", patchSet.getId(), dest);
       return false;
@@ -88,9 +83,7 @@ public class RebaseUtil {
     public abstract PatchSet patchSet();
   }
 
-  public Base parseBase(RevisionResource rsrc, String base) throws OrmException {
-    ReviewDb db = dbProvider.get();
-
+  public Base parseBase(RevisionResource rsrc, String base) {
     // Try parsing the base as a ref string.
     PatchSet.Id basePatchSetId = PatchSet.Id.fromRef(base);
     if (basePatchSetId != null) {
@@ -98,8 +91,7 @@ public class RebaseUtil {
       ChangeNotes baseNotes = notesFor(rsrc, baseChangeId);
       if (baseNotes != null) {
         return Base.create(
-            notesFor(rsrc, basePatchSetId.getParentKey()),
-            psUtil.get(db, baseNotes, basePatchSetId));
+            notesFor(rsrc, basePatchSetId.getParentKey()), psUtil.get(baseNotes, basePatchSetId));
       }
     }
 
@@ -108,7 +100,7 @@ public class RebaseUtil {
     if (baseChangeId != null) {
       ChangeNotes baseNotes = notesFor(rsrc, new Change.Id(baseChangeId));
       if (baseNotes != null) {
-        return Base.create(baseNotes, psUtil.current(db, baseNotes));
+        return Base.create(baseNotes, psUtil.current(baseNotes));
       }
     }
 
@@ -127,11 +119,11 @@ public class RebaseUtil {
     return ret;
   }
 
-  private ChangeNotes notesFor(RevisionResource rsrc, Change.Id id) throws OrmException {
+  private ChangeNotes notesFor(RevisionResource rsrc, Change.Id id) {
     if (rsrc.getChange().getId().equals(id)) {
       return rsrc.getNotes();
     }
-    return notesFactory.createChecked(dbProvider.get(), rsrc.getProject(), id);
+    return notesFactory.createChecked(rsrc.getProject(), id);
   }
 
   /**
@@ -147,11 +139,10 @@ public class RebaseUtil {
    * @return the commit onto which the patch set should be rebased.
    * @throws RestApiException if rebase is not possible.
    * @throws IOException if accessing the repository fails.
-   * @throws OrmException if accessing the database fails.
    */
   public ObjectId findBaseRevision(
       PatchSet patchSet, Branch.NameKey destBranch, Repository git, RevWalk rw)
-      throws RestApiException, IOException, OrmException {
+      throws RestApiException, IOException {
     String baseRev = null;
     RevCommit commit = rw.parseCommit(ObjectId.fromString(patchSet.getRevision().get()));
 
@@ -171,12 +162,12 @@ public class RebaseUtil {
           continue;
         }
         Change depChange = cd.change();
-        if (depChange.getStatus() == Status.ABANDONED) {
+        if (depChange.isAbandoned()) {
           throw new ResourceConflictException(
               "Cannot rebase a change with an abandoned parent: " + depChange.getKey());
         }
 
-        if (depChange.getStatus().isOpen()) {
+        if (depChange.isNew()) {
           if (depPatchSet.getId().equals(depChange.currentPatchSetId())) {
             throw new ResourceConflictException(
                 "Change is already based on the latest patch set of the dependent change.");

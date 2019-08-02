@@ -37,6 +37,7 @@
 
   Polymer({
     is: 'gr-diff-cursor',
+    _legacyUndefinedCheck: true,
 
     properties: {
       /**
@@ -293,7 +294,7 @@
     },
 
     _rowHasThread(row) {
-      return row.querySelector('gr-diff-comment-thread');
+      return row.querySelector('.comment-thread');
     },
 
     /**

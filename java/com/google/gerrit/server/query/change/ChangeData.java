@@ -14,7 +14,6 @@
 
 package com.google.gerrit.server.query.change;
 
-import static com.google.gerrit.server.ApprovalsUtil.sortApprovals;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toMap;
@@ -30,10 +29,12 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.google.common.primitives.Ints;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.LabelTypes;
 import com.google.gerrit.common.data.SubmitRecord;
 import com.google.gerrit.common.data.SubmitTypeRecord;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.client.DiffPreferencesInfo.Whitespace;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
@@ -46,7 +47,6 @@ import com.google.gerrit.reviewdb.client.PatchSetApproval;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.reviewdb.client.RobotComment;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.ChangeMessagesUtil;
 import com.google.gerrit.server.CommentsUtil;
@@ -64,7 +64,6 @@ import com.google.gerrit.server.config.TrackingFooters;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.git.MergeUtil;
 import com.google.gerrit.server.notedb.ChangeNotes;
-import com.google.gerrit.server.notedb.NotesMigration;
 import com.google.gerrit.server.patch.DiffSummary;
 import com.google.gerrit.server.patch.DiffSummaryKey;
 import com.google.gerrit.server.patch.PatchListCache;
@@ -75,8 +74,6 @@ import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.project.SubmitRuleEvaluator;
 import com.google.gerrit.server.project.SubmitRuleOptions;
-import com.google.gwtorm.server.OrmException;
-import com.google.gwtorm.server.ResultSet;
 import com.google.inject.Inject;
 import com.google.inject.assistedinject.Assisted;
 import java.io.IOException;
@@ -92,9 +89,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Stream;
-import org.eclipse.jgit.errors.IncorrectObjectTypeException;
-import org.eclipse.jgit.errors.MissingObjectException;
-import org.eclipse.jgit.errors.RepositoryNotFoundException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Ref;
@@ -104,9 +98,7 @@ import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 
 public class ChangeData {
-  private static final int BATCH_SIZE = 50;
-
-  public static List<Change> asChanges(List<ChangeData> changeDatas) throws OrmException {
+  public static List<Change> asChanges(List<ChangeData> changeDatas) {
     List<Change> result = new ArrayList<>(changeDatas.size());
     for (ChangeData cd : changeDatas) {
       result.add(cd.change());
@@ -118,154 +110,65 @@ public class ChangeData {
     return changes.stream().collect(toMap(ChangeData::getId, Function.identity()));
   }
 
-  public static void ensureChangeLoaded(Iterable<ChangeData> changes) throws OrmException {
+  public static void ensureChangeLoaded(Iterable<ChangeData> changes) {
     ChangeData first = Iterables.getFirst(changes, null);
     if (first == null) {
       return;
-    } else if (first.notesMigration.readChanges()) {
-      for (ChangeData cd : changes) {
-        cd.change();
-      }
-      return;
     }
 
-    Map<Change.Id, ChangeData> missing = new HashMap<>();
     for (ChangeData cd : changes) {
-      if (cd.change == null) {
-        missing.put(cd.getId(), cd);
-      }
-    }
-    if (missing.isEmpty()) {
-      return;
-    }
-    for (ChangeNotes notes : first.notesFactory.create(first.db, missing.keySet())) {
-      missing.get(notes.getChangeId()).change = notes.getChange();
+      cd.change();
     }
   }
 
-  public static void ensureAllPatchSetsLoaded(Iterable<ChangeData> changes) throws OrmException {
+  public static void ensureAllPatchSetsLoaded(Iterable<ChangeData> changes) {
     ChangeData first = Iterables.getFirst(changes, null);
     if (first == null) {
       return;
-    } else if (first.notesMigration.readChanges()) {
-      for (ChangeData cd : changes) {
-        cd.patchSets();
-      }
-      return;
     }
 
-    List<ResultSet<PatchSet>> results = new ArrayList<>(BATCH_SIZE);
-    for (List<ChangeData> batch : Iterables.partition(changes, BATCH_SIZE)) {
-      results.clear();
-      for (ChangeData cd : batch) {
-        if (cd.patchSets == null) {
-          results.add(cd.db.patchSets().byChange(cd.getId()));
-        } else {
-          results.add(null);
-        }
-      }
-      for (int i = 0; i < batch.size(); i++) {
-        ResultSet<PatchSet> result = results.get(i);
-        if (result != null) {
-          batch.get(i).patchSets = result.toList();
-        }
-      }
-    }
-  }
-
-  public static void ensureCurrentPatchSetLoaded(Iterable<ChangeData> changes) throws OrmException {
-    ChangeData first = Iterables.getFirst(changes, null);
-    if (first == null) {
-      return;
-    } else if (first.notesMigration.readChanges()) {
-      for (ChangeData cd : changes) {
-        cd.currentPatchSet();
-      }
-      return;
-    }
-
-    Map<PatchSet.Id, ChangeData> missing = new HashMap<>();
     for (ChangeData cd : changes) {
-      if (cd.currentPatchSet == null && cd.patchSets == null) {
-        missing.put(cd.change().currentPatchSetId(), cd);
-      }
-    }
-    if (missing.isEmpty()) {
-      return;
-    }
-    for (PatchSet ps : first.db.patchSets().get(missing.keySet())) {
-      missing.get(ps.getId()).currentPatchSet = ps;
+      cd.patchSets();
     }
   }
 
-  public static void ensureCurrentApprovalsLoaded(Iterable<ChangeData> changes)
-      throws OrmException {
+  public static void ensureCurrentPatchSetLoaded(Iterable<ChangeData> changes) {
     ChangeData first = Iterables.getFirst(changes, null);
     if (first == null) {
       return;
-    } else if (first.notesMigration.readChanges()) {
-      for (ChangeData cd : changes) {
-        cd.currentApprovals();
-      }
-      return;
     }
 
-    List<ResultSet<PatchSetApproval>> results = new ArrayList<>(BATCH_SIZE);
-    for (List<ChangeData> batch : Iterables.partition(changes, BATCH_SIZE)) {
-      results.clear();
-      for (ChangeData cd : batch) {
-        if (cd.currentApprovals == null) {
-          PatchSet.Id psId = cd.change().currentPatchSetId();
-          results.add(cd.db.patchSetApprovals().byPatchSet(psId));
-        } else {
-          results.add(null);
-        }
-      }
-      for (int i = 0; i < batch.size(); i++) {
-        ResultSet<PatchSetApproval> result = results.get(i);
-        if (result != null) {
-          batch.get(i).currentApprovals = sortApprovals(result);
-        }
-      }
+    for (ChangeData cd : changes) {
+      cd.currentPatchSet();
     }
   }
 
-  public static void ensureMessagesLoaded(Iterable<ChangeData> changes) throws OrmException {
+  public static void ensureCurrentApprovalsLoaded(Iterable<ChangeData> changes) {
     ChangeData first = Iterables.getFirst(changes, null);
     if (first == null) {
       return;
-    } else if (first.notesMigration.readChanges()) {
-      for (ChangeData cd : changes) {
-        cd.messages();
-      }
-      return;
     }
 
-    List<ResultSet<ChangeMessage>> results = new ArrayList<>(BATCH_SIZE);
-    for (List<ChangeData> batch : Iterables.partition(changes, BATCH_SIZE)) {
-      results.clear();
-      for (ChangeData cd : batch) {
-        if (cd.messages == null) {
-          PatchSet.Id psId = cd.change().currentPatchSetId();
-          results.add(cd.db.changeMessages().byPatchSet(psId));
-        } else {
-          results.add(null);
-        }
-      }
-      for (int i = 0; i < batch.size(); i++) {
-        ResultSet<ChangeMessage> result = results.get(i);
-        if (result != null) {
-          batch.get(i).messages = result.toList();
-        }
-      }
+    for (ChangeData cd : changes) {
+      cd.currentApprovals();
     }
   }
 
-  public static void ensureReviewedByLoadedForOpenChanges(Iterable<ChangeData> changes)
-      throws OrmException {
+  public static void ensureMessagesLoaded(Iterable<ChangeData> changes) {
+    ChangeData first = Iterables.getFirst(changes, null);
+    if (first == null) {
+      return;
+    }
+
+    for (ChangeData cd : changes) {
+      cd.messages();
+    }
+  }
+
+  public static void ensureReviewedByLoadedForOpenChanges(Iterable<ChangeData> changes) {
     List<ChangeData> pending = new ArrayList<>();
     for (ChangeData cd : changes) {
-      if (cd.reviewedBy == null && cd.change().getStatus().isOpen()) {
+      if (cd.reviewedBy == null && cd.change().isNew()) {
         pending.add(cd);
       }
     }
@@ -287,23 +190,22 @@ public class ChangeData {
       this.assistedFactory = assistedFactory;
     }
 
-    public ChangeData create(ReviewDb db, Project.NameKey project, Change.Id id) {
-      return assistedFactory.create(db, project, id, null, null);
+    public ChangeData create(Project.NameKey project, Change.Id id) {
+      return assistedFactory.create(project, id, null, null);
     }
 
-    public ChangeData create(ReviewDb db, Change change) {
-      return assistedFactory.create(db, change.getProject(), change.getId(), change, null);
+    public ChangeData create(Change change) {
+      return assistedFactory.create(change.getProject(), change.getId(), change, null);
     }
 
-    public ChangeData create(ReviewDb db, ChangeNotes notes) {
+    public ChangeData create(ChangeNotes notes) {
       return assistedFactory.create(
-          db, notes.getChange().getProject(), notes.getChangeId(), notes.getChange(), notes);
+          notes.getChange().getProject(), notes.getChangeId(), notes.getChange(), notes);
     }
   }
 
   public interface AssistedFactory {
     ChangeData create(
-        ReviewDb db,
         Project.NameKey project,
         Change.Id id,
         @Nullable Change change,
@@ -324,7 +226,7 @@ public class ChangeData {
     ChangeData cd =
         new ChangeData(
             null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-            null, null, null, project, id, null, null);
+            null, project, id, null, null);
     cd.currentPatchSet = new PatchSet(new PatchSet.Id(id, currentPatchSetId));
     return cd;
   }
@@ -339,7 +241,6 @@ public class ChangeData {
   private final GitRepositoryManager repoManager;
   private final MergeUtil.Factory mergeUtilFactory;
   private final MergeabilityCache mergeabilityCache;
-  private final NotesMigration notesMigration;
   private final PatchListCache patchListCache;
   private final PatchSetUtil psUtil;
   private final ProjectCache projectCache;
@@ -348,7 +249,6 @@ public class ChangeData {
   private final SubmitRuleEvaluator.Factory submitRuleEvaluatorFactory;
 
   // Required assisted injected fields.
-  private final ReviewDb db;
   private final Project.NameKey project;
   private final Change.Id legacyId;
 
@@ -391,6 +291,7 @@ public class ChangeData {
   private PersonIdent committer;
   private int parentCount;
   private Integer unresolvedCommentCount;
+  private Integer totalCommentCount;
   private LabelTypes labelTypes;
 
   private ImmutableList<byte[]> refStates;
@@ -407,14 +308,12 @@ public class ChangeData {
       GitRepositoryManager repoManager,
       MergeUtil.Factory mergeUtilFactory,
       MergeabilityCache mergeabilityCache,
-      NotesMigration notesMigration,
       PatchListCache patchListCache,
       PatchSetUtil psUtil,
       ProjectCache projectCache,
       TrackingFooters trackingFooters,
       PureRevert pureRevert,
       SubmitRuleEvaluator.Factory submitRuleEvaluatorFactory,
-      @Assisted ReviewDb db,
       @Assisted Project.NameKey project,
       @Assisted Change.Id id,
       @Assisted @Nullable Change change,
@@ -427,7 +326,6 @@ public class ChangeData {
     this.repoManager = repoManager;
     this.mergeUtilFactory = mergeUtilFactory;
     this.mergeabilityCache = mergeabilityCache;
-    this.notesMigration = notesMigration;
     this.patchListCache = patchListCache;
     this.psUtil = psUtil;
     this.projectCache = projectCache;
@@ -435,11 +333,6 @@ public class ChangeData {
     this.trackingFooters = trackingFooters;
     this.pureRevert = pureRevert;
     this.submitRuleEvaluatorFactory = submitRuleEvaluatorFactory;
-
-    // May be null in tests when created via createForTest above, in which case lazy-loading will
-    // intentionally fail with NPE. Still not marked @Nullable in the constructor, to force callers
-    // using Guice to pass a non-null value.
-    this.db = db;
 
     this.project = project;
     this.legacyId = id;
@@ -460,22 +353,18 @@ public class ChangeData {
     return this;
   }
 
-  public ReviewDb db() {
-    return db;
-  }
-
   public AllUsersName getAllUsersNameForIndexing() {
     return allUsersName;
   }
 
-  public void setCurrentFilePaths(List<String> filePaths) throws OrmException {
+  public void setCurrentFilePaths(List<String> filePaths) {
     PatchSet ps = currentPatchSet();
     if (ps != null) {
       currentFiles = ImmutableList.copyOf(filePaths);
     }
   }
 
-  public List<String> currentFilePaths() throws IOException, OrmException {
+  public List<String> currentFilePaths() {
     if (currentFiles == null) {
       if (!lazyLoad) {
         return Collections.emptyList();
@@ -486,7 +375,7 @@ public class ChangeData {
     return currentFiles;
   }
 
-  private Optional<DiffSummary> getDiffSummary() throws OrmException, IOException {
+  private Optional<DiffSummary> getDiffSummary() {
     if (diffSummary == null) {
       if (!lazyLoad) {
         return Optional.empty();
@@ -514,7 +403,7 @@ public class ChangeData {
     return diffSummary;
   }
 
-  private Optional<ChangedLines> computeChangedLines() throws OrmException, IOException {
+  private Optional<ChangedLines> computeChangedLines() {
     Optional<DiffSummary> ds = getDiffSummary();
     if (ds.isPresent()) {
       return Optional.of(ds.get().getChangedLines());
@@ -522,7 +411,7 @@ public class ChangeData {
     return Optional.empty();
   }
 
-  public Optional<ChangedLines> changedLines() throws OrmException, IOException {
+  public Optional<ChangedLines> changedLines() {
     if (changedLines == null) {
       if (!lazyLoad) {
         return Optional.empty();
@@ -556,7 +445,7 @@ public class ChangeData {
     visibleTo = user;
   }
 
-  public Change change() throws OrmException {
+  public Change change() {
     if (change == null && lazyLoad) {
       reloadChange();
     }
@@ -567,41 +456,41 @@ public class ChangeData {
     change = c;
   }
 
-  public Change reloadChange() throws OrmException {
+  public Change reloadChange() {
     try {
-      notes = notesFactory.createChecked(db, project, legacyId);
+      notes = notesFactory.createChecked(project, legacyId);
     } catch (NoSuchChangeException e) {
-      throw new OrmException("Unable to load change " + legacyId, e);
+      throw new StorageException("Unable to load change " + legacyId, e);
     }
     change = notes.getChange();
     setPatchSets(null);
     return change;
   }
 
-  public LabelTypes getLabelTypes() throws OrmException {
+  public LabelTypes getLabelTypes() {
     if (labelTypes == null) {
       ProjectState state;
       try {
         state = projectCache.checkedGet(project());
       } catch (IOException e) {
-        throw new OrmException("project state not available", e);
+        throw new StorageException("project state not available", e);
       }
       labelTypes = state.getLabelTypes(change().getDest());
     }
     return labelTypes;
   }
 
-  public ChangeNotes notes() throws OrmException {
+  public ChangeNotes notes() {
     if (notes == null) {
       if (!lazyLoad) {
-        throw new OrmException("ChangeNotes not available, lazyLoad = false");
+        throw new StorageException("ChangeNotes not available, lazyLoad = false");
       }
-      notes = notesFactory.create(db, project(), legacyId);
+      notes = notesFactory.create(project(), legacyId);
     }
     return notes;
   }
 
-  public PatchSet currentPatchSet() throws OrmException {
+  public PatchSet currentPatchSet() {
     if (currentPatchSet == null) {
       Change c = change();
       if (c == null) {
@@ -617,7 +506,7 @@ public class ChangeData {
     return currentPatchSet;
   }
 
-  public List<PatchSetApproval> currentApprovals() throws OrmException {
+  public List<PatchSetApproval> currentApprovals() {
     if (currentApprovals == null) {
       if (!lazyLoad) {
         return Collections.emptyList();
@@ -629,8 +518,8 @@ public class ChangeData {
         try {
           currentApprovals =
               ImmutableList.copyOf(
-                  approvalsUtil.byPatchSet(db, notes(), c.currentPatchSetId(), null, null));
-        } catch (OrmException e) {
+                  approvalsUtil.byPatchSet(notes(), c.currentPatchSetId(), null, null));
+        } catch (StorageException e) {
           if (e.getCause() instanceof NoSuchChangeException) {
             currentApprovals = Collections.emptyList();
           } else {
@@ -646,7 +535,7 @@ public class ChangeData {
     currentApprovals = approvals;
   }
 
-  public String commitMessage() throws IOException, OrmException {
+  public String commitMessage() {
     if (commitMessage == null) {
       if (!loadCommitData()) {
         return null;
@@ -655,7 +544,7 @@ public class ChangeData {
     return commitMessage;
   }
 
-  public List<FooterLine> commitFooters() throws IOException, OrmException {
+  public List<FooterLine> commitFooters() {
     if (commitFooters == null) {
       if (!loadCommitData()) {
         return null;
@@ -664,11 +553,11 @@ public class ChangeData {
     return commitFooters;
   }
 
-  public ListMultimap<String, String> trackingFooters() throws IOException, OrmException {
+  public ListMultimap<String, String> trackingFooters() {
     return trackingFooters.extract(commitFooters());
   }
 
-  public PersonIdent getAuthor() throws IOException, OrmException {
+  public PersonIdent getAuthor() {
     if (author == null) {
       if (!loadCommitData()) {
         return null;
@@ -677,7 +566,7 @@ public class ChangeData {
     return author;
   }
 
-  public PersonIdent getCommitter() throws IOException, OrmException {
+  public PersonIdent getCommitter() {
     if (committer == null) {
       if (!loadCommitData()) {
         return null;
@@ -686,9 +575,7 @@ public class ChangeData {
     return committer;
   }
 
-  private boolean loadCommitData()
-      throws OrmException, RepositoryNotFoundException, IOException, MissingObjectException,
-          IncorrectObjectTypeException {
+  private boolean loadCommitData() {
     PatchSet ps = currentPatchSet();
     if (ps == null) {
       return false;
@@ -702,17 +589,16 @@ public class ChangeData {
       author = c.getAuthorIdent();
       committer = c.getCommitterIdent();
       parentCount = c.getParentCount();
+    } catch (IOException e) {
+      throw new StorageException(e);
     }
     return true;
   }
 
-  /**
-   * @return patches for the change, in patch set ID order.
-   * @throws OrmException an error occurred reading the database.
-   */
-  public Collection<PatchSet> patchSets() throws OrmException {
+  /** @return patches for the change, in patch set ID order. */
+  public Collection<PatchSet> patchSets() {
     if (patchSets == null) {
-      patchSets = psUtil.byChange(db, notes());
+      patchSets = psUtil.byChange(notes());
     }
     return patchSets;
   }
@@ -722,11 +608,8 @@ public class ChangeData {
     this.patchSets = patchSets;
   }
 
-  /**
-   * @return patch with the given ID, or null if it does not exist.
-   * @throws OrmException an error occurred reading the database.
-   */
-  public PatchSet patchSet(PatchSet.Id psId) throws OrmException {
+  /** @return patch with the given ID, or null if it does not exist. */
+  public PatchSet patchSet(PatchSet.Id psId) {
     if (currentPatchSet != null && currentPatchSet.getId().equals(psId)) {
       return currentPatchSet;
     }
@@ -741,27 +624,23 @@ public class ChangeData {
   /**
    * @return all patch set approvals for the change, keyed by ID, ordered by timestamp within each
    *     patch set.
-   * @throws OrmException an error occurred reading the database.
    */
-  public ListMultimap<PatchSet.Id, PatchSetApproval> approvals() throws OrmException {
+  public ListMultimap<PatchSet.Id, PatchSetApproval> approvals() {
     if (allApprovals == null) {
       if (!lazyLoad) {
         return ImmutableListMultimap.of();
       }
-      allApprovals = approvalsUtil.byChange(db, notes());
+      allApprovals = approvalsUtil.byChange(notes());
     }
     return allApprovals;
   }
 
-  /**
-   * @return The submit ('SUBM') approval label
-   * @throws OrmException an error occurred reading the database.
-   */
-  public Optional<PatchSetApproval> getSubmitApproval() throws OrmException {
+  /** @return The submit ('SUBM') approval label */
+  public Optional<PatchSetApproval> getSubmitApproval() {
     return currentApprovals().stream().filter(PatchSetApproval::isLegacySubmit).findFirst();
   }
 
-  public ReviewerSet reviewers() throws OrmException {
+  public ReviewerSet reviewers() {
     if (reviewers == null) {
       if (!lazyLoad) {
         return ReviewerSet.empty();
@@ -779,7 +658,7 @@ public class ChangeData {
     return reviewers;
   }
 
-  public ReviewerByEmailSet reviewersByEmail() throws OrmException {
+  public ReviewerByEmailSet reviewersByEmail() {
     if (reviewersByEmail == null) {
       if (!lazyLoad) {
         return ReviewerByEmailSet.empty();
@@ -805,7 +684,7 @@ public class ChangeData {
     return this.pendingReviewers;
   }
 
-  public ReviewerSet pendingReviewers() throws OrmException {
+  public ReviewerSet pendingReviewers() {
     if (pendingReviewers == null) {
       if (!lazyLoad) {
         return ReviewerSet.empty();
@@ -823,7 +702,7 @@ public class ChangeData {
     return pendingReviewersByEmail;
   }
 
-  public ReviewerByEmailSet pendingReviewersByEmail() throws OrmException {
+  public ReviewerByEmailSet pendingReviewersByEmail() {
     if (pendingReviewersByEmail == null) {
       if (!lazyLoad) {
         return ReviewerByEmailSet.empty();
@@ -833,7 +712,7 @@ public class ChangeData {
     return pendingReviewersByEmail;
   }
 
-  public List<ReviewerStatusUpdate> reviewerUpdates() throws OrmException {
+  public List<ReviewerStatusUpdate> reviewerUpdates() {
     if (reviewerUpdates == null) {
       if (!lazyLoad) {
         return Collections.emptyList();
@@ -851,17 +730,17 @@ public class ChangeData {
     return reviewerUpdates;
   }
 
-  public Collection<Comment> publishedComments() throws OrmException {
+  public Collection<Comment> publishedComments() {
     if (publishedComments == null) {
       if (!lazyLoad) {
         return Collections.emptyList();
       }
-      publishedComments = commentsUtil.publishedByChange(db, notes());
+      publishedComments = commentsUtil.publishedByChange(notes());
     }
     return publishedComments;
   }
 
-  public Collection<RobotComment> robotComments() throws OrmException {
+  public Collection<RobotComment> robotComments() {
     if (robotComments == null) {
       if (!lazyLoad) {
         return Collections.emptyList();
@@ -871,7 +750,7 @@ public class ChangeData {
     return robotComments;
   }
 
-  public Integer unresolvedCommentCount() throws OrmException {
+  public Integer unresolvedCommentCount() {
     if (unresolvedCommentCount == null) {
       if (!lazyLoad) {
         return null;
@@ -925,18 +804,35 @@ public class ChangeData {
     this.unresolvedCommentCount = count;
   }
 
-  public List<ChangeMessage> messages() throws OrmException {
+  public Integer totalCommentCount() {
+    if (totalCommentCount == null) {
+      if (!lazyLoad) {
+        return null;
+      }
+
+      // Fail on overflow.
+      totalCommentCount =
+          Ints.checkedCast((long) publishedComments().size() + robotComments().size());
+    }
+    return totalCommentCount;
+  }
+
+  public void setTotalCommentCount(Integer count) {
+    this.totalCommentCount = count;
+  }
+
+  public List<ChangeMessage> messages() {
     if (messages == null) {
       if (!lazyLoad) {
         return Collections.emptyList();
       }
-      messages = cmUtil.byChange(db, notes());
+      messages = cmUtil.byChange(notes());
     }
     return messages;
   }
 
   public List<SubmitRecord> submitRecords(SubmitRuleOptions options) {
-    List<SubmitRecord> records = submitRecords.get(options);
+    List<SubmitRecord> records = getCachedSubmitRecord(options);
     if (records == null) {
       if (!lazyLoad) {
         return Collections.emptyList();
@@ -949,7 +845,21 @@ public class ChangeData {
 
   @Nullable
   public List<SubmitRecord> getSubmitRecords(SubmitRuleOptions options) {
-    return submitRecords.get(options);
+    return getCachedSubmitRecord(options);
+  }
+
+  private List<SubmitRecord> getCachedSubmitRecord(SubmitRuleOptions options) {
+    List<SubmitRecord> records = submitRecords.get(options);
+    if (records != null) {
+      return records;
+    }
+
+    if (options.allowClosed() && change != null && change.getStatus().isOpen()) {
+      SubmitRuleOptions openSubmitRuleOptions = options.toBuilder().allowClosed(false).build();
+      return submitRecords.get(openSubmitRuleOptions);
+    }
+
+    return null;
   }
 
   public void setSubmitRecords(SubmitRuleOptions options, List<SubmitRecord> records) {
@@ -969,15 +879,15 @@ public class ChangeData {
   }
 
   @Nullable
-  public Boolean isMergeable() throws OrmException {
+  public Boolean isMergeable() {
     if (mergeable == null) {
       Change c = change();
       if (c == null) {
         return null;
       }
-      if (c.getStatus() == Change.Status.MERGED) {
+      if (c.isMerged()) {
         mergeable = true;
-      } else if (c.getStatus() == Change.Status.ABANDONED) {
+      } else if (c.isAbandoned()) {
         return null;
       } else if (c.isWorkInProgress()) {
         return null;
@@ -1009,18 +919,18 @@ public class ChangeData {
                   c.getDest(),
                   repo);
         } catch (IOException e) {
-          throw new OrmException(e);
+          throw new StorageException(e);
         }
       }
     }
     return mergeable;
   }
 
-  public Set<Account.Id> editsByUser() throws OrmException {
+  public Set<Account.Id> editsByUser() {
     return editRefs().keySet();
   }
 
-  public Map<Account.Id, Ref> editRefs() throws OrmException {
+  public Map<Account.Id, Ref> editRefs() {
     if (editsByUser == null) {
       if (!lazyLoad) {
         return Collections.emptyMap();
@@ -1042,17 +952,17 @@ public class ChangeData {
           }
         }
       } catch (IOException e) {
-        throw new OrmException(e);
+        throw new StorageException(e);
       }
     }
     return editsByUser;
   }
 
-  public Set<Account.Id> draftsByUser() throws OrmException {
+  public Set<Account.Id> draftsByUser() {
     return draftRefs().keySet();
   }
 
-  public Map<Account.Id, Ref> draftRefs() throws OrmException {
+  public Map<Account.Id, Ref> draftRefs() {
     if (draftsByUser == null) {
       if (!lazyLoad) {
         return Collections.emptyMap();
@@ -1063,30 +973,24 @@ public class ChangeData {
       }
 
       draftsByUser = new HashMap<>();
-      if (notesMigration.readChanges()) {
-        for (Ref ref : commentsUtil.getDraftRefs(notes.getChangeId())) {
-          Account.Id account = Account.Id.fromRefSuffix(ref.getName());
-          if (account != null
-              // Double-check that any drafts exist for this user after
-              // filtering out zombies. If some but not all drafts in the ref
-              // were zombies, the returned Ref still includes those zombies;
-              // this is suboptimal, but is ok for the purposes of
-              // draftsByUser(), and easier than trying to rebuild the change at
-              // this point.
-              && !notes().getDraftComments(account, ref).isEmpty()) {
-            draftsByUser.put(account, ref);
-          }
-        }
-      } else {
-        for (Comment sc : commentsUtil.draftByChange(db, notes())) {
-          draftsByUser.put(sc.author.getId(), null);
+      for (Ref ref : commentsUtil.getDraftRefs(notes.getChangeId())) {
+        Account.Id account = Account.Id.fromRefSuffix(ref.getName());
+        if (account != null
+            // Double-check that any drafts exist for this user after
+            // filtering out zombies. If some but not all drafts in the ref
+            // were zombies, the returned Ref still includes those zombies;
+            // this is suboptimal, but is ok for the purposes of
+            // draftsByUser(), and easier than trying to rebuild the change at
+            // this point.
+            && !notes().getDraftComments(account, ref).isEmpty()) {
+          draftsByUser.put(account, ref);
         }
       }
     }
     return draftsByUser;
   }
 
-  public boolean isReviewedBy(Account.Id accountId) throws OrmException {
+  public boolean isReviewedBy(Account.Id accountId) {
     Collection<String> stars = stars(accountId);
 
     PatchSet ps = currentPatchSet();
@@ -1103,7 +1007,7 @@ public class ChangeData {
     return reviewedBy().contains(accountId);
   }
 
-  public Set<Account.Id> reviewedBy() throws OrmException {
+  public Set<Account.Id> reviewedBy() {
     if (reviewedBy == null) {
       if (!lazyLoad) {
         return Collections.emptySet();
@@ -1135,7 +1039,7 @@ public class ChangeData {
     this.reviewedBy = reviewedBy;
   }
 
-  public Set<String> hashtags() throws OrmException {
+  public Set<String> hashtags() {
     if (hashtags == null) {
       if (!lazyLoad) {
         return Collections.emptySet();
@@ -1149,7 +1053,7 @@ public class ChangeData {
     this.hashtags = hashtags;
   }
 
-  public ImmutableListMultimap<Account.Id, String> stars() throws OrmException {
+  public ImmutableListMultimap<Account.Id, String> stars() {
     if (stars == null) {
       if (!lazyLoad) {
         return ImmutableListMultimap.of();
@@ -1167,7 +1071,7 @@ public class ChangeData {
     this.stars = ImmutableListMultimap.copyOf(stars);
   }
 
-  public ImmutableMap<Account.Id, StarRef> starRefs() throws OrmException {
+  public ImmutableMap<Account.Id, StarRef> starRefs() {
     if (starRefs == null) {
       if (!lazyLoad) {
         return ImmutableMap.of();
@@ -1177,7 +1081,7 @@ public class ChangeData {
     return starRefs;
   }
 
-  public Set<String> stars(Account.Id accountId) throws OrmException {
+  public Set<String> stars(Account.Id accountId) {
     if (starsOf != null) {
       if (!starsOf.accountId().equals(accountId)) {
         starsOf = null;
@@ -1201,14 +1105,14 @@ public class ChangeData {
    *     false otherwise.
    */
   @Nullable
-  public Boolean isPureRevert() throws OrmException {
+  public Boolean isPureRevert() {
     if (change().getRevertOf() == null) {
       return null;
     }
     try {
-      return pureRevert.get(notes(), null).isPureRevert;
+      return pureRevert.get(notes(), Optional.empty());
     } catch (IOException | BadRequestException | ResourceConflictException e) {
-      throw new OrmException("could not compute pure revert", e);
+      throw new StorageException("could not compute pure revert", e);
     }
   }
 

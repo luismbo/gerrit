@@ -19,16 +19,15 @@ import static java.util.Collections.reverseOrder;
 import static java.util.stream.Collectors.toList;
 
 import com.google.common.flogger.FluentLogger;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.api.changes.SubmittedTogetherInfo;
 import com.google.gerrit.extensions.api.changes.SubmittedTogetherOption;
-import com.google.gerrit.extensions.client.ChangeStatus;
 import com.google.gerrit.extensions.client.ListChangesOption;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.RestReadView;
 import com.google.gerrit.reviewdb.client.Change;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.change.ChangeJson;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.change.WalkSorter;
@@ -38,7 +37,6 @@ import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gerrit.server.query.change.InternalChangeQuery;
 import com.google.gerrit.server.submit.ChangeSet;
 import com.google.gerrit.server.submit.MergeSuperSet;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import java.io.IOException;
@@ -62,7 +60,6 @@ public class SubmittedTogether implements RestReadView<ChangeResource> {
       Comparator.comparing(ChangeData::project).thenComparing(cd -> cd.getId().id, reverseOrder());
 
   private final ChangeJson.Factory json;
-  private final Provider<ReviewDb> dbProvider;
   private final Provider<InternalChangeQuery> queryProvider;
   private final Provider<MergeSuperSet> mergeSuperSet;
   private final Provider<WalkSorter> sorter;
@@ -89,12 +86,10 @@ public class SubmittedTogether implements RestReadView<ChangeResource> {
   @Inject
   SubmittedTogether(
       ChangeJson.Factory json,
-      Provider<ReviewDb> dbProvider,
       Provider<InternalChangeQuery> queryProvider,
       Provider<MergeSuperSet> mergeSuperSet,
       Provider<WalkSorter> sorter) {
     this.json = json;
-    this.dbProvider = dbProvider;
     this.queryProvider = queryProvider;
     this.mergeSuperSet = mergeSuperSet;
     this.sorter = sorter;
@@ -113,7 +108,7 @@ public class SubmittedTogether implements RestReadView<ChangeResource> {
   @Override
   public Object apply(ChangeResource resource)
       throws AuthException, BadRequestException, ResourceConflictException, IOException,
-          OrmException, PermissionBackendException {
+          PermissionBackendException {
     SubmittedTogetherInfo info = applyInfo(resource);
     if (options.isEmpty()) {
       return info.changes;
@@ -122,18 +117,17 @@ public class SubmittedTogether implements RestReadView<ChangeResource> {
   }
 
   public SubmittedTogetherInfo applyInfo(ChangeResource resource)
-      throws AuthException, IOException, OrmException, PermissionBackendException {
+      throws AuthException, IOException, PermissionBackendException {
     Change c = resource.getChange();
     try {
       List<ChangeData> cds;
       int hidden;
 
-      if (c.getStatus().isOpen()) {
-        ChangeSet cs =
-            mergeSuperSet.get().completeChangeSet(dbProvider.get(), c, resource.getUser());
+      if (c.isNew()) {
+        ChangeSet cs = mergeSuperSet.get().completeChangeSet(c, resource.getUser());
         cds = ensureRequiredDataIsLoaded(cs.changes().asList());
         hidden = cs.nonVisibleChanges().size();
-      } else if (c.getStatus().asChangeStatus() == ChangeStatus.MERGED) {
+      } else if (c.isMerged()) {
         cds = queryProvider.get().bySubmissionId(c.getSubmissionId());
         hidden = 0;
       } else {
@@ -150,13 +144,13 @@ public class SubmittedTogether implements RestReadView<ChangeResource> {
       info.changes = json.create(jsonOpt).format(cds);
       info.nonVisibleChanges = hidden;
       return info;
-    } catch (OrmException | IOException e) {
+    } catch (StorageException | IOException e) {
       logger.atSevere().withCause(e).log("Error on getting a ChangeSet");
       throw e;
     }
   }
 
-  private List<ChangeData> sort(List<ChangeData> cds, int hidden) throws OrmException, IOException {
+  private List<ChangeData> sort(List<ChangeData> cds, int hidden) throws IOException {
     if (cds.size() <= 1 && hidden == 0) {
       // Skip sorting for singleton lists, to avoid WalkSorter opening the
       // repo just to fill out the commit field in PatchSetData.
@@ -181,8 +175,7 @@ public class SubmittedTogether implements RestReadView<ChangeResource> {
     return sorted;
   }
 
-  private static List<ChangeData> ensureRequiredDataIsLoaded(List<ChangeData> cds)
-      throws OrmException {
+  private static List<ChangeData> ensureRequiredDataIsLoaded(List<ChangeData> cds) {
     // TODO(hiesel): Instead of calling these manually, either implement a helper that brings a
     // database-backed change on-par with an index-backed change in terms of the populated fields in
     // ChangeData or check if any of the ChangeDatas was loaded from the database and allow

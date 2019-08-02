@@ -14,6 +14,7 @@
 
 package com.google.gerrit.server.submit;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Comparator.comparing;
@@ -35,29 +36,29 @@ import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.SubmitRecord;
 import com.google.gerrit.common.data.SubmitRequirement;
 import com.google.gerrit.common.data.SubmitTypeRecord;
-import com.google.gerrit.extensions.api.changes.RecipientType;
+import com.google.gerrit.exceptions.StorageException;
+import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.api.changes.SubmitInput;
 import com.google.gerrit.extensions.client.SubmitType;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.RestApiException;
+import com.google.gerrit.git.LockFailureException;
 import com.google.gerrit.metrics.Counter0;
 import com.google.gerrit.metrics.Description;
 import com.google.gerrit.metrics.MetricMaker;
-import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.ChangeMessage;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ChangeMessagesUtil;
+import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.InternalUser;
-import com.google.gerrit.server.change.NotifyUtil;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.git.CodeReviewCommit;
-import com.google.gerrit.server.git.LockFailureException;
 import com.google.gerrit.server.git.MergeTip;
 import com.google.gerrit.server.git.validators.MergeValidationException;
 import com.google.gerrit.server.git.validators.MergeValidators;
@@ -78,7 +79,6 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryHelper.ActionType;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -124,7 +124,7 @@ public class MergeOp implements AutoCloseable {
     private final ListMultimap<Change.Id, String> problems;
     private final boolean allowClosed;
 
-    private CommitStatus(ChangeSet cs, boolean allowClosed) throws OrmException {
+    private CommitStatus(ChangeSet cs, boolean allowClosed) {
       checkArgument(
           !cs.furtherHiddenChanges(), "CommitStatus must not be called with hidden changes");
       changes = cs.changesById();
@@ -229,7 +229,7 @@ public class MergeOp implements AutoCloseable {
   private final SubmitStrategyFactory submitStrategyFactory;
   private final SubmoduleOp.Factory subOpFactory;
   private final Provider<MergeOpRepoManager> ormProvider;
-  private final NotifyUtil notifyUtil;
+  private final NotifyResolver notifyResolver;
   private final RetryHelper retryHelper;
   private final ChangeData.Factory changeDataFactory;
 
@@ -239,9 +239,8 @@ public class MergeOp implements AutoCloseable {
 
   private MergeOpRepoManager orm;
   private CommitStatus commitStatus;
-  private ReviewDb db;
   private SubmitInput submitInput;
-  private ListMultimap<RecipientType, Account.Id> accountsToNotify;
+  private NotifyResolver.Result notify;
   private Set<Project.NameKey> allProjects;
   private boolean dryrun;
   private TopicMetrics topicMetrics;
@@ -257,7 +256,7 @@ public class MergeOp implements AutoCloseable {
       SubmitStrategyFactory submitStrategyFactory,
       SubmoduleOp.Factory subOpFactory,
       Provider<MergeOpRepoManager> ormProvider,
-      NotifyUtil notifyUtil,
+      NotifyResolver notifyResolver,
       TopicMetrics topicMetrics,
       RetryHelper retryHelper,
       ChangeData.Factory changeDataFactory) {
@@ -270,7 +269,7 @@ public class MergeOp implements AutoCloseable {
     this.submitStrategyFactory = submitStrategyFactory;
     this.subOpFactory = subOpFactory;
     this.ormProvider = ormProvider;
-    this.notifyUtil = notifyUtil;
+    this.notifyResolver = notifyResolver;
     this.retryHelper = retryHelper;
     this.topicMetrics = topicMetrics;
     this.changeDataFactory = changeDataFactory;
@@ -284,7 +283,7 @@ public class MergeOp implements AutoCloseable {
   }
 
   public static void checkSubmitRule(ChangeData cd, boolean allowClosed)
-      throws ResourceConflictException, OrmException {
+      throws ResourceConflictException {
     PatchSet patchSet = cd.currentPatchSet();
     if (patchSet == null) {
       throw new ResourceConflictException("missing current patch set for change " + cd.getId());
@@ -333,7 +332,7 @@ public class MergeOp implements AutoCloseable {
     return cd.submitRecords(submitRuleOptions(allowClosed));
   }
 
-  private static String describeNotReady(ChangeData cd, SubmitRecord record) throws OrmException {
+  private static String describeNotReady(ChangeData cd, SubmitRecord record) {
     List<String> blockingConditions = new ArrayList<>();
     if (record.labels != null) {
       blockingConditions.add(describeLabels(cd, record.labels));
@@ -346,8 +345,7 @@ public class MergeOp implements AutoCloseable {
     return Joiner.on("; ").join(blockingConditions);
   }
 
-  private static String describeLabels(ChangeData cd, List<SubmitRecord.Label> labels)
-      throws OrmException {
+  private static String describeLabels(ChangeData cd, List<SubmitRecord.Label> labels) {
     List<String> labelResults = new ArrayList<>();
     for (SubmitRecord.Label lbl : labels) {
       switch (lbl.status) {
@@ -383,12 +381,10 @@ public class MergeOp implements AutoCloseable {
         !cs.furtherHiddenChanges(), "checkSubmitRulesAndState called for topic with hidden change");
     for (ChangeData cd : cs.changes()) {
       try {
-        Change.Status status = cd.change().getStatus();
-        if (status != Change.Status.NEW) {
-          if (!(status == Change.Status.MERGED && allowMerged)) {
+        if (!cd.change().isNew()) {
+          if (!(cd.change().isMerged() && allowMerged)) {
             commitStatus.problem(
-                cd.getId(),
-                "Change " + cd.getId() + " is " + cd.change().getStatus().toString().toLowerCase());
+                cd.getId(), "Change " + cd.getId() + " is " + ChangeUtil.status(cd.change()));
           }
         } else if (cd.change().isWorkInProgress()) {
           commitStatus.problem(cd.getId(), "Change " + cd.getId() + " is work in progress");
@@ -397,7 +393,7 @@ public class MergeOp implements AutoCloseable {
         }
       } catch (ResourceConflictException e) {
         commitStatus.problem(cd.getId(), e.getMessage());
-      } catch (OrmException e) {
+      } catch (StorageException e) {
         String msg = "Error checking submit rules for change";
         logger.atWarning().withCause(e).log("%s %s", msg, cd.getId());
         commitStatus.problem(cd.getId(), msg);
@@ -425,31 +421,29 @@ public class MergeOp implements AutoCloseable {
    * topic or via superproject subscriptions. All affected changes are integrated using the projects
    * integration strategy.
    *
-   * @param db the review database.
    * @param change the change to be merged.
    * @param caller the identity of the caller
    * @param checkSubmitRules whether the prolog submit rules should be evaluated
    * @param submitInput parameters regarding the merge
-   * @throws OrmException an error occurred reading or writing the database.
    * @throws RestApiException if an error occurred.
    * @throws PermissionBackendException if permissions can't be checked
    * @throws IOException an error occurred reading from NoteDb.
    */
   public void merge(
-      ReviewDb db,
       Change change,
       IdentifiedUser caller,
       boolean checkSubmitRules,
       SubmitInput submitInput,
       boolean dryrun)
-      throws OrmException, RestApiException, UpdateException, IOException, ConfigInvalidException,
+      throws RestApiException, UpdateException, IOException, ConfigInvalidException,
           PermissionBackendException {
     this.submitInput = submitInput;
-    this.accountsToNotify = notifyUtil.resolveAccounts(submitInput.notifyDetails);
+    this.notify =
+        notifyResolver.resolve(
+            firstNonNull(submitInput.notify, NotifyHandling.ALL), submitInput.notifyDetails);
     this.dryrun = dryrun;
     this.caller = caller;
     this.ts = TimeUtil.nowTs();
-    this.db = db;
     this.submissionId = new RequestId(change.getId().toString());
 
     try (TraceContext traceContext =
@@ -459,7 +453,7 @@ public class MergeOp implements AutoCloseable {
       logger.atFine().log("Beginning integration of %s", change);
       try {
         ChangeSet indexBackedChangeSet =
-            mergeSuperSet.setMergeOpRepoManager(orm).completeChangeSet(db, change, caller);
+            mergeSuperSet.setMergeOpRepoManager(orm).completeChangeSet(change, caller);
         checkState(
             indexBackedChangeSet.ids().contains(change.getId()),
             "change %s missing from %s",
@@ -524,7 +518,7 @@ public class MergeOp implements AutoCloseable {
         }
       } catch (IOException e) {
         // Anything before the merge attempt is an error
-        throw new OrmException(e);
+        throw new StorageException(e);
       }
     }
   }
@@ -534,18 +528,16 @@ public class MergeOp implements AutoCloseable {
       orm.close();
     }
     orm = ormProvider.get();
-    orm.setContext(db, ts, caller);
+    orm.setContext(ts, caller, notify);
   }
 
   private ChangeSet reloadChanges(ChangeSet changeSet) {
     List<ChangeData> visible = new ArrayList<>(changeSet.changes().size());
     List<ChangeData> nonVisible = new ArrayList<>(changeSet.nonVisibleChanges().size());
-    changeSet
-        .changes()
-        .forEach(c -> visible.add(changeDataFactory.create(db, c.project(), c.getId())));
+    changeSet.changes().forEach(c -> visible.add(changeDataFactory.create(c.project(), c.getId())));
     changeSet
         .nonVisibleChanges()
-        .forEach(c -> nonVisible.add(changeDataFactory.create(db, c.project(), c.getId())));
+        .forEach(c -> nonVisible.add(changeDataFactory.create(c.project(), c.getId())));
     return new ChangeSet(visible, nonVisible);
   }
 
@@ -586,7 +578,7 @@ public class MergeOp implements AutoCloseable {
     ListMultimap<Branch.NameKey, ChangeData> cbb;
     try {
       cbb = cs.changesByBranch();
-    } catch (OrmException e) {
+    } catch (StorageException e) {
       throw new IntegrationException("Error reading changes to submit", e);
     }
     Set<Branch.NameKey> branches = cbb.keySet();
@@ -605,7 +597,7 @@ public class MergeOp implements AutoCloseable {
       SubmoduleOp submoduleOp = subOpFactory.create(branches, orm);
       List<SubmitStrategy> strategies = getSubmitStrategies(toSubmit, submoduleOp, dryrun);
       this.allProjects = submoduleOp.getProjectsInOrder();
-      batchUpdateFactory.execute(
+      BatchUpdate.execute(
           orm.batchUpdates(allProjects),
           new SubmitStrategyListener(submitInput, strategies, commitStatus),
           dryrun);
@@ -669,7 +661,6 @@ public class MergeOp implements AutoCloseable {
         SubmitStrategy strategy =
             submitStrategyFactory.create(
                 submitting.submitType(),
-                db,
                 or.rw,
                 or.canMergeFlag,
                 getAlreadyAccepted(or, ob.oldTip),
@@ -680,7 +671,6 @@ public class MergeOp implements AutoCloseable {
                 commitStatus,
                 submissionId,
                 submitInput,
-                accountsToNotify,
                 submoduleOp,
                 dryrun);
         strategies.add(strategy);
@@ -750,7 +740,7 @@ public class MergeOp implements AutoCloseable {
         notes = cd.notes();
         chg = cd.change();
         st = getSubmitType(cd);
-      } catch (OrmException e) {
+      } catch (StorageException e) {
         commitStatus.logProblem(changeId, e);
         continue;
       }
@@ -782,7 +772,7 @@ public class MergeOp implements AutoCloseable {
       Branch.NameKey destBranch = chg.getDest();
       try {
         ps = cd.currentPatchSet();
-      } catch (OrmException e) {
+      } catch (StorageException e) {
         commitStatus.logProblem(changeId, e);
         continue;
       }
@@ -878,7 +868,7 @@ public class MergeOp implements AutoCloseable {
         revisions.put(e.getValue().getObjectId(), PatchSet.Id.fromRef(e.getKey()));
       }
       return revisions;
-    } catch (IOException | OrmException e) {
+    } catch (IOException | StorageException e) {
       throw new IntegrationException("Failed to validate changes", e);
     }
   }
@@ -904,14 +894,14 @@ public class MergeOp implements AutoCloseable {
     try {
       for (ChangeData cd : queryProvider.get().byProjectOpen(destProject)) {
         try (BatchUpdate bu =
-            batchUpdateFactory.create(db, destProject, internalUserFactory.create(), ts)) {
+            batchUpdateFactory.create(destProject, internalUserFactory.create(), ts)) {
           bu.addOp(
               cd.getId(),
               new BatchUpdateOp() {
                 @Override
-                public boolean updateChange(ChangeContext ctx) throws OrmException {
+                public boolean updateChange(ChangeContext ctx) {
                   Change change = ctx.getChange();
-                  if (!change.getStatus().isOpen()) {
+                  if (!change.isNew()) {
                     return false;
                   }
 
@@ -924,8 +914,7 @@ public class MergeOp implements AutoCloseable {
                           change.getLastUpdatedOn(),
                           ChangeMessagesUtil.TAG_MERGED,
                           "Project was deleted.");
-                  cmUtil.addChangeMessage(
-                      ctx.getDb(), ctx.getUpdate(change.currentPatchSetId()), msg);
+                  cmUtil.addChangeMessage(ctx.getUpdate(change.currentPatchSetId()), msg);
 
                   return true;
                 }
@@ -938,7 +927,7 @@ public class MergeOp implements AutoCloseable {
           }
         }
       }
-    } catch (OrmException e) {
+    } catch (StorageException e) {
       logger.atWarning().withCause(e).log(
           "Cannot abandon changes for deleted project %s", destProject);
     }

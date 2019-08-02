@@ -26,6 +26,7 @@ import com.google.gerrit.reviewdb.client.FixReplacement;
 import com.google.gerrit.server.change.FileContentUtil;
 import com.google.gerrit.server.edit.tree.TreeModification;
 import com.google.gerrit.server.project.ProjectState;
+import com.google.gerrit.testing.GerritBaseTests;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -33,14 +34,9 @@ import org.easymock.EasyMock;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
-public class FixReplacementInterpreterTest {
-
-  @Rule public ExpectedException expectedException = ExpectedException.none();
-
+public class FixReplacementInterpreterTest extends GerritBaseTests {
   private final FileContentUtil fileContentUtil = createMock(FileContentUtil.class);
   private final Repository repository = createMock(Repository.class);
   private final ProjectState projectState = createMock(ProjectState.class);
@@ -261,7 +257,7 @@ public class FixReplacementInterpreterTest {
 
     replay(fileContentUtil);
 
-    expectedException.expect(ResourceConflictException.class);
+    exception.expect(ResourceConflictException.class);
     toTreeModifications(fixReplacement);
   }
 
@@ -273,7 +269,7 @@ public class FixReplacementInterpreterTest {
 
     replay(fileContentUtil);
 
-    expectedException.expect(ResourceConflictException.class);
+    exception.expect(ResourceConflictException.class);
     toTreeModifications(fixReplacement);
   }
 
@@ -285,7 +281,7 @@ public class FixReplacementInterpreterTest {
 
     replay(fileContentUtil);
 
-    expectedException.expect(ResourceConflictException.class);
+    exception.expect(ResourceConflictException.class);
     toTreeModifications(fixReplacement);
   }
 
@@ -297,7 +293,7 @@ public class FixReplacementInterpreterTest {
 
     replay(fileContentUtil);
 
-    expectedException.expect(ResourceConflictException.class);
+    exception.expect(ResourceConflictException.class);
     toTreeModifications(fixReplacement);
   }
 
@@ -309,7 +305,7 @@ public class FixReplacementInterpreterTest {
 
     replay(fileContentUtil);
 
-    expectedException.expect(ResourceConflictException.class);
+    exception.expect(ResourceConflictException.class);
     toTreeModifications(fixReplacement);
   }
 

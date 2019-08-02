@@ -14,7 +14,6 @@
 
 package com.google.gerrit.httpd.init;
 
-import static com.google.inject.Scopes.SINGLETON;
 import static com.google.inject.Stage.PRODUCTION;
 
 import com.google.common.base.Splitter;
@@ -38,11 +37,11 @@ import com.google.gerrit.httpd.auth.openid.OpenIdModule;
 import com.google.gerrit.httpd.plugins.HttpPluginModule;
 import com.google.gerrit.httpd.raw.StaticModule;
 import com.google.gerrit.lifecycle.LifecycleManager;
-import com.google.gerrit.lifecycle.LifecycleModule;
 import com.google.gerrit.lucene.LuceneIndexModule;
 import com.google.gerrit.metrics.dropwizard.DropWizardMetricMaker;
 import com.google.gerrit.pgm.util.LogFileCompressor;
 import com.google.gerrit.server.LibModuleLoader;
+import com.google.gerrit.server.LibModuleType;
 import com.google.gerrit.server.ModuleOverloader;
 import com.google.gerrit.server.StartupChecks;
 import com.google.gerrit.server.account.AccountDeactivator;
@@ -80,20 +79,15 @@ import com.google.gerrit.server.mail.SignedTokenEmailTokenVerifier;
 import com.google.gerrit.server.mail.receive.MailReceiver;
 import com.google.gerrit.server.mail.send.SmtpEmailSender;
 import com.google.gerrit.server.mime.MimeUtil2Module;
-import com.google.gerrit.server.notedb.NotesMigration;
 import com.google.gerrit.server.patch.DiffExecutorModule;
 import com.google.gerrit.server.permissions.DefaultPermissionBackendModule;
 import com.google.gerrit.server.plugins.PluginGuiceEnvironment;
 import com.google.gerrit.server.plugins.PluginModule;
 import com.google.gerrit.server.project.DefaultProjectNameLockManager;
 import com.google.gerrit.server.restapi.RestApiModule;
-import com.google.gerrit.server.schema.DataSourceModule;
-import com.google.gerrit.server.schema.DataSourceProvider;
-import com.google.gerrit.server.schema.DataSourceType;
-import com.google.gerrit.server.schema.DatabaseModule;
 import com.google.gerrit.server.schema.JdbcAccountPatchReviewStore;
+import com.google.gerrit.server.schema.NoteDbSchemaVersionCheck;
 import com.google.gerrit.server.schema.SchemaModule;
-import com.google.gerrit.server.schema.SchemaVersionCheck;
 import com.google.gerrit.server.securestore.SecureStoreClassName;
 import com.google.gerrit.server.ssh.NoSshModule;
 import com.google.gerrit.server.ssh.SshAddressesModule;
@@ -112,7 +106,6 @@ import com.google.inject.Key;
 import com.google.inject.Module;
 import com.google.inject.Provider;
 import com.google.inject.ProvisionException;
-import com.google.inject.name.Names;
 import com.google.inject.servlet.GuiceFilter;
 import com.google.inject.servlet.GuiceServletContextListener;
 import com.google.inject.spi.Message;
@@ -132,7 +125,6 @@ import javax.servlet.ServletException;
 import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
-import javax.sql.DataSource;
 import org.eclipse.jgit.lib.Config;
 
 /** Configures the web application environment for Gerrit Code Review. */
@@ -187,7 +179,7 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
       }
 
       try {
-        dbInjector = createDbInjector();
+        cfgInjector = createCfgInjector();
       } catch (CreationException ce) {
         final Message first = ce.getErrorMessages().iterator().next();
         final StringBuilder buf = new StringBuilder();
@@ -207,7 +199,7 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
         throw new CreationException(Collections.singleton(first));
       }
 
-      cfgInjector = createCfgInjector();
+      dbInjector = createDbInjector();
       initIndexType();
       config = cfgInjector.getInstance(Key.get(Config.class, GerritServerConfig.class));
       sysInjector = createSysInjector();
@@ -252,69 +244,33 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
     return new SshAddressesModule().getListenAddresses(config).isEmpty();
   }
 
-  private Injector createDbInjector() {
+  private Injector createCfgInjector() {
     final List<Module> modules = new ArrayList<>();
     AbstractModule secureStore = createSecureStoreModule();
     modules.add(secureStore);
-    if (sitePath != null) {
-      Module sitePathModule =
-          new AbstractModule() {
-            @Override
-            protected void configure() {
-              bind(Path.class).annotatedWith(SitePath.class).toInstance(sitePath);
-            }
-          };
-      modules.add(sitePathModule);
+    Module sitePathModule =
+        new AbstractModule() {
+          @Override
+          protected void configure() {
+            bind(Path.class).annotatedWith(SitePath.class).toInstance(sitePath);
+          }
+        };
+    modules.add(sitePathModule);
 
-      Module configModule = new GerritServerConfigModule();
-      modules.add(configModule);
-
-      Injector cfgInjector = Guice.createInjector(sitePathModule, configModule, secureStore);
-      Config cfg = cfgInjector.getInstance(Key.get(Config.class, GerritServerConfig.class));
-      String dbType = cfg.getString("database", null, "type");
-
-      final DataSourceType dst =
-          Guice.createInjector(new DataSourceModule(), configModule, sitePathModule, secureStore)
-              .getInstance(Key.get(DataSourceType.class, Names.named(dbType.toLowerCase())));
-      modules.add(
-          new LifecycleModule() {
-            @Override
-            protected void configure() {
-              bind(DataSourceType.class).toInstance(dst);
-              bind(DataSourceProvider.Context.class)
-                  .toInstance(DataSourceProvider.Context.MULTI_USER);
-              bind(Key.get(DataSource.class, Names.named("ReviewDb")))
-                  .toProvider(DataSourceProvider.class)
-                  .in(SINGLETON);
-              listener().to(DataSourceProvider.class);
-            }
-          });
-
-    } else {
-      modules.add(
-          new LifecycleModule() {
-            @Override
-            protected void configure() {
-              bind(Key.get(DataSource.class, Names.named("ReviewDb")))
-                  .toProvider(ReviewDbDataSourceProvider.class)
-                  .in(SINGLETON);
-              listener().to(ReviewDbDataSourceProvider.class);
-            }
-          });
-      modules.add(new GerritServerConfigModule());
-    }
-    modules.add(new DatabaseModule());
-    modules.add(new NotesMigration.Module());
+    Module configModule = new GerritServerConfigModule();
+    modules.add(configModule);
     modules.add(new DropWizardMetricMaker.ApiModule());
     return Guice.createInjector(PRODUCTION, modules);
   }
 
-  private Injector createCfgInjector() {
+  private Injector createDbInjector() {
     final List<Module> modules = new ArrayList<>();
     modules.add(new SchemaModule());
-    modules.add(SchemaVersionCheck.module());
+    modules.add(NoteDbSchemaVersionCheck.module());
     modules.add(new AuthConfigModule());
-    return dbInjector.createChildInjector(modules);
+    return cfgInjector.createChildInjector(
+        ModuleOverloader.override(
+            modules, LibModuleLoader.loadModules(cfgInjector, LibModuleType.DB_MODULE)));
   }
 
   private Injector createSysInjector() {
@@ -370,7 +326,7 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
         new AbstractModule() {
           @Override
           protected void configure() {
-            bind(GerritOptions.class).toInstance(new GerritOptions(config, false, false, false));
+            bind(GerritOptions.class).toInstance(new GerritOptions(false, false, false));
             bind(GerritRuntime.class).toInstance(GerritRuntime.DAEMON);
           }
         });
@@ -378,8 +334,9 @@ public class WebAppInitializer extends GuiceServletContextListener implements Fi
     modules.add(new ChangeCleanupRunner.Module());
     modules.add(new AccountDeactivator.Module());
     modules.add(new DefaultProjectNameLockManager.Module());
-    return cfgInjector.createChildInjector(
-        ModuleOverloader.override(modules, LibModuleLoader.loadModules(cfgInjector)));
+    return dbInjector.createChildInjector(
+        ModuleOverloader.override(
+            modules, LibModuleLoader.loadModules(cfgInjector, LibModuleType.SYS_MODULE)));
   }
 
   private Module createIndexModule() {

@@ -27,6 +27,7 @@
 
   Polymer({
     is: 'gr-messages-list',
+    _legacyUndefinedCheck: true,
 
     properties: {
       changeNum: Number,
@@ -184,8 +185,8 @@
       this.handleExpandCollapse(!this._expanded);
     },
 
-    _handleScrollTo(e) {
-      this.scrollToMessage(e.detail.message.id);
+    _handleAnchorTap(e) {
+      this.scrollToMessage(e.detail.id);
     },
 
     _hasAutomatedMessages(messages) {

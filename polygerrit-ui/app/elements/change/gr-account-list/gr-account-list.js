@@ -21,6 +21,7 @@
 
   Polymer({
     is: 'gr-account-list',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when user inputs an invalid email address.
@@ -88,7 +89,9 @@
     },
 
     get accountChips() {
-      return Polymer.dom(this.root).querySelectorAll('gr-account-chip');
+      // Polymer2: querySelectorAll returns NodeList instead of Array.
+      return Array.from(
+          Polymer.dom(this.root).querySelectorAll('gr-account-chip'));
     },
 
     get focusStart() {

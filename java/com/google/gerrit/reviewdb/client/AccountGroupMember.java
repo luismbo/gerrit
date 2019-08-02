@@ -14,19 +14,20 @@
 
 package com.google.gerrit.reviewdb.client;
 
-import com.google.gwtorm.client.Column;
 import com.google.gwtorm.client.CompoundKey;
 import java.util.Objects;
 
 /** Membership of an {@link Account} in an {@link AccountGroup}. */
 public final class AccountGroupMember {
+  public static Key key(Account.Id accountId, AccountGroup.Id groupId) {
+    return new Key(accountId, groupId);
+  }
+
   public static class Key extends CompoundKey<Account.Id> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1)
     protected Account.Id accountId;
 
-    @Column(id = 2)
     protected AccountGroup.Id groupId;
 
     protected Key() {
@@ -44,8 +45,16 @@ public final class AccountGroupMember {
       return accountId;
     }
 
+    public Account.Id accountId() {
+      return getParentKey();
+    }
+
     public AccountGroup.Id getAccountGroupId() {
       return groupId;
+    }
+
+    public AccountGroup.Id groupId() {
+      return getAccountGroupId();
     }
 
     @Override
@@ -54,7 +63,6 @@ public final class AccountGroupMember {
     }
   }
 
-  @Column(id = 1, name = Column.NONE)
   protected Key key;
 
   protected AccountGroupMember() {}

@@ -34,6 +34,7 @@ import com.google.gerrit.index.QueryOptions;
 import com.google.gerrit.index.query.FieldBundle;
 import com.google.gerrit.index.query.Predicate;
 import com.google.gerrit.index.query.QueryParseException;
+import com.google.gerrit.index.query.ResultSet;
 import com.google.gerrit.metrics.Description;
 import com.google.gerrit.metrics.Description.Units;
 import com.google.gerrit.metrics.MetricMaker;
@@ -56,8 +57,6 @@ import com.google.gerrit.server.project.NoSuchProjectException;
 import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.query.account.AccountPredicates;
 import com.google.gerrit.server.query.account.AccountQueryBuilder;
-import com.google.gwtorm.server.OrmException;
-import com.google.gwtorm.server.ResultSet;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -116,9 +115,9 @@ public class ReviewersUtil {
     }
   }
 
-  // Generate a candidate list at 2x the size of what the user wants to see to
+  // Generate a candidate list at 3x the size of what the user wants to see to
   // give the ranking algorithm a good set of candidates it can work with
-  private static final int CANDIDATE_LIST_MULTIPLIER = 2;
+  private static final int CANDIDATE_LIST_MULTIPLIER = 3;
 
   private final AccountLoader.Factory accountLoaderFactory;
   private final AccountQueryBuilder accountQueryBuilder;
@@ -156,7 +155,7 @@ public class ReviewersUtil {
   }
 
   public interface VisibilityControl {
-    boolean isVisibleTo(Account.Id account) throws OrmException;
+    boolean isVisibleTo(Account.Id account);
   }
 
   public List<SuggestedReviewerInfo> suggestReviewers(
@@ -165,7 +164,7 @@ public class ReviewersUtil {
       ProjectState projectState,
       VisibilityControl visibilityControl,
       boolean excludeGroups)
-      throws IOException, OrmException, ConfigInvalidException, PermissionBackendException {
+      throws IOException, ConfigInvalidException, PermissionBackendException {
     CurrentUser currentUser = self.get();
     if (changeNotes != null) {
       logger.atFine().log(
@@ -224,7 +223,7 @@ public class ReviewersUtil {
     return suggestedReviewers;
   }
 
-  private List<Account.Id> suggestAccounts(SuggestReviewers suggestReviewers) throws OrmException {
+  private List<Account.Id> suggestAccounts(SuggestReviewers suggestReviewers) {
     try (Timer0.Context ctx = metrics.queryAccountsLatency.start()) {
       try {
         // For performance reasons we don't use AccountQueryProvider as it would always load the
@@ -264,7 +263,7 @@ public class ReviewersUtil {
       VisibilityControl visibilityControl,
       boolean excludeGroups,
       List<Account.Id> filteredRecommendations)
-      throws OrmException, PermissionBackendException, IOException {
+      throws PermissionBackendException, IOException {
     List<SuggestedReviewerInfo> suggestedReviewers = loadAccounts(filteredRecommendations);
 
     int limit = suggestReviewers.getLimit();
@@ -293,7 +292,7 @@ public class ReviewersUtil {
       SuggestReviewers suggestReviewers,
       ProjectState projectState,
       List<Account.Id> candidateList)
-      throws OrmException, IOException, ConfigInvalidException {
+      throws IOException, ConfigInvalidException {
     try (Timer0.Context ctx = metrics.recommendAccountsLatency.start()) {
       return reviewerRecommender.suggestReviewers(
           changeNotes, suggestReviewers, projectState, candidateList);
@@ -329,7 +328,7 @@ public class ReviewersUtil {
       ProjectState projectState,
       VisibilityControl visibilityControl,
       int limit)
-      throws OrmException, IOException {
+      throws IOException {
     try (Timer0.Context ctx = metrics.queryGroupsLatency.start()) {
       List<SuggestedReviewerInfo> groups = new ArrayList<>();
       for (GroupReference g : suggestAccountGroups(suggestReviewers, projectState)) {
@@ -375,7 +374,7 @@ public class ReviewersUtil {
       Project project,
       GroupReference group,
       VisibilityControl visibilityControl)
-      throws OrmException, IOException {
+      throws IOException {
     GroupAsReviewer result = new GroupAsReviewer();
     int maxAllowed = suggestReviewers.getMaxAllowed();
     int maxAllowedWithoutConfirmation = suggestReviewers.getMaxAllowedWithoutConfirmation();
@@ -399,7 +398,8 @@ public class ReviewersUtil {
         return result;
       }
 
-      boolean needsConfirmation = result.size > maxAllowedWithoutConfirmation;
+      boolean needsConfirmation =
+          maxAllowedWithoutConfirmation > 0 && result.size > maxAllowedWithoutConfirmation;
       if (needsConfirmation) {
         logger.atFine().log(
             "group %s needs confirmation to be added as reviewer, it has %d members",

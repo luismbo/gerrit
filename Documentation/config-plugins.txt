@@ -9,6 +9,10 @@ Plugin installation is as easy as dropping the plugin jar into the
 link:config-gerrit.html#plugins.checkFrequency[a few minutes] until
 the server picks up new and updated plugins.
 
+Due to caching, you might need to flush your browser cache after
+installing a plugin. Users will usually see the result within
+several minutes.
+
 Plugins can also be installed via
 link:rest-api-plugins.html#install-plugin[REST] and
 link:cmd-plugin-install.html[SSH].
@@ -61,6 +65,18 @@ Documentation] |
 link:https://gerrit.googlesource.com/plugins/commit-message-length-validator/+doc/master/src/main/resources/Documentation/config.md[
 Configuration]
 
+[[delete-project]]
+=== delete-project
+
+Provides the ability to delete a project.
+
+link:https://gerrit-review.googlesource.com/admin/repos/plugins/delete-project[
+Project] |
+link:https://gerrit.googlesource.com/plugins/delete-project/+doc/master/src/main/resources/Documentation/about.md[
+Documentation] |
+link:https://gerrit.googlesource.com/plugins/delete-project/+doc/master/src/main/resources/Documentation/config.md[
+Configuration]
+
 [[download-commands]]
 === download-commands
 
@@ -74,6 +90,14 @@ Documentation] |
 link:https://gerrit.googlesource.com/plugins/download-commands/+doc/master/src/main/resources/Documentation/config.md[
 Configuration]
 
+[[gitiles]]
+=== gitiles
+
+Plugin running Gitiles alongside a Gerrit server.
+
+link:https://gerrit-review.googlesource.com/admin/repos/plugins/gitiles[
+Project]
+
 [[hooks]]
 === hooks
 
@@ -84,6 +108,20 @@ Project] |
 link:https://gerrit.googlesource.com/plugins/hooks/+doc/master/src/main/resources/Documentation/about.md[
 Documentation] |
 link:https://gerrit.googlesource.com/plugins/hooks/+doc/master/src/main/resources/Documentation/config.md[
+Configuration]
+
+[[plugin-manager]]
+=== plugin-manager
+
+This plugins provides an initial wizard to discover and install Gerrit plugins.
+Per default GerritForge CI is used to download the plugin artifacts from, but
+this can be changed per plugin configuration.
+
+link:https://gerrit-review.googlesource.com/admin/repos/plugins/plugin-manager[
+Project]
+link:https://gerrit.googlesource.com/plugins/plugin-manager/+doc/master/src/main/resources/Documentation/about.md[
+Documentation]
+link:https://gerrit.googlesource.com/plugins/plugin-manager/+doc/master/src/main/resources/Documentation/config.md[
 Configuration]
 
 [[replication]]
@@ -118,6 +156,18 @@ Documentation]
 This plugin provides a group per user. This is useful to assign access
 rights directly to a single user, since in Gerrit access rights can
 only be assigned to groups.
+
+[[webhooks]]
+=== webhooks
+
+This plugin allows to propagate Gerrit events to remote http endpoints.
+
+link:https://gerrit-review.googlesource.com/admin/repos/plugins/webhooks[
+Project] |
+link:https://gerrit.googlesource.com/plugins/webhooks/+doc/master/src/main/resources/Documentation/about.md[
+Documentation] |
+link:https://gerrit.googlesource.com/plugins/webhooks/+doc/master/src/main/resources/Documentation/config.md[
+Configuration]
 
 [[other-plugins]]
 == Other Plugins
@@ -189,8 +239,7 @@ Project]
 
 This plugin allows the rendering of Git repository branch network in a
 graphical HTML5 Canvas. It is mainly intended to be used as a
-"project link" in a gitweb configuration or by other Gerrit GWT UI
-plugins to be plugged elsewhere in Gerrit.
+"project link" in a gitweb configuration.
 
 link:https://gerrit-review.googlesource.com/admin/repos/plugins/branch-network[
 Project] |
@@ -211,15 +260,16 @@ Plugin Documentation] |
 link:https://gerrit.googlesource.com/plugins/changemessage/+doc/master/src/main/resources/Documentation/config.md[
 Configuration]
 
-[[delete-project]]
-=== delete-project
+[[checks]]
+=== checks
 
-Provides the ability to delete a project.
+The checks plugin provides a REST API and UI extensions for integrating
+CI systems with Gerrit.
 
-link:https://gerrit-review.googlesource.com/admin/repos/plugins/delete-project[
+link:https://gerrit-review.googlesource.com/admin/repos/plugins/checks[
 Project] |
-link:https://gerrit.googlesource.com/plugins/delete-project/+doc/master/src/main/resources/Documentation/about.md[
-Documentation]
+link:https://gerrit.googlesource.com/plugins/checks/+doc/master/src/main/resources/Documentation/about.md[
+Plugin Documentation]]
 
 [[egit]]
 === egit
@@ -247,6 +297,17 @@ Documentation] |
 link:https://gerrit.googlesource.com/plugins/emoticons/+doc/master/src/main/resources/Documentation/config.md[
 Configuration]
 
+[[find-owners]]
+=== find-owners
+This plugin provides (1) a change review action button `[FIND OWNERS]`
+that shows owners of changed files to be included as code reviewers, and
+(2) Prolog predicates to make sure that a CL is submittable
+only with owner Code-Review +1 votes.
+
+link:https://gerrit-review.googlesource.com/admin/repos/plugins/find-owners[Project] |
+link:https://gerrit.googlesource.com/plugins/find-owners/+doc/master/src/main/resources/Documentation/about.md[Documentation] |
+link:https://gerrit.googlesource.com/plugins/find-owners/+doc/master/src/main/resources/Documentation/config.md[Configuration]
+
 [[gitblit]]
 === gitblit
 
@@ -261,14 +322,6 @@ Project]
 Plugin to integrate with GitHub: replication, pull-request to Change-Sets
 
 link:https://gerrit-review.googlesource.com/admin/repos/plugins/github[
-Project]
-
-[[gitiles]]
-=== gitiles
-
-Plugin running Gitiles alongside a Gerrit server.
-
-link:https://gerrit-review.googlesource.com/admin/repos/plugins/gitiles[
 Project]
 
 [[healthcheck]]
@@ -489,13 +542,21 @@ Configuration]
 [[oauth-authentication-provider]]
 === OAuth authentication provider
 This plugin enables Gerrit to use OAuth2 protocol for authentication.
-Two different OAuth providers are supported:
+Several OAuth2 providers are supported:
 
+* AirVantage
+* Bitbucket
+* CAS
+* CoreOS Dex
+* Facebook
 * GitHub
+* GitLab
 * Google
+* Keycloak
+* Office365
 
-https://github.com/davido/gerrit-oauth-provider[Project] |
-https://github.com/davido/gerrit-oauth-provider/wiki/Getting-Started[Configuration]
+link:https://gerrit-review.googlesource.com/admin/repos/plugins/oauth[Project] |
+link:https://gerrit.googlesource.com/plugins/oauth/+doc/master/src/main/resources/Documentation/config.md[Configuration]
 
 [[owners]]
 === owners
@@ -632,6 +693,13 @@ link:https://gerrit-review.googlesource.com/admin/repos/plugins/scripting/groovy
 Project] |
 link:https://gerrit.googlesource.com/plugins/scripting/groovy-provider/+doc/master/src/main/resources/Documentation/about.md[
 Documentation]
+
+[[saml-authentication-provider]]
+=== SAML2 authentication provider
+
+This plugin enables Gerrit to use SAML2 protocol for authentication.
+
+link:https://gerrit-review.googlesource.com/admin/repos/plugins/saml[Project]
 
 [[scala-provider]]
 === scripting/scala-provider

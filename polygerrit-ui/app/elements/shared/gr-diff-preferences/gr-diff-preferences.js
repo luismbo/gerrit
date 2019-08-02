@@ -19,6 +19,7 @@
 
   Polymer({
     is: 'gr-diff-preferences',
+    _legacyUndefinedCheck: true,
 
     properties: {
       hasUnsavedChanges: {
@@ -65,7 +66,7 @@
 
     _handleAutomaticReviewTap() {
       this.set('diffPrefs.manual_review',
-          this.$.automaticReviewInput.checked);
+          !this.$.automaticReviewInput.checked);
       this._handleDiffPrefsChanged();
     },
 

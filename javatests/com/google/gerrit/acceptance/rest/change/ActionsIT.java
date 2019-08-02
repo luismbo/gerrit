@@ -24,6 +24,7 @@ import com.google.common.collect.Iterables;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.PushOneCommit;
 import com.google.gerrit.acceptance.TestProjectInput;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.extensions.api.changes.ActionVisitor;
 import com.google.gerrit.extensions.api.changes.ReviewInput;
 import com.google.gerrit.extensions.client.ListChangesOption;
@@ -54,9 +55,9 @@ public class ActionsIT extends AbstractDaemonTest {
     return submitWholeTopicEnabledConfig();
   }
 
-  @Inject private RevisionJson.Factory revisionJsonFactory;
-
   @Inject private DynamicSet<ActionVisitor> actionVisitors;
+  @Inject private RequestScopeOperations requestScopeOperations;
+  @Inject private RevisionJson.Factory revisionJsonFactory;
 
   private RegistrationHandle visitorHandle;
 
@@ -156,25 +157,25 @@ public class ActionsIT extends AbstractDaemonTest {
     String change = createChangeWithTopic().getChangeId();
     approve(change);
 
-    setApiUserAnonymous();
+    requestScopeOperations.setApiUserAnonymous();
     String etag1 = getETag(change);
 
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     approve(parent);
 
-    setApiUserAnonymous();
+    requestScopeOperations.setApiUserAnonymous();
     String etag2 = getETag(change);
 
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     String changeWithSameTopic = createChangeWithTopic().getChangeId();
 
-    setApiUserAnonymous();
+    requestScopeOperations.setApiUserAnonymous();
     String etag3 = getETag(change);
 
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     approve(changeWithSameTopic);
 
-    setApiUserAnonymous();
+    requestScopeOperations.setApiUserAnonymous();
     String etag4 = getETag(change);
 
     if (isSubmitWholeTopicEnabled()) {
@@ -193,13 +194,13 @@ public class ActionsIT extends AbstractDaemonTest {
     String change = createChange().getChangeId();
     approve(change);
 
-    setApiUserAnonymous();
+    requestScopeOperations.setApiUserAnonymous();
     String etag1 = getETag(change);
 
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     approve(parent);
 
-    setApiUserAnonymous();
+    requestScopeOperations.setApiUserAnonymous();
     String etag2 = getETag(change);
     assertThat(etag2).isEqualTo(etag1);
   }
@@ -327,7 +328,7 @@ public class ActionsIT extends AbstractDaemonTest {
     }
 
     Map<String, ActionInfo> origActions = origChange.actions;
-    assertThat(origActions.keySet()).containsAllOf("followup", "abandon");
+    assertThat(origActions.keySet()).containsAtLeast("followup", "abandon");
     assertThat(origActions.get("abandon").label).isEqualTo("Abandon");
 
     Visitor v = new Visitor();
@@ -376,7 +377,7 @@ public class ActionsIT extends AbstractDaemonTest {
     }
 
     Map<String, ActionInfo> origActions = gApi.changes().id(id).current().actions();
-    assertThat(origActions.keySet()).containsAllOf("cherrypick", "rebase");
+    assertThat(origActions.keySet()).containsAtLeast("cherrypick", "rebase");
     assertThat(origActions.get("rebase").label).isEqualTo("Rebase");
 
     Visitor v = new Visitor();
@@ -393,7 +394,7 @@ public class ActionsIT extends AbstractDaemonTest {
     visitedCurrentRevisionActionsAssertions(origActions, revisionInfo.actions);
 
     // ...via ChangeJson directly.
-    ChangeData cd = changeDataFactory.create(db, project, changeId);
+    ChangeData cd = changeDataFactory.create(project, changeId);
     revisionJsonFactory.create(opts).getRevisionInfo(cd, cd.patchSet(new PatchSet.Id(changeId, 1)));
   }
 

@@ -14,10 +14,14 @@
 
 package com.google.gerrit.server.git;
 
+import com.google.common.collect.ImmutableList;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackendException;
+import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import org.eclipse.jgit.lib.Ref;
+import org.eclipse.jgit.lib.RefDatabase;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.transport.AbstractAdvertiseRefsHook;
@@ -28,7 +32,6 @@ import org.eclipse.jgit.transport.ServiceMayNotContinueException;
  * implements {@link org.eclipse.jgit.transport.AdvertiseRefsHook}.
  */
 public class DefaultAdvertiseRefsHook extends AbstractAdvertiseRefsHook {
-
   private final PermissionBackend.ForProject perm;
   private final PermissionBackend.RefFilterOptions opts;
 
@@ -42,9 +45,14 @@ public class DefaultAdvertiseRefsHook extends AbstractAdvertiseRefsHook {
   protected Map<String, Ref> getAdvertisedRefs(Repository repo, RevWalk revWalk)
       throws ServiceMayNotContinueException {
     try {
-      return perm.filter(repo.getAllRefs(), repo, opts);
-    } catch (PermissionBackendException e) {
-      throw new ServiceMayNotContinueException(e);
+      List<String> prefixes =
+          !opts.prefixes().isEmpty() ? opts.prefixes() : ImmutableList.of(RefDatabase.ALL);
+      return perm.filter(
+          repo.getRefDatabase().getRefsByPrefix(prefixes.toArray(new String[0])), repo, opts);
+    } catch (IOException | PermissionBackendException e) {
+      ServiceMayNotContinueException ex = new ServiceMayNotContinueException();
+      ex.initCause(e);
+      throw ex;
     }
   }
 }

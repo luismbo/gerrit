@@ -20,7 +20,6 @@ import com.google.common.base.CharMatcher;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.gerrit.common.data.ContributorAgreement;
-import com.google.gerrit.extensions.client.UiType;
 import com.google.gerrit.extensions.common.AccountsInfo;
 import com.google.gerrit.extensions.common.AuthInfo;
 import com.google.gerrit.extensions.common.ChangeConfigInfo;
@@ -49,13 +48,11 @@ import com.google.gerrit.server.config.AnonymousCowardName;
 import com.google.gerrit.server.config.AuthConfig;
 import com.google.gerrit.server.config.ConfigResource;
 import com.google.gerrit.server.config.ConfigUtil;
-import com.google.gerrit.server.config.GerritOptions;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.config.SitePaths;
 import com.google.gerrit.server.documentation.QueryDocumentationExecutor;
 import com.google.gerrit.server.index.change.ChangeField;
 import com.google.gerrit.server.index.change.ChangeIndexCollection;
-import com.google.gerrit.server.notedb.NotesMigration;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.plugincontext.PluginItemContext;
 import com.google.gerrit.server.plugincontext.PluginMapContext;
@@ -67,7 +64,6 @@ import com.google.inject.Inject;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -94,10 +90,8 @@ public class GetServerInfo implements RestReadView<ConfigResource> {
   private final PluginItemContext<AvatarProvider> avatar;
   private final boolean enableSignedPush;
   private final QueryDocumentationExecutor docSearcher;
-  private final NotesMigration migration;
   private final ProjectCache projectCache;
   private final AgreementJson agreementJson;
-  private final GerritOptions gerritOptions;
   private final ChangeIndexCollection indexes;
   private final SitePaths sitePaths;
 
@@ -118,10 +112,8 @@ public class GetServerInfo implements RestReadView<ConfigResource> {
       PluginItemContext<AvatarProvider> avatar,
       @EnableSignedPush boolean enableSignedPush,
       QueryDocumentationExecutor docSearcher,
-      NotesMigration migration,
       ProjectCache projectCache,
       AgreementJson agreementJson,
-      GerritOptions gerritOptions,
       ChangeIndexCollection indexes,
       SitePaths sitePaths) {
     this.config = config;
@@ -139,10 +131,8 @@ public class GetServerInfo implements RestReadView<ConfigResource> {
     this.avatar = avatar;
     this.enableSignedPush = enableSignedPush;
     this.docSearcher = docSearcher;
-    this.migration = migration;
     this.projectCache = projectCache;
     this.agreementJson = agreementJson;
-    this.gerritOptions = gerritOptions;
     this.indexes = indexes;
     this.sitePaths = sitePaths;
   }
@@ -155,7 +145,7 @@ public class GetServerInfo implements RestReadView<ConfigResource> {
     info.change = getChangeInfo();
     info.download = getDownloadInfo();
     info.gerrit = getGerritInfo();
-    info.noteDbEnabled = toBoolean(isNoteDbEnabled());
+    info.noteDbEnabled = true;
     info.plugin = getPluginInfo();
     info.defaultTheme = getDefaultTheme();
     info.sshd = getSshdInfo();
@@ -308,11 +298,6 @@ public class GetServerInfo implements RestReadView<ConfigResource> {
     info.docSearch = docSearcher.isAvailable();
     info.editGpgKeys =
         toBoolean(enableSignedPush && config.getBoolean("gerrit", null, "editGpgKeys", true));
-    info.webUis = EnumSet.noneOf(UiType.class);
-    info.webUis.add(UiType.POLYGERRIT);
-    if (gerritOptions.enableGwtUi()) {
-      info.webUis.add(UiType.GWT);
-    }
     info.primaryWeblinkName = config.getString("gerrit", null, "primaryWeblinkName");
     return info;
   }
@@ -323,10 +308,6 @@ public class GetServerInfo implements RestReadView<ConfigResource> {
       return null;
     }
     return CharMatcher.is('/').trimTrailingFrom(docUrl) + '/';
-  }
-
-  private boolean isNoteDbEnabled() {
-    return migration.readChanges();
   }
 
   private PluginConfigInfo getPluginInfo() {

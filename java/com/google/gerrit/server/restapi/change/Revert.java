@@ -14,14 +14,13 @@
 
 package com.google.gerrit.server.restapi.change;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.gerrit.extensions.conditions.BooleanCondition.and;
 import static com.google.gerrit.server.permissions.RefPermission.CREATE_CHANGE;
 
 import com.google.common.base.Strings;
-import com.google.common.collect.ListMultimap;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
-import com.google.gerrit.extensions.api.changes.RecipientType;
 import com.google.gerrit.extensions.api.changes.RevertInput;
 import com.google.gerrit.extensions.common.ChangeInfo;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
@@ -33,7 +32,6 @@ import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.ChangeMessage;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.ChangeMessagesUtil;
 import com.google.gerrit.server.ChangeUtil;
@@ -41,17 +39,17 @@ import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.GerritPersonIdent;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.ReviewerSet;
-import com.google.gerrit.server.Sequences;
 import com.google.gerrit.server.change.ChangeInserter;
 import com.google.gerrit.server.change.ChangeJson;
 import com.google.gerrit.server.change.ChangeMessages;
 import com.google.gerrit.server.change.ChangeResource;
-import com.google.gerrit.server.change.NotifyUtil;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.extensions.events.ChangeReverted;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.mail.send.RevertedSender;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.notedb.ReviewerStateInternal;
+import com.google.gerrit.server.notedb.Sequences;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.project.ContributorAgreementsChecker;
@@ -66,7 +64,6 @@ import com.google.gerrit.server.update.RetryHelper;
 import com.google.gerrit.server.update.RetryingRestModifyView;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -92,7 +89,6 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
     implements UiAction<ChangeResource> {
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
-  private final Provider<ReviewDb> db;
   private final PermissionBackend permissionBackend;
   private final GitRepositoryManager repoManager;
   private final ChangeInserter.Factory changeInserterFactory;
@@ -106,11 +102,10 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
   private final ChangeReverted changeReverted;
   private final ContributorAgreementsChecker contributorAgreements;
   private final ProjectCache projectCache;
-  private final NotifyUtil notifyUtil;
+  private final NotifyResolver notifyResolver;
 
   @Inject
   Revert(
-      Provider<ReviewDb> db,
       PermissionBackend permissionBackend,
       GitRepositoryManager repoManager,
       ChangeInserter.Factory changeInserterFactory,
@@ -125,9 +120,8 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
       ChangeReverted changeReverted,
       ContributorAgreementsChecker contributorAgreements,
       ProjectCache projectCache,
-      NotifyUtil notifyUtil) {
+      NotifyResolver notifyResolver) {
     super(retryHelper);
-    this.db = db;
     this.permissionBackend = permissionBackend;
     this.repoManager = repoManager;
     this.changeInserterFactory = changeInserterFactory;
@@ -141,16 +135,16 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
     this.changeReverted = changeReverted;
     this.contributorAgreements = contributorAgreements;
     this.projectCache = projectCache;
-    this.notifyUtil = notifyUtil;
+    this.notifyResolver = notifyResolver;
   }
 
   @Override
   public ChangeInfo applyImpl(
       BatchUpdate.Factory updateFactory, ChangeResource rsrc, RevertInput input)
-      throws IOException, OrmException, RestApiException, UpdateException, NoSuchChangeException,
+      throws IOException, RestApiException, UpdateException, NoSuchChangeException,
           PermissionBackendException, NoSuchProjectException, ConfigInvalidException {
     Change change = rsrc.getChange();
-    if (change.getStatus() != Change.Status.MERGED) {
+    if (!change.isMerged()) {
       throw new ResourceConflictException("change is " + ChangeUtil.status(change));
     }
 
@@ -164,11 +158,11 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
 
   private Change.Id revert(
       BatchUpdate.Factory updateFactory, ChangeNotes notes, CurrentUser user, RevertInput input)
-      throws OrmException, IOException, RestApiException, UpdateException, ConfigInvalidException {
+      throws IOException, RestApiException, UpdateException, ConfigInvalidException {
     String message = Strings.emptyToNull(input.message);
     Change.Id changeIdToRevert = notes.getChangeId();
     PatchSet.Id patchSetId = notes.getChange().currentPatchSetId();
-    PatchSet patch = psUtil.get(db.get(), notes, patchSetId);
+    PatchSet patch = psUtil.get(notes, patchSetId);
     if (patch == null) {
       throw new ResourceNotFoundException(changeIdToRevert.toString());
     }
@@ -220,18 +214,17 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
       ObjectId id = oi.insert(revertCommitBuilder);
       RevCommit revertCommit = revWalk.parseCommit(id);
 
-      ListMultimap<RecipientType, Account.Id> accountsToNotify =
-          notifyUtil.resolveAccounts(input.notifyDetails);
+      NotifyResolver.Result notify =
+          notifyResolver.resolve(
+              firstNonNull(input.notify, NotifyHandling.ALL), input.notifyDetails);
 
       ChangeInserter ins =
           changeInserterFactory
               .create(changeId, revertCommit, notes.getChange().getDest().get())
               .setTopic(changeToRevert.getTopic());
       ins.setMessage("Uploaded patch set 1.");
-      ins.setNotify(input.notify);
-      ins.setAccountsToNotify(accountsToNotify);
 
-      ReviewerSet reviewerSet = approvalsUtil.getReviewers(db.get(), notes);
+      ReviewerSet reviewerSet = approvalsUtil.getReviewers(notes);
 
       Set<Account.Id> reviewers = new HashSet<>();
       reviewers.add(changeToRevert.getOwner());
@@ -242,10 +235,11 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
       ins.setReviewersAndCcs(reviewers, ccs);
       ins.setRevertOf(changeIdToRevert);
 
-      try (BatchUpdate bu = updateFactory.create(db.get(), project, user, now)) {
+      try (BatchUpdate bu = updateFactory.create(project, user, now)) {
         bu.setRepository(git, revWalk, oi);
+        bu.setNotify(notify);
         bu.insertChange(ins);
-        bu.addOp(changeId, new NotifyOp(changeToRevert, ins, input.notify, accountsToNotify));
+        bu.addOp(changeId, new NotifyOp(changeToRevert, ins));
         bu.addOp(changeToRevert.getId(), new PostRevertedMessageOp(computedChangeId));
         bu.execute();
       }
@@ -270,7 +264,7 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
         .setTitle("Revert the change")
         .setVisible(
             and(
-                change.getStatus() == Change.Status.MERGED && projectStatePermitsWrite,
+                change.isMerged() && projectStatePermitsWrite,
                 permissionBackend
                     .user(rsrc.getUser())
                     .ref(change.getDest())
@@ -280,18 +274,10 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
   private class NotifyOp implements BatchUpdateOp {
     private final Change change;
     private final ChangeInserter ins;
-    private final NotifyHandling notifyHandling;
-    private final ListMultimap<RecipientType, Account.Id> accountsToNotify;
 
-    NotifyOp(
-        Change change,
-        ChangeInserter ins,
-        NotifyHandling notifyHandling,
-        ListMultimap<RecipientType, Account.Id> accountsToNotify) {
+    NotifyOp(Change change, ChangeInserter ins) {
       this.change = change;
       this.ins = ins;
-      this.notifyHandling = notifyHandling;
-      this.accountsToNotify = accountsToNotify;
     }
 
     @Override
@@ -300,8 +286,7 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
       try {
         RevertedSender cm = revertedSenderFactory.create(ctx.getProject(), change.getId());
         cm.setFrom(ctx.getAccountId());
-        cm.setNotify(notifyHandling);
-        cm.setAccountsToNotify(accountsToNotify);
+        cm.setNotify(ctx.getNotify(change.getId()));
         cm.send();
       } catch (Exception err) {
         logger.atSevere().withCause(err).log(
@@ -318,7 +303,7 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
     }
 
     @Override
-    public boolean updateChange(ChangeContext ctx) throws Exception {
+    public boolean updateChange(ChangeContext ctx) {
       Change change = ctx.getChange();
       PatchSet.Id patchSetId = change.currentPatchSetId();
       ChangeMessage changeMessage =
@@ -326,7 +311,7 @@ public class Revert extends RetryingRestModifyView<ChangeResource, RevertInput, 
               ctx,
               "Created a revert of this change as I" + computedChangeId.name(),
               ChangeMessagesUtil.TAG_REVERT);
-      cmUtil.addChangeMessage(ctx.getDb(), ctx.getUpdate(patchSetId), changeMessage);
+      cmUtil.addChangeMessage(ctx.getUpdate(patchSetId), changeMessage);
       return true;
     }
   }

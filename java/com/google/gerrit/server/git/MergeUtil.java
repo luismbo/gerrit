@@ -30,8 +30,10 @@ import com.google.common.collect.Sets;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.FooterConstants;
 import com.google.gerrit.common.data.LabelType;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.registration.DynamicItem;
 import com.google.gerrit.extensions.registration.DynamicSet;
+import com.google.gerrit.extensions.registration.Extension;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.MergeConflictException;
 import com.google.gerrit.extensions.restapi.MethodNotAllowedException;
@@ -42,9 +44,7 @@ import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.LabelId;
 import com.google.gerrit.reviewdb.client.PatchSet;
-import com.google.gerrit.reviewdb.client.PatchSet.Id;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.config.GerritServerConfig;
@@ -57,9 +57,7 @@ import com.google.gerrit.server.submit.CommitMergeStatus;
 import com.google.gerrit.server.submit.IntegrationException;
 import com.google.gerrit.server.submit.MergeIdenticalTreeException;
 import com.google.gerrit.server.submit.MergeSorter;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
 import com.google.inject.assistedinject.AssistedInject;
 import java.io.IOException;
@@ -131,20 +129,31 @@ public class MergeUtil {
     }
 
     public String generate(
-        RevCommit original, RevCommit mergeTip, Branch.NameKey dest, String current) {
+        RevCommit original, RevCommit mergeTip, Branch.NameKey dest, String originalMessage) {
       requireNonNull(original.getRawBuffer());
       if (mergeTip != null) {
         requireNonNull(mergeTip.getRawBuffer());
       }
-      for (ChangeMessageModifier changeMessageModifier : changeMessageModifiers) {
+
+      int count = 0;
+      String current = originalMessage;
+      for (Extension<ChangeMessageModifier> ext : changeMessageModifiers.entries()) {
+        ChangeMessageModifier changeMessageModifier = ext.get();
+        String className = changeMessageModifier.getClass().getName();
         current = changeMessageModifier.onSubmit(current, original, mergeTip, dest);
-        requireNonNull(
-            current,
-            () ->
-                String.format(
-                    "%s.OnSubmit returned null instead of new commit message",
-                    changeMessageModifier.getClass().getName()));
+        checkState(
+            current != null,
+            "%s.onSubmit from plugin %s returned null instead of new commit message",
+            className,
+            ext.getPluginName());
+        count++;
+        logger.atFine().log(
+            "Invoked %s from plugin %s, message length now %d",
+            className, ext.getPluginName(), current.length());
       }
+      logger.atFine().log(
+          "Invoked %d ChangeMessageModifiers on message with original length %d",
+          count, originalMessage.length());
       return current;
     }
   }
@@ -191,7 +200,6 @@ public class MergeUtil {
     MergeUtil create(ProjectState project, boolean useContentMerge);
   }
 
-  private final Provider<ReviewDb> db;
   private final IdentifiedUser.GenericFactory identifiedUserFactory;
   private final DynamicItem<UrlFormatter> urlFormatter;
   private final ApprovalsUtil approvalsUtil;
@@ -204,7 +212,6 @@ public class MergeUtil {
   @AssistedInject
   MergeUtil(
       @GerritServerConfig Config serverConfig,
-      Provider<ReviewDb> db,
       IdentifiedUser.GenericFactory identifiedUserFactory,
       DynamicItem<UrlFormatter> urlFormatter,
       ApprovalsUtil approvalsUtil,
@@ -213,7 +220,6 @@ public class MergeUtil {
       @Assisted ProjectState project) {
     this(
         serverConfig,
-        db,
         identifiedUserFactory,
         urlFormatter,
         approvalsUtil,
@@ -226,7 +232,6 @@ public class MergeUtil {
   @AssistedInject
   MergeUtil(
       @GerritServerConfig Config serverConfig,
-      Provider<ReviewDb> db,
       IdentifiedUser.GenericFactory identifiedUserFactory,
       DynamicItem<UrlFormatter> urlFormatter,
       ApprovalsUtil approvalsUtil,
@@ -234,7 +239,6 @@ public class MergeUtil {
       PluggableCommitMessageGenerator commitMessageGenerator,
       PluggableCommitModifier commitModifier,
       @Assisted boolean useContentMerge) {
-    this.db = db;
     this.identifiedUserFactory = identifiedUserFactory;
     this.urlFormatter = urlFormatter;
     this.approvalsUtil = approvalsUtil;
@@ -267,7 +271,7 @@ public class MergeUtil {
     List<CodeReviewCommit> result = new ArrayList<>();
     try {
       result.addAll(mergeSorter.sort(toSort));
-    } catch (IOException | OrmException e) {
+    } catch (IOException | StorageException e) {
       throw new IntegrationException("Branch head sorting failed", e);
     }
     result.sort(CodeReviewCommit.ORDER);
@@ -389,8 +393,8 @@ public class MergeUtil {
       try {
         // TODO(dborowitz): Respect inCoreLimit here.
         buf = new TemporaryBuffer.LocalFile(null, 10 * 1024 * 1024);
-        fmt.formatMerge(buf, p, "BASE", oursNameFormatted, theirsNameFormatted, UTF_8.name());
-        buf.close();
+        fmt.formatMerge(buf, p, "BASE", oursNameFormatted, theirsNameFormatted, UTF_8);
+        buf.close(); // Flush file and close for writes, but leave available for reading.
 
         try (InputStream in = buf.openInputStream()) {
           resolved.put(entry.getKey(), ins.insert(Constants.OBJ_BLOB, buf.length(), in));
@@ -628,7 +632,7 @@ public class MergeUtil {
    * @return new message
    */
   public String createCommitMessageOnSubmit(
-      RevCommit n, RevCommit mergeTip, ChangeNotes notes, Id id) {
+      RevCommit n, RevCommit mergeTip, ChangeNotes notes, PatchSet.Id id) {
     return commitMessageGenerator.generate(
         n, mergeTip, notes.getChange().getDest(), createDetailedCommitMessage(n, notes, id));
   }
@@ -643,8 +647,8 @@ public class MergeUtil {
 
   private Iterable<PatchSetApproval> safeGetApprovals(ChangeNotes notes, PatchSet.Id psId) {
     try {
-      return approvalsUtil.byPatchSet(db.get(), notes, psId, null, null);
-    } catch (OrmException e) {
+      return approvalsUtil.byPatchSet(notes, psId, null, null);
+    } catch (StorageException e) {
       logger.atSevere().withCause(e).log("Can't read approval records for %s", psId);
       return Collections.emptyList();
     }
@@ -676,7 +680,7 @@ public class MergeUtil {
     }
 
     try (ObjectInserter ins = new InMemoryInserter(repo)) {
-      return newThreeWayMerger(ins, repo.getConfig()).merge(new AnyObjectId[] {mergeTip, toMerge});
+      return newThreeWayMerger(ins, repo.getConfig()).merge(mergeTip, toMerge);
     } catch (LargeObjectException e) {
       logger.atWarning().log("Cannot merge due to LargeObjectException: %s", toMerge.name());
       return false;
@@ -757,7 +761,7 @@ public class MergeUtil {
       throws IntegrationException {
     try {
       return !mergeSorter.sort(Collections.singleton(toMerge)).contains(toMerge);
-    } catch (IOException | OrmException e) {
+    } catch (IOException | StorageException e) {
       throw new IntegrationException("Branch head sorting failed", e);
     }
   }
@@ -774,7 +778,7 @@ public class MergeUtil {
       throws IntegrationException {
     ThreeWayMerger m = newThreeWayMerger(inserter, repoConfig);
     try {
-      if (m.merge(new AnyObjectId[] {mergeTip, n})) {
+      if (m.merge(mergeTip, n)) {
         return writeMergeCommit(
             author, committer, rw, inserter, destBranch, mergeTip, m.getResultTreeId(), n);
       }

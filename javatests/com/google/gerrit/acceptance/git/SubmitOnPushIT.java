@@ -160,7 +160,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
     RevCommit c = r.getCommit();
     PatchSet.Id psId = cd.currentPatchSet().getId();
     assertThat(psId.get()).isEqualTo(1);
-    assertThat(cd.change().getStatus()).isEqualTo(Change.Status.MERGED);
+    assertThat(cd.change().isMerged()).isTrue();
     assertSubmitApproval(psId);
 
     assertThat(cd.patchSets()).hasSize(1);
@@ -184,7 +184,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
     assertCommit(project, master);
     ChangeData cd =
         Iterables.getOnlyElement(queryProvider.get().byKey(new Change.Key(r.getChangeId())));
-    assertThat(cd.change().getStatus()).isEqualTo(Change.Status.MERGED);
+    assertThat(cd.change().isMerged()).isTrue();
 
     RemoteRefUpdate.Status status = pushCommitTo(commit, "refs/for/other");
     assertThat(status).isEqualTo(RemoteRefUpdate.Status.OK);
@@ -194,7 +194,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
 
     for (ChangeData c : queryProvider.get().byKey(new Change.Key(r.getChangeId()))) {
       if (c.change().getDest().get().equals(other)) {
-        assertThat(c.change().getStatus()).isEqualTo(Change.Status.MERGED);
+        assertThat(c.change().isMerged()).isTrue();
       }
     }
   }
@@ -218,8 +218,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
 
     PushOneCommit push =
         pushFactory.create(
-            db,
-            admin.getIdent(),
+            admin.newIdent(),
             testRepo,
             PushOneCommit.SUBJECT,
             "b.txt",
@@ -231,7 +230,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
 
     ChangeData cd = r.getChange();
     RevCommit c2 = r.getCommit();
-    assertThat(cd.change().getStatus()).isEqualTo(Change.Status.MERGED);
+    assertThat(cd.change().isMerged()).isTrue();
     PatchSet.Id psId2 = cd.change().currentPatchSetId();
     assertThat(psId2.get()).isEqualTo(2);
     assertCommit(project, "refs/heads/master");
@@ -261,9 +260,9 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
     testRepo.reset(c1);
     assertPushOk(pushHead(testRepo, "refs/heads/master", false), "refs/heads/master");
 
-    cd = changeDataFactory.create(db, project, psId1.getParentKey());
+    cd = changeDataFactory.create(project, psId1.getParentKey());
     Change c = cd.change();
-    assertThat(c.getStatus()).isEqualTo(Change.Status.MERGED);
+    assertThat(c.isMerged()).isTrue();
     assertThat(c.currentPatchSetId()).isEqualTo(psId1);
     assertThat(cd.patchSets().stream().map(PatchSet::getId).collect(toList()))
         .containsExactly(psId1, psId2);
@@ -302,14 +301,14 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
     assertPushOk(pushHead(testRepo, "refs/heads/master", false), "refs/heads/master");
 
     ChangeData cd2 = r2.getChange();
-    assertThat(cd2.change().getStatus()).isEqualTo(Change.Status.MERGED);
+    assertThat(cd2.change().isMerged()).isTrue();
     PatchSet.Id psId2_2 = cd2.change().currentPatchSetId();
     assertThat(psId2_2.get()).isEqualTo(2);
     assertThat(cd2.patchSet(psId2_1).getRevision().get()).isEqualTo(c2_1.name());
     assertThat(cd2.patchSet(psId2_2).getRevision().get()).isEqualTo(c2_2.name());
 
     ChangeData cd1 = r1.getChange();
-    assertThat(cd1.change().getStatus()).isEqualTo(Change.Status.MERGED);
+    assertThat(cd1.change().isMerged()).isTrue();
     PatchSet.Id psId1_2 = cd1.change().currentPatchSetId();
     assertThat(psId1_2.get()).isEqualTo(2);
     assertThat(cd1.patchSet(psId1_1).getRevision().get()).isEqualTo(c1_1.name());
@@ -317,15 +316,15 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
   }
 
   private PatchSetApproval getSubmitter(PatchSet.Id patchSetId) throws Exception {
-    ChangeNotes notes = notesFactory.createChecked(db, project, patchSetId.getParentKey()).load();
-    return approvalsUtil.getSubmitter(db, notes, patchSetId);
+    ChangeNotes notes = notesFactory.createChecked(project, patchSetId.getParentKey()).load();
+    return approvalsUtil.getSubmitter(notes, patchSetId);
   }
 
   private void assertSubmitApproval(PatchSet.Id patchSetId) throws Exception {
     PatchSetApproval a = getSubmitter(patchSetId);
     assertThat(a.isLegacySubmit()).isTrue();
     assertThat(a.getValue()).isEqualTo((short) 1);
-    assertThat(a.getAccountId()).isEqualTo(admin.id);
+    assertThat(a.getAccountId()).isEqualTo(admin.id());
   }
 
   private void assertCommit(Project.NameKey project, String branch) throws Exception {
@@ -333,8 +332,8 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
         RevWalk rw = new RevWalk(r)) {
       RevCommit c = rw.parseCommit(r.exactRef(branch).getObjectId());
       assertThat(c.getShortMessage()).isEqualTo(PushOneCommit.SUBJECT);
-      assertThat(c.getAuthorIdent().getEmailAddress()).isEqualTo(admin.email);
-      assertThat(c.getCommitterIdent().getEmailAddress()).isEqualTo(admin.email);
+      assertThat(c.getAuthorIdent().getEmailAddress()).isEqualTo(admin.email());
+      assertThat(c.getCommitterIdent().getEmailAddress()).isEqualTo(admin.email());
     }
   }
 
@@ -344,7 +343,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
       RevCommit c = rw.parseCommit(r.exactRef(branch).getObjectId());
       assertThat(c.getParentCount()).isEqualTo(2);
       assertThat(c.getShortMessage()).isEqualTo("Merge \"" + subject + "\"");
-      assertThat(c.getAuthorIdent().getEmailAddress()).isEqualTo(admin.email);
+      assertThat(c.getAuthorIdent().getEmailAddress()).isEqualTo(admin.email());
       assertThat(c.getCommitterIdent().getEmailAddress())
           .isEqualTo(serverIdent.get().getEmailAddress());
     }
@@ -352,8 +351,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
 
   private PushOneCommit.Result push(String ref, String subject, String fileName, String content)
       throws Exception {
-    PushOneCommit push =
-        pushFactory.create(db, admin.getIdent(), testRepo, subject, fileName, content);
+    PushOneCommit push = pushFactory.create(admin.newIdent(), testRepo, subject, fileName, content);
     return push.to(ref);
   }
 
@@ -361,7 +359,7 @@ public class SubmitOnPushIT extends AbstractDaemonTest {
       String ref, String subject, String fileName, String content, String changeId)
       throws Exception {
     PushOneCommit push =
-        pushFactory.create(db, admin.getIdent(), testRepo, subject, fileName, content, changeId);
+        pushFactory.create(admin.newIdent(), testRepo, subject, fileName, content, changeId);
     return push.to(ref);
   }
 }

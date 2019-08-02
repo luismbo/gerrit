@@ -16,6 +16,7 @@ package com.google.gerrit.acceptance;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static java.util.Objects.requireNonNull;
 import static org.apache.log4j.Logger.getLogger;
 
@@ -28,6 +29,10 @@ import com.google.gerrit.acceptance.testsuite.account.AccountOperations;
 import com.google.gerrit.acceptance.testsuite.account.AccountOperationsImpl;
 import com.google.gerrit.acceptance.testsuite.group.GroupOperations;
 import com.google.gerrit.acceptance.testsuite.group.GroupOperationsImpl;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperations;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperationsImpl;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperationsImpl;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.config.FactoryModule;
 import com.google.gerrit.lucene.LuceneIndexModule;
@@ -37,24 +42,22 @@ import com.google.gerrit.server.config.GerritRuntime;
 import com.google.gerrit.server.config.GerritServerConfig;
 import com.google.gerrit.server.config.SitePath;
 import com.google.gerrit.server.git.receive.AsyncReceiveCommits;
+import com.google.gerrit.server.schema.JdbcAccountPatchReviewStore;
 import com.google.gerrit.server.ssh.NoSshModule;
-import com.google.gerrit.server.util.ManualRequestContext;
-import com.google.gerrit.server.util.OneOffRequestContext;
 import com.google.gerrit.server.util.SocketUtil;
 import com.google.gerrit.server.util.SystemLog;
 import com.google.gerrit.testing.FakeEmailSender;
-import com.google.gerrit.testing.FakeGroupAuditService;
-import com.google.gerrit.testing.InMemoryDatabase;
 import com.google.gerrit.testing.InMemoryRepositoryManager;
-import com.google.gerrit.testing.NoteDbChecker;
-import com.google.gerrit.testing.NoteDbMode;
 import com.google.gerrit.testing.SshMode;
-import com.google.gerrit.testing.TempFileUtil;
 import com.google.inject.AbstractModule;
+import com.google.inject.BindingAnnotation;
 import com.google.inject.Injector;
 import com.google.inject.Key;
 import com.google.inject.Module;
+import com.google.inject.Provides;
+import com.google.inject.Singleton;
 import java.lang.annotation.Annotation;
+import java.lang.annotation.Retention;
 import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -79,6 +82,7 @@ import org.apache.log4j.PatternLayout;
 import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.RepositoryCache;
 import org.eclipse.jgit.util.FS;
+import org.junit.rules.TemporaryFolder;
 
 public class GerritServer implements AutoCloseable {
   public static class StartupException extends Exception {
@@ -88,6 +92,11 @@ public class GerritServer implements AutoCloseable {
       super(msg, cause);
     }
   }
+
+  /** Marker on {@link InetSocketAddress} for test SSH server. */
+  @Retention(RUNTIME)
+  @BindingAnnotation
+  public @interface TestSshServerAddress {}
 
   @AutoValue
   public abstract static class Description {
@@ -99,6 +108,7 @@ public class GerritServer implements AutoCloseable {
           !has(UseLocalDisk.class, testDesc.getTestClass()) && !forceLocalDisk(),
           !has(NoHttpd.class, testDesc.getTestClass()),
           has(Sandboxed.class, testDesc.getTestClass()),
+          has(SkipProjectClone.class, testDesc.getTestClass()),
           has(UseSsh.class, testDesc.getTestClass()),
           null, // @GerritConfig is only valid on methods.
           null, // @GerritConfigs is only valid on methods.
@@ -119,6 +129,8 @@ public class GerritServer implements AutoCloseable {
               && !has(NoHttpd.class, testDesc.getTestClass()),
           testDesc.getAnnotation(Sandboxed.class) != null
               || has(Sandboxed.class, testDesc.getTestClass()),
+          testDesc.getAnnotation(SkipProjectClone.class) != null
+              || has(SkipProjectClone.class, testDesc.getTestClass()),
           testDesc.getAnnotation(UseSsh.class) != null
               || has(UseSsh.class, testDesc.getTestClass()),
           testDesc.getAnnotation(GerritConfig.class),
@@ -155,6 +167,8 @@ public class GerritServer implements AutoCloseable {
     abstract boolean httpd();
 
     abstract boolean sandboxed();
+
+    abstract boolean skipProjectClone();
 
     abstract boolean useSshAnnotation();
 
@@ -307,11 +321,11 @@ public class GerritServer implements AutoCloseable {
   /**
    * Initializes new Gerrit site and returns started server.
    *
-   * <p>A new temporary directory for the site will be created with {@link TempFileUtil}, even in
+   * <p>A new temporary directory for the site will be created with {@code temporaryFolder}, even in
    * the server is otherwise configured in-memory. Closing the server stops the daemon but does not
-   * delete the temporary directory. Callers may either get the directory with {@link
-   * #getSitePath()} and delete it manually, or call {@link TempFileUtil#cleanup()}.
+   * delete the temporary directory..
    *
+   * @param temporaryFolder helper rule for creating site directories.
    * @param desc server description.
    * @param baseConfig default config values; merged with config from {@code desc}.
    * @param testSysModule additional Guice module to use.
@@ -319,15 +333,18 @@ public class GerritServer implements AutoCloseable {
    * @throws Exception
    */
   public static GerritServer initAndStart(
-      Description desc, Config baseConfig, @Nullable Module testSysModule) throws Exception {
-    Path site = TempFileUtil.createTempDirectory().toPath();
+      TemporaryFolder temporaryFolder,
+      Description desc,
+      Config baseConfig,
+      @Nullable Module testSysModule)
+      throws Exception {
+    Path site = temporaryFolder.newFolder().toPath();
     try {
       if (!desc.memory()) {
         init(desc, baseConfig, site);
       }
-      return start(desc, baseConfig, site, testSysModule, null, null);
+      return start(desc, baseConfig, site, testSysModule, null);
     } catch (Exception e) {
-      TempFileUtil.recursivelyDelete(site.toFile());
       throw e;
     }
   }
@@ -344,8 +361,6 @@ public class GerritServer implements AutoCloseable {
    * @param testSysModule optional additional module to add to the system injector.
    * @param inMemoryRepoManager {@link InMemoryRepositoryManager} that should be used if the site is
    *     started in memory
-   * @param inMemoryDatabaseInstance {@link com.google.gerrit.testing.InMemoryDatabase.Instance}
-   *     that should be used if the site is started in memory
    * @param additionalArgs additional command-line arguments for the daemon program; only allowed if
    *     the test is not in-memory.
    * @return started server.
@@ -357,7 +372,6 @@ public class GerritServer implements AutoCloseable {
       Path site,
       @Nullable Module testSysModule,
       @Nullable InMemoryRepositoryManager inMemoryRepoManager,
-      @Nullable InMemoryDatabase.Instance inMemoryDatabaseInstance,
       String... additionalArgs)
       throws Exception {
     checkArgument(site != null, "site is required (even for in-memory server");
@@ -383,8 +397,7 @@ public class GerritServer implements AutoCloseable {
 
     if (desc.memory()) {
       checkArgument(additionalArgs.length == 0, "cannot pass args to in-memory server");
-      return startInMemory(
-          desc, site, baseConfig, daemon, inMemoryRepoManager, inMemoryDatabaseInstance);
+      return startInMemory(desc, site, baseConfig, daemon, inMemoryRepoManager);
     }
     return startOnDisk(desc, site, daemon, serverStarted, additionalArgs);
   }
@@ -394,8 +407,7 @@ public class GerritServer implements AutoCloseable {
       Path site,
       Config baseConfig,
       Daemon daemon,
-      @Nullable InMemoryRepositoryManager inMemoryRepoManager,
-      @Nullable InMemoryDatabase.Instance inMemoryDatabaseInstance)
+      @Nullable InMemoryRepositoryManager inMemoryRepoManager)
       throws Exception {
     Config cfg = desc.buildConfig(baseConfig);
     daemon.setSlave(isSlave(baseConfig) || cfg.getBoolean("container", "slave", false));
@@ -408,12 +420,13 @@ public class GerritServer implements AutoCloseable {
     cfg.setBoolean("index", "lucene", "testInmemory", true);
     cfg.setBoolean("index", null, "onlineUpgrade", false);
     cfg.setString("gitweb", null, "cgi", "");
+    cfg.setString(
+        "accountPatchReviewDb", null, "url", JdbcAccountPatchReviewStore.TEST_IN_MEMORY_URL);
     daemon.setEnableHttpd(desc.httpd());
     daemon.setLuceneModule(LuceneIndexModule.singleVersionAllLatest(0, isSlave(baseConfig)));
     daemon.setDatabaseForTesting(
-        ImmutableList.<Module>of(
-            new InMemoryTestingDatabaseModule(
-                cfg, site, inMemoryRepoManager, inMemoryDatabaseInstance),
+        ImmutableList.of(
+            new InMemoryTestingDatabaseModule(cfg, site, inMemoryRepoManager),
             new AbstractModule() {
               @Override
               protected void configure() {
@@ -508,8 +521,6 @@ public class GerritServer implements AutoCloseable {
     cfg.setInt("receive", null, "threadPoolSize", 1);
     cfg.setInt("index", null, "threads", 1);
     cfg.setBoolean("index", null, "reindexAfterRefUpdate", false);
-
-    NoteDbMode.newNotesMigrationFromEnv().setConfigValues(cfg);
   }
 
   private static Injector createTestInjector(Daemon daemon) throws Exception {
@@ -522,11 +533,25 @@ public class GerritServer implements AutoCloseable {
             bind(AccountCreator.class);
             bind(AccountOperations.class).to(AccountOperationsImpl.class);
             bind(GroupOperations.class).to(GroupOperationsImpl.class);
+            bind(ProjectOperations.class).to(ProjectOperationsImpl.class);
+            bind(RequestScopeOperations.class).to(RequestScopeOperationsImpl.class);
             factory(PushOneCommit.Factory.class);
             install(InProcessProtocol.module());
             install(new NoSshModule());
             install(new AsyncReceiveCommits.Module());
             factory(ProjectResetter.Builder.Factory.class);
+          }
+
+          @Provides
+          @Singleton
+          @Nullable
+          @TestSshServerAddress
+          InetSocketAddress getSshAddress(@GerritServerConfig Config cfg) {
+            String addr = cfg.getString("sshd", null, "listenAddress");
+            // We do not use InitSshd.isOff to avoid coupling GerritServer to the SSH code.
+            return !"off".equalsIgnoreCase(addr)
+                ? SocketUtil.resolve(cfg.getString("sshd", null, "listenAddress"), 0)
+                : null;
           }
         };
     return sysInjector.createChildInjector(module);
@@ -552,7 +577,6 @@ public class GerritServer implements AutoCloseable {
   private ExecutorService daemonService;
   private Injector testInjector;
   private String url;
-  private InetSocketAddress sshdAddress;
   private InetSocketAddress httpAddress;
 
   private GerritServer(
@@ -570,21 +594,11 @@ public class GerritServer implements AutoCloseable {
     Config cfg = testInjector.getInstance(Key.get(Config.class, GerritServerConfig.class));
     url = cfg.getString("gerrit", null, "canonicalWebUrl");
     URI uri = URI.create(url);
-
-    String addr = cfg.getString("sshd", null, "listenAddress");
-    // We do not use InitSshd.isOff to avoid coupling GerritServer to the SSH code.
-    if (!"off".equalsIgnoreCase(addr)) {
-      sshdAddress = SocketUtil.resolve(cfg.getString("sshd", null, "listenAddress"), 0);
-    }
     httpAddress = new InetSocketAddress(uri.getHost(), uri.getPort());
   }
 
   String getUrl() {
     return url;
-  }
-
-  InetSocketAddress getSshdAddress() {
-    return sshdAddress;
   }
 
   InetSocketAddress getHttpAddress() {
@@ -612,21 +626,9 @@ public class GerritServer implements AutoCloseable {
       inMemoryRepoManager = server.testInjector.getInstance(InMemoryRepositoryManager.class);
     }
 
-    InMemoryDatabase.Instance dbInstance = null;
-    if (hasBinding(server.testInjector, InMemoryDatabase.class)) {
-      InMemoryDatabase inMemoryDatabase = server.testInjector.getInstance(InMemoryDatabase.class);
-      dbInstance = inMemoryDatabase.getDbInstance();
-      dbInstance.setKeepOpen(true);
-    }
-    try {
-      server.close();
-      server.daemon.stop();
-      return start(server.desc, cfg, site, null, inMemoryRepoManager, dbInstance);
-    } finally {
-      if (dbInstance != null) {
-        dbInstance.setKeepOpen(false);
-      }
-    }
+    server.close();
+    server.daemon.stop();
+    return start(server.desc, cfg, site, null, inMemoryRepoManager);
   }
 
   private static boolean hasBinding(Injector injector, Class<?> clazz) {
@@ -635,38 +637,17 @@ public class GerritServer implements AutoCloseable {
 
   @Override
   public void close() throws Exception {
-    try {
-      checkNoteDbState();
-    } finally {
-      daemon.getLifecycleManager().stop();
-      if (daemonService != null) {
-        System.out.println("Gerrit Server Shutdown");
-        daemonService.shutdownNow();
-        daemonService.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
-      }
-      RepositoryCache.clear();
+    daemon.getLifecycleManager().stop();
+    if (daemonService != null) {
+      System.out.println("Gerrit Server Shutdown");
+      daemonService.shutdownNow();
+      daemonService.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
     }
+    RepositoryCache.clear();
   }
 
   public Path getSitePath() {
     return sitePath;
-  }
-
-  private void checkNoteDbState() throws Exception {
-    NoteDbMode mode = NoteDbMode.get();
-    if (mode != NoteDbMode.CHECK && mode != NoteDbMode.PRIMARY) {
-      return;
-    }
-    NoteDbChecker checker = testInjector.getInstance(NoteDbChecker.class);
-    OneOffRequestContext oneOffRequestContext =
-        testInjector.getInstance(OneOffRequestContext.class);
-    try (ManualRequestContext ctx = oneOffRequestContext.open()) {
-      if (mode == NoteDbMode.CHECK) {
-        checker.rebuildAndCheckAllChanges();
-      } else if (mode == NoteDbMode.PRIMARY) {
-        checker.assertNoReviewDbChanges(desc.testDescription());
-      }
-    }
   }
 
   @Override

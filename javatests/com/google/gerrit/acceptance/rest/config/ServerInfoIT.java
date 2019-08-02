@@ -70,7 +70,6 @@ public class ServerInfoIT extends AbstractDaemonTest {
   // gerrit
   @GerritConfig(name = "gerrit.allProjects", value = "Root")
   @GerritConfig(name = "gerrit.allUsers", value = "Users")
-  @GerritConfig(name = "gerrit.enableGwtUi", value = "true")
   @GerritConfig(name = "gerrit.reportBugText", value = "REPORT BUG")
   @GerritConfig(name = "gerrit.reportBugUrl", value = "https://example.com/report")
 
@@ -128,10 +127,7 @@ public class ServerInfoIT extends AbstractDaemonTest {
     assertThat(i.user.anonymousCowardName).isEqualTo("Unnamed User");
 
     // notedb
-    notesMigration.setReadChanges(true);
     assertThat(gApi.config().server().getInfo().noteDbEnabled).isTrue();
-    notesMigration.setReadChanges(false);
-    assertThat(gApi.config().server().getInfo().noteDbEnabled).isNull();
   }
 
   @Test
@@ -196,14 +192,5 @@ public class ServerInfoIT extends AbstractDaemonTest {
 
     // user
     assertThat(i.user.anonymousCowardName).isEqualTo(AnonymousCowardNameProvider.DEFAULT);
-  }
-
-  @Test
-  @GerritConfig(name = "auth.contributorAgreements", value = "true")
-  public void anonymousAccess() throws Exception {
-    configureContributorAgreement(true);
-
-    setApiUserAnonymous();
-    gApi.config().server().getInfo();
   }
 }

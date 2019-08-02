@@ -19,11 +19,12 @@
 
   Polymer({
     is: 'gr-selection-action-box',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when the comment creation action was taken (hotkey, click).
      *
-     * @event create-comment
+     * @event create-range-comment
      */
 
     properties: {
@@ -34,10 +35,10 @@
       range: {
         type: Object,
         value: {
-          startLine: NaN,
-          startChar: NaN,
-          endLine: NaN,
-          endChar: NaN,
+          start_line: NaN,
+          start_character: NaN,
+          end_line: NaN,
+          end_character: NaN,
         },
       },
       positionBelow: Boolean,
@@ -63,7 +64,7 @@
       Polymer.dom.flush();
       const rect = this._getTargetBoundingRect(el);
       const boxRect = this.$.tooltip.getBoundingClientRect();
-      const parentRect = this.parentElement.getBoundingClientRect();
+      const parentRect = this._getParentBoundingClientRect();
       this.style.top =
           rect.top - parentRect.top - boxRect.height - 6 + 'px';
       this.style.left =
@@ -74,11 +75,18 @@
       Polymer.dom.flush();
       const rect = this._getTargetBoundingRect(el);
       const boxRect = this.$.tooltip.getBoundingClientRect();
-      const parentRect = this.parentElement.getBoundingClientRect();
+      const parentRect = this._getParentBoundingClientRect();
       this.style.top =
-          rect.top - parentRect.top + boxRect.height - 6 + 'px';
+      rect.top - parentRect.top + boxRect.height - 6 + 'px';
       this.style.left =
-          rect.left - parentRect.left + (rect.width - boxRect.width) / 2 + 'px';
+      rect.left - parentRect.left + (rect.width - boxRect.width) / 2 + 'px';
+    },
+
+    _getParentBoundingClientRect() {
+      // With native shadow DOM, the parent is the shadow root, not the gr-diff
+      // element
+      const parent = this.parentElement || this.parentNode.host;
+      return parent.getBoundingClientRect();
     },
 
     _getTargetBoundingRect(el) {
@@ -110,7 +118,7 @@
     },
 
     _fireCreateComment() {
-      this.fire('create-comment', {side: this.side, range: this.range});
+      this.fire('create-range-comment', {side: this.side, range: this.range});
     },
   });
 })();

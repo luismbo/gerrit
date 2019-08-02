@@ -16,7 +16,9 @@ package com.google.gerrit.server.project;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.gerrit.reviewdb.client.BooleanProjectConfig.REQUIRE_CHANGE_ID;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.gerrit.common.data.AccessSection;
 import com.google.gerrit.common.data.ContributorAgreement;
@@ -24,16 +26,21 @@ import com.google.gerrit.common.data.GroupReference;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.common.data.PermissionRule;
+import com.google.gerrit.extensions.client.InheritableBoolean;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
+import com.google.gerrit.server.config.AllProjectsName;
 import com.google.gerrit.server.config.PluginConfig;
+import com.google.gerrit.server.config.SitePaths;
 import com.google.gerrit.server.extensions.events.GitReferenceUpdated;
 import com.google.gerrit.server.git.ValidationError;
 import com.google.gerrit.server.git.meta.MetaDataUpdate;
 import com.google.gerrit.server.project.testing.Util;
 import com.google.gerrit.testing.GerritBaseTests;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
@@ -51,7 +58,9 @@ import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevObject;
 import org.eclipse.jgit.util.RawParseUtils;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 public class ProjectConfigTest extends GerritBaseTests {
   private static final String LABEL_SCORES_CONFIG =
@@ -74,15 +83,24 @@ public class ProjectConfigTest extends GerritBaseTests {
           + !LabelType.DEF_COPY_ALL_SCORES_IF_NO_CHANGE
           + "\n";
 
+  private static final AllProjectsName ALL_PROJECTS = new AllProjectsName("All-The-Projects");
+
+  @Rule public TemporaryFolder temporaryFolder = new TemporaryFolder();
+
   private final GroupReference developers =
       new GroupReference(new AccountGroup.UUID("X"), "Developers");
   private final GroupReference staff = new GroupReference(new AccountGroup.UUID("Y"), "Staff");
 
+  private SitePaths sitePaths;
+  private ProjectConfig.Factory factory;
   private Repository db;
   private TestRepository<?> tr;
 
   @Before
   public void setUp() throws Exception {
+    sitePaths = new SitePaths(temporaryFolder.newFolder().toPath());
+    Files.createDirectories(sitePaths.etc_dir);
+    factory = new ProjectConfig.Factory(sitePaths, ALL_PROJECTS);
     db = new InMemoryRepository(new DfsRepositoryDescription("repo"));
     tr = new TestRepository<>(db);
   }
@@ -104,6 +122,13 @@ public class ProjectConfigTest extends GerritBaseTests {
                     + "  sameGroupVisibility = block group Staff\n"
                     + "[contributor-agreement \"Individual\"]\n"
                     + "  description = A simple description\n"
+                    + "  matchProjects = ^/ourproject\n"
+                    + "  matchProjects = ^/ourotherproject\n"
+                    + "  matchProjects = ^/someotherroot/ourproject\n"
+                    + "  excludeProjects = ^/theirproject\n"
+                    + "  excludeProjects = ^/theirotherproject\n"
+                    + "  excludeProjects = ^/someotherroot/theirproject\n"
+                    + "  excludeProjects = ^/someotherroot/theirotherproject\n"
                     + "  accepted = group Developers\n"
                     + "  accepted = group Staff\n"
                     + "  autoVerify = group Developers\n"
@@ -115,6 +140,14 @@ public class ProjectConfigTest extends GerritBaseTests {
     ContributorAgreement ca = cfg.getContributorAgreement("Individual");
     assertThat(ca.getName()).isEqualTo("Individual");
     assertThat(ca.getDescription()).isEqualTo("A simple description");
+    assertThat(ca.getMatchProjectsRegexes())
+        .containsExactly("^/ourproject", "^/ourotherproject", "^/someotherroot/ourproject");
+    assertThat(ca.getExcludeProjectsRegexes())
+        .containsExactly(
+            "^/theirproject",
+            "^/theirotherproject",
+            "^/someotherroot/theirproject",
+            "^/someotherroot/theirotherproject");
     assertThat(ca.getAgreementUrl()).isEqualTo("http://www.example.com/agree");
     assertThat(ca.getAccepted()).hasSize(2);
     assertThat(ca.getAccepted().get(0).getGroup()).isEqualTo(developers);
@@ -256,6 +289,7 @@ public class ProjectConfigTest extends GerritBaseTests {
                     + "  sameGroupVisibility = block group Staff\n"
                     + "[contributor-agreement \"Individual\"]\n"
                     + "  description = A simple description\n"
+                    + "  matchProjects = ^/ourproject\n"
                     + "  accepted = group Developers\n"
                     + "  autoVerify = group Developers\n"
                     + "  agreementUrl = http://www.example.com/agree\n"
@@ -273,6 +307,8 @@ public class ProjectConfigTest extends GerritBaseTests {
     ContributorAgreement ca = cfg.getContributorAgreement("Individual");
     ca.setAccepted(Collections.singletonList(new PermissionRule(cfg.resolve(staff))));
     ca.setAutoVerify(null);
+    ca.setMatchProjectsRegexes(null);
+    ca.setExcludeProjectsRegexes(Collections.singletonList("^/theirproject"));
     ca.setDescription("A new description");
     rev = commit(cfg);
     assertThat(text(rev, "project.config"))
@@ -289,6 +325,7 @@ public class ProjectConfigTest extends GerritBaseTests {
                 + "  description = A new description\n"
                 + "  accepted = group Staff\n"
                 + "  agreementUrl = http://www.example.com/agree\n"
+                + "\texcludeProjects = ^/theirproject\n"
                 + "[label \"CustomLabel\"]\n"
                 + LABEL_SCORES_CONFIG
                 + "\tfunction = MaxWithBlock\n" // label gets this function when it is created
@@ -385,7 +422,7 @@ public class ProjectConfigTest extends GerritBaseTests {
 
   @Test
   public void readUnexistingPluginConfig() throws Exception {
-    ProjectConfig cfg = new ProjectConfig(new Project.NameKey("test"));
+    ProjectConfig cfg = factory.create(new Project.NameKey("test"));
     cfg.load(db);
     PluginConfig pluginCfg = cfg.getPluginConfig("somePlugin");
     assertThat(pluginCfg.getNames()).isEmpty();
@@ -572,8 +609,46 @@ public class ProjectConfigTest extends GerritBaseTests {
                     + "commentlink.bugzilla must have either link or html"));
   }
 
+  @Test
+  public void readAllProjectsBaseConfigFromSitePaths() throws Exception {
+    ProjectConfig cfg = factory.create(ALL_PROJECTS);
+    cfg.load(db);
+    assertThat(cfg.getProject().getBooleanConfig(REQUIRE_CHANGE_ID))
+        .isEqualTo(InheritableBoolean.INHERIT);
+
+    writeDefaultAllProjectsConfig("[receive]", "requireChangeId = false");
+
+    cfg.load(db);
+    assertThat(cfg.getProject().getBooleanConfig(REQUIRE_CHANGE_ID))
+        .isEqualTo(InheritableBoolean.FALSE);
+  }
+
+  @Test
+  public void readOtherProjectIgnoresAllProjectsBaseConfig() throws Exception {
+    ProjectConfig cfg = factory.create(new Project.NameKey("test"));
+    cfg.load(db);
+    assertThat(cfg.getProject().getBooleanConfig(REQUIRE_CHANGE_ID))
+        .isEqualTo(InheritableBoolean.INHERIT);
+
+    writeDefaultAllProjectsConfig("[receive]", "requireChangeId = false");
+
+    cfg.load(db);
+    // If we went through ProjectState, then this would return FALSE, since project.config for
+    // All-Projects would inherit from all_projects.config, and this project would inherit from
+    // All-Projects. But in ProjectConfig itself, there is no inheritance from All-Projects, so this
+    // continues to return the default.
+    assertThat(cfg.getProject().getBooleanConfig(REQUIRE_CHANGE_ID))
+        .isEqualTo(InheritableBoolean.INHERIT);
+  }
+
+  private Path writeDefaultAllProjectsConfig(String... lines) throws IOException {
+    Path dir = sitePaths.etc_dir.resolve(ALL_PROJECTS.get());
+    Files.createDirectories(dir);
+    return Files.write(dir.resolve("project.config"), ImmutableList.copyOf(lines));
+  }
+
   private ProjectConfig read(RevCommit rev) throws IOException, ConfigInvalidException {
-    ProjectConfig cfg = new ProjectConfig(new Project.NameKey("test"));
+    ProjectConfig cfg = factory.create(new Project.NameKey("test"));
     cfg.load(db, rev);
     return cfg;
   }

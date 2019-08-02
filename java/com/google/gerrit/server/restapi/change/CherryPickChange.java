@@ -14,12 +14,15 @@
 
 package com.google.gerrit.server.restapi.change;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
+
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
 import com.google.gerrit.common.FooterConstants;
 import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.api.changes.CherryPickInput;
+import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.MergeConflictException;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
@@ -28,18 +31,15 @@ import com.google.gerrit.extensions.restapi.UnprocessableEntityException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
-import com.google.gerrit.reviewdb.client.Change.Status;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.GerritPersonIdent;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.ReviewerSet;
-import com.google.gerrit.server.Sequences;
 import com.google.gerrit.server.change.ChangeInserter;
-import com.google.gerrit.server.change.NotifyUtil;
+import com.google.gerrit.server.change.NotifyResolver;
 import com.google.gerrit.server.change.PatchSetInserter;
 import com.google.gerrit.server.git.CodeReviewCommit;
 import com.google.gerrit.server.git.CodeReviewCommit.CodeReviewRevWalk;
@@ -47,6 +47,7 @@ import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.git.MergeUtil;
 import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.gerrit.server.notedb.ReviewerStateInternal;
+import com.google.gerrit.server.notedb.Sequences;
 import com.google.gerrit.server.project.InvalidChangeOperationException;
 import com.google.gerrit.server.project.NoSuchProjectException;
 import com.google.gerrit.server.project.ProjectCache;
@@ -58,7 +59,6 @@ import com.google.gerrit.server.submit.MergeIdenticalTreeException;
 import com.google.gerrit.server.update.BatchUpdate;
 import com.google.gerrit.server.update.UpdateException;
 import com.google.gerrit.server.util.time.TimeUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -93,7 +93,6 @@ public class CherryPickChange {
     abstract ImmutableSet<String> filesWithGitConflicts();
   }
 
-  private final Provider<ReviewDb> dbProvider;
   private final Sequences seq;
   private final Provider<InternalChangeQuery> queryProvider;
   private final GitRepositoryManager gitManager;
@@ -105,11 +104,10 @@ public class CherryPickChange {
   private final ChangeNotes.Factory changeNotesFactory;
   private final ProjectCache projectCache;
   private final ApprovalsUtil approvalsUtil;
-  private final NotifyUtil notifyUtil;
+  private final NotifyResolver notifyResolver;
 
   @Inject
   CherryPickChange(
-      Provider<ReviewDb> dbProvider,
       Sequences seq,
       Provider<InternalChangeQuery> queryProvider,
       @GerritPersonIdent PersonIdent myIdent,
@@ -121,8 +119,7 @@ public class CherryPickChange {
       ChangeNotes.Factory changeNotesFactory,
       ProjectCache projectCache,
       ApprovalsUtil approvalsUtil,
-      NotifyUtil notifyUtil) {
-    this.dbProvider = dbProvider;
+      NotifyResolver notifyResolver) {
     this.seq = seq;
     this.queryProvider = queryProvider;
     this.gitManager = gitManager;
@@ -134,7 +131,7 @@ public class CherryPickChange {
     this.changeNotesFactory = changeNotesFactory;
     this.projectCache = projectCache;
     this.approvalsUtil = approvalsUtil;
-    this.notifyUtil = notifyUtil;
+    this.notifyResolver = notifyResolver;
   }
 
   public Result cherryPick(
@@ -143,8 +140,8 @@ public class CherryPickChange {
       PatchSet patch,
       CherryPickInput input,
       Branch.NameKey dest)
-      throws OrmException, IOException, InvalidChangeOperationException, IntegrationException,
-          UpdateException, RestApiException, ConfigInvalidException, NoSuchProjectException {
+      throws IOException, InvalidChangeOperationException, IntegrationException, UpdateException,
+          RestApiException, ConfigInvalidException, NoSuchProjectException {
     return cherryPick(
         batchUpdateFactory,
         change,
@@ -161,8 +158,8 @@ public class CherryPickChange {
       ObjectId sourceCommit,
       CherryPickInput input,
       Branch.NameKey dest)
-      throws OrmException, IOException, InvalidChangeOperationException, IntegrationException,
-          UpdateException, RestApiException, ConfigInvalidException, NoSuchProjectException {
+      throws IOException, InvalidChangeOperationException, IntegrationException, UpdateException,
+          RestApiException, ConfigInvalidException, NoSuchProjectException {
 
     IdentifiedUser identifiedUser = user.get();
     try (Repository git = gitManager.openRepository(project);
@@ -249,14 +246,14 @@ public class CherryPickChange {
                   + " reside on the same branch. "
                   + "Cannot create a new patch set.");
         }
-        try (BatchUpdate bu =
-            batchUpdateFactory.create(dbProvider.get(), project, identifiedUser, now)) {
+        try (BatchUpdate bu = batchUpdateFactory.create(project, identifiedUser, now)) {
           bu.setRepository(git, revWalk, oi);
+          bu.setNotify(resolveNotify(input));
           Change.Id changeId;
           if (destChanges.size() == 1) {
             // The change key exists on the destination branch. The cherry pick
             // will be added as a new patch set.
-            changeId = insertPatchSet(bu, git, destChanges.get(0).notes(), cherryPickCommit, input);
+            changeId = insertPatchSet(bu, git, destChanges.get(0).notes(), cherryPickCommit);
           } else {
             // Change key not found on destination branch. We can create a new
             // change.
@@ -278,7 +275,7 @@ public class CherryPickChange {
   }
 
   private RevCommit getBaseCommit(Ref destRef, String project, RevWalk revWalk, String base)
-      throws RestApiException, IOException, OrmException {
+      throws RestApiException, IOException {
     RevCommit destRefTip = revWalk.parseCommit(destRef.getObjectId());
     // The tip commit of the destination ref is the default base for the newly created change.
     if (Strings.isNullOrEmpty(base)) {
@@ -309,31 +306,24 @@ public class CherryPickChange {
     }
 
     Change change = changeDatas.get(0).change();
-    Change.Status status = change.getStatus();
-    if (status == Status.NEW || status == Status.MERGED) {
+    if (!change.isAbandoned()) {
       // The base commit is a valid change revision.
       return baseCommit;
     }
 
     throw new ResourceConflictException(
         String.format(
-            "Change %s with commit %s is %s", change.getChangeId(), base, status.asChangeStatus()));
+            "Change %s with commit %s is %s",
+            change.getChangeId(), base, ChangeUtil.status(change)));
   }
 
   private Change.Id insertPatchSet(
-      BatchUpdate bu,
-      Repository git,
-      ChangeNotes destNotes,
-      CodeReviewCommit cherryPickCommit,
-      CherryPickInput input)
-      throws IOException, OrmException, BadRequestException, ConfigInvalidException {
+      BatchUpdate bu, Repository git, ChangeNotes destNotes, CodeReviewCommit cherryPickCommit)
+      throws IOException {
     Change destChange = destNotes.getChange();
     PatchSet.Id psId = ChangeUtil.nextPatchSetId(git, destChange.currentPatchSetId());
     PatchSetInserter inserter = patchSetInserterFactory.create(destNotes, psId, cherryPickCommit);
-    inserter
-        .setMessage("Uploaded patch set " + inserter.getPatchSetId().get() + ".")
-        .setNotify(input.notify)
-        .setAccountsToNotify(notifyUtil.resolveAccounts(input.notifyDetails));
+    inserter.setMessage("Uploaded patch set " + inserter.getPatchSetId().get() + ".");
     bu.addOp(destChange.getId(), inserter);
     return destChange.getId();
   }
@@ -346,7 +336,7 @@ public class CherryPickChange {
       @Nullable Change sourceChange,
       ObjectId sourceCommit,
       CherryPickInput input)
-      throws OrmException, IOException, BadRequestException, ConfigInvalidException {
+      throws IOException {
     Change.Id changeId = new Change.Id(seq.nextChangeId());
     ChangeInserter ins = changeInserterFactory.create(changeId, cherryPickCommit, refName);
     Branch.NameKey sourceBranch = sourceChange == null ? null : sourceChange.getDest();
@@ -356,13 +346,10 @@ public class CherryPickChange {
         .setTopic(topic)
         .setWorkInProgress(
             (sourceChange != null && sourceChange.isWorkInProgress())
-                || !cherryPickCommit.getFilesWithGitConflicts().isEmpty())
-        .setNotify(input.notify)
-        .setAccountsToNotify(notifyUtil.resolveAccounts(input.notifyDetails));
+                || !cherryPickCommit.getFilesWithGitConflicts().isEmpty());
     if (input.keepReviewers && sourceChange != null) {
       ReviewerSet reviewerSet =
-          approvalsUtil.getReviewers(
-              dbProvider.get(), changeNotesFactory.createChecked(dbProvider.get(), sourceChange));
+          approvalsUtil.getReviewers(changeNotesFactory.createChecked(sourceChange));
       Set<Account.Id> reviewers =
           new HashSet<>(reviewerSet.byState(ReviewerStateInternal.REVIEWER));
       reviewers.add(sourceChange.getOwner());
@@ -373,6 +360,12 @@ public class CherryPickChange {
     }
     bu.insertChange(ins);
     return changeId;
+  }
+
+  private NotifyResolver.Result resolveNotify(CherryPickInput input)
+      throws BadRequestException, ConfigInvalidException, IOException {
+    return notifyResolver.resolve(
+        firstNonNull(input.notify, NotifyHandling.ALL), input.notifyDetails);
   }
 
   private String messageForDestinationChange(

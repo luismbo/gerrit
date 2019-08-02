@@ -14,7 +14,6 @@
 
 package com.google.gerrit.reviewdb.client;
 
-import com.google.gwtorm.client.Column;
 import com.google.gwtorm.client.StringKey;
 
 /** A single modified file in a {@link PatchSet}. */
@@ -36,13 +35,15 @@ public final class Patch {
     return COMMIT_MSG.equals(path) || MERGE_LIST.equals(path);
   }
 
+  public static Key key(PatchSet.Id patchSetId, String fileName) {
+    return new Key(patchSetId, fileName);
+  }
+
   public static class Key extends StringKey<PatchSet.Id> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1, name = Column.NONE)
     protected PatchSet.Id patchSetId;
 
-    @Column(id = 2)
     protected String fileName;
 
     protected Key() {
@@ -59,9 +60,17 @@ public final class Patch {
       return patchSetId;
     }
 
+    public PatchSet.Id patchSetId() {
+      return getParentKey();
+    }
+
     @Override
     public String get() {
       return fileName;
+    }
+
+    public String fileName() {
+      return get();
     }
 
     @Override

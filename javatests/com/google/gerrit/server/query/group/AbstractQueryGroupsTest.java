@@ -34,7 +34,6 @@ import com.google.gerrit.index.query.FieldBundle;
 import com.google.gerrit.lifecycle.LifecycleManager;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.AccountGroup;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.AnonymousUser;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
@@ -58,11 +57,9 @@ import com.google.gerrit.server.util.OneOffRequestContext;
 import com.google.gerrit.server.util.RequestContext;
 import com.google.gerrit.server.util.ThreadLocalRequestContext;
 import com.google.gerrit.testing.GerritServerTests;
-import com.google.gerrit.testing.InMemoryDatabase;
 import com.google.inject.Inject;
 import com.google.inject.Injector;
 import com.google.inject.Provider;
-import com.google.inject.util.Providers;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
@@ -89,8 +86,6 @@ public abstract class AbstractQueryGroupsTest extends GerritServerTests {
 
   @Inject private Provider<AnonymousUser> anonymousUser;
 
-  @Inject protected InMemoryDatabase schemaFactory;
-
   @Inject protected SchemaCreator schemaCreator;
 
   @Inject protected ThreadLocalRequestContext requestContext;
@@ -109,7 +104,6 @@ public abstract class AbstractQueryGroupsTest extends GerritServerTests {
 
   protected LifecycleManager lifecycle;
   protected Injector injector;
-  protected ReviewDb db;
   protected AccountInfo currentUserInfo;
   protected CurrentUser user;
 
@@ -129,12 +123,10 @@ public abstract class AbstractQueryGroupsTest extends GerritServerTests {
   @After
   public void cleanUp() {
     lifecycle.stop();
-    db.close();
   }
 
   protected void setUpDatabase() throws Exception {
-    db = schemaFactory.open();
-    schemaCreator.create(db);
+    schemaCreator.create();
 
     Account.Id userId =
         createAccountOutsideRequestContext("user", "User", "user@example.com", true);
@@ -147,32 +139,11 @@ public abstract class AbstractQueryGroupsTest extends GerritServerTests {
 
   protected RequestContext newRequestContext(Account.Id requestUserId) {
     final CurrentUser requestUser = userFactory.create(requestUserId);
-    return new RequestContext() {
-      @Override
-      public CurrentUser getUser() {
-        return requestUser;
-      }
-
-      @Override
-      public Provider<ReviewDb> getReviewDbProvider() {
-        return Providers.of(db);
-      }
-    };
+    return () -> requestUser;
   }
 
   protected void setAnonymous() {
-    requestContext.setContext(
-        new RequestContext() {
-          @Override
-          public CurrentUser getUser() {
-            return anonymousUser.get();
-          }
-
-          @Override
-          public Provider<ReviewDb> getReviewDbProvider() {
-            return Providers.of(db);
-          }
-        });
+    requestContext.setContext(anonymousUser::get);
   }
 
   @After
@@ -183,10 +154,6 @@ public abstract class AbstractQueryGroupsTest extends GerritServerTests {
     if (requestContext != null) {
       requestContext.setContext(null);
     }
-    if (db != null) {
-      db.close();
-    }
-    InMemoryDatabase.drop(schemaFactory);
   }
 
   @Test

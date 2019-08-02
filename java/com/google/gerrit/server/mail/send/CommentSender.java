@@ -20,8 +20,9 @@ import com.google.common.base.Strings;
 import com.google.common.collect.Ordering;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.data.FilenameComparator;
-import com.google.gerrit.common.errors.EmailException;
-import com.google.gerrit.common.errors.NoSuchEntityException;
+import com.google.gerrit.exceptions.EmailException;
+import com.google.gerrit.exceptions.NoSuchEntityException;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.api.changes.NotifyHandling;
 import com.google.gerrit.mail.MailHeader;
 import com.google.gerrit.mail.MailProcessingUtil;
@@ -41,7 +42,6 @@ import com.google.gerrit.server.patch.PatchListNotAvailableException;
 import com.google.gerrit.server.patch.PatchListObjectTooLargeException;
 import com.google.gerrit.server.util.LabelVote;
 import com.google.gwtorm.client.KeyUtil;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.assistedinject.Assisted;
 import java.io.IOException;
@@ -75,21 +75,19 @@ public class CommentSender extends ReplyToChangeSender {
     public List<Comment> comments = new ArrayList<>();
 
     /** @return a web link to the given patch set and file. */
-    public String getLink() {
-      String url = getGerritUrl();
-      if (url == null) {
-        return null;
-      }
+    public String getFileLink() {
+      return args.urlFormatter
+          .get()
+          .getPatchFileView(change, patchSetId, KeyUtil.encode(filename))
+          .orElse(null);
+    }
 
-      return new StringBuilder()
-          .append(url)
-          .append("#/c/")
-          .append(change.getId())
-          .append('/')
-          .append(patchSetId)
-          .append('/')
-          .append(KeyUtil.encode(filename))
-          .toString();
+    /** @return a web link to a comment within a given patch set and file. */
+    public String getCommentLink(short side, int startLine) {
+      return args.urlFormatter
+          .get()
+          .getInlineCommentView(change, patchSetId, KeyUtil.encode(filename), side, startLine)
+          .orElse(null);
     }
 
     /**
@@ -119,8 +117,7 @@ public class CommentSender extends ReplyToChangeSender {
       CommentsUtil commentsUtil,
       @GerritServerConfig Config cfg,
       @Assisted Project.NameKey project,
-      @Assisted Change.Id id)
-      throws OrmException {
+      @Assisted Change.Id id) {
     super(ea, "comment", newChangeData(ea, project, id));
     this.commentsUtil = commentsUtil;
     this.incomingEmailEnabled =
@@ -129,7 +126,7 @@ public class CommentSender extends ReplyToChangeSender {
     this.replyToAddress = cfg.getString("sendemail", null, "replyToAddress");
   }
 
-  public void setComments(List<Comment> comments) throws OrmException {
+  public void setComments(List<Comment> comments) {
     inlineComments = comments;
 
     Set<String> paths = new HashSet<>();
@@ -153,10 +150,10 @@ public class CommentSender extends ReplyToChangeSender {
   protected void init() throws EmailException {
     super.init();
 
-    if (notify.compareTo(NotifyHandling.OWNER_REVIEWERS) >= 0) {
+    if (notify.handling().compareTo(NotifyHandling.OWNER_REVIEWERS) >= 0) {
       ccAllApprovals();
     }
-    if (notify.compareTo(NotifyHandling.ALL) >= 0) {
+    if (notify.handling().compareTo(NotifyHandling.ALL) >= 0) {
       bccStarredBy();
       includeWatchers(NotifyType.ALL_COMMENTS, !change.isWorkInProgress() && !change.isPrivate());
     }
@@ -315,8 +312,8 @@ public class CommentSender extends ReplyToChangeSender {
 
     Comment.Key key = new Comment.Key(child.parentUuid, child.key.filename, child.key.patchSetId);
     try {
-      return commentsUtil.getPublished(args.db.get(), changeData.notes(), key);
-    } catch (OrmException e) {
+      return commentsUtil.getPublished(changeData.notes(), key);
+    } catch (StorageException e) {
       logger.atWarning().log("Could not find the parent of this comment: %s", child);
       return Optional.empty();
     }
@@ -392,7 +389,7 @@ public class CommentSender extends ReplyToChangeSender {
 
     for (CommentSender.FileCommentGroup group : getGroupedInlineComments(repo)) {
       Map<String, Object> groupData = new HashMap<>();
-      groupData.put("link", group.getLink());
+      groupData.put("link", group.getFileLink());
       groupData.put("title", group.getTitle());
       groupData.put("patchSetId", group.patchSetId);
 
@@ -421,11 +418,9 @@ public class CommentSender extends ReplyToChangeSender {
 
         // Set the comment link.
         if (comment.lineNbr == 0) {
-          commentData.put("link", group.getLink());
-        } else if (comment.side == 0) {
-          commentData.put("link", group.getLink() + "@a" + startLine);
+          commentData.put("link", group.getFileLink());
         } else {
-          commentData.put("link", group.getLink() + '@' + startLine);
+          commentData.put("link", group.getCommentLink(comment.side, startLine));
         }
 
         // Set robot comment data.

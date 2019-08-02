@@ -19,12 +19,14 @@ import static com.google.common.truth.Truth.assertThat;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.GerritConfig;
 import com.google.gerrit.acceptance.PushOneCommit;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperations;
 import com.google.gerrit.extensions.api.projects.ConfigInput;
 import com.google.gerrit.extensions.client.InheritableBoolean;
 import com.google.gerrit.extensions.common.ChangeInfo;
 import com.google.gerrit.extensions.common.ChangeInput;
 import com.google.gerrit.extensions.restapi.MethodNotAllowedException;
 import com.google.gerrit.reviewdb.client.Project;
+import com.google.inject.Inject;
 import org.eclipse.jgit.internal.storage.dfs.InMemoryRepository;
 import org.eclipse.jgit.junit.TestRepository;
 import org.eclipse.jgit.revwalk.RevCommit;
@@ -34,11 +36,12 @@ import org.junit.Test;
 public class PrivateByDefaultIT extends AbstractDaemonTest {
   private Project.NameKey project1;
   private Project.NameKey project2;
+  @Inject private ProjectOperations projectOperations;
 
   @Before
   public void setUp() throws Exception {
-    project1 = createProject("project-1");
-    project2 = createProject("project-2", project1);
+    project1 = projectOperations.newProject().create();
+    project2 = projectOperations.newProject().parent(project1).create();
     setPrivateByDefault(project1, InheritableBoolean.FALSE);
   }
 
@@ -118,7 +121,7 @@ public class PrivateByDefaultIT extends AbstractDaemonTest {
 
     TestRepository<InMemoryRepository> testRepo = cloneProject(project2);
     PushOneCommit.Result result =
-        pushFactory.create(db, admin.getIdent(), testRepo).to("refs/for/master%private");
+        pushFactory.create(admin.newIdent(), testRepo).to("refs/for/master%private");
     result.assertErrorStatus();
   }
 
@@ -127,14 +130,14 @@ public class PrivateByDefaultIT extends AbstractDaemonTest {
   public void pushDraftsWithPrivateByDefaultAndDisablePrivateChangesTrue() throws Exception {
     setPrivateByDefault(project2, InheritableBoolean.TRUE);
 
-    RevCommit initialHead = getRemoteHead();
+    RevCommit initialHead = getRemoteHead(project2, "master");
     TestRepository<InMemoryRepository> testRepo = cloneProject(project2);
     PushOneCommit.Result result =
-        pushFactory.create(db, admin.getIdent(), testRepo).to("refs/for/master%draft");
+        pushFactory.create(admin.newIdent(), testRepo).to("refs/for/master%draft");
     result.assertErrorStatus();
 
     testRepo.reset(initialHead);
-    result = pushFactory.create(db, admin.getIdent(), testRepo).to("refs/drafts/master");
+    result = pushFactory.create(admin.newIdent(), testRepo).to("refs/drafts/master");
     result.assertErrorStatus();
   }
 
@@ -151,7 +154,7 @@ public class PrivateByDefaultIT extends AbstractDaemonTest {
 
   private PushOneCommit.Result createChange(Project.NameKey proj, String ref) throws Exception {
     TestRepository<InMemoryRepository> testRepo = cloneProject(proj);
-    PushOneCommit push = pushFactory.create(db, admin.getIdent(), testRepo);
+    PushOneCommit push = pushFactory.create(admin.newIdent(), testRepo);
     PushOneCommit.Result result = push.to(ref);
     result.assertOkStatus();
     return result;

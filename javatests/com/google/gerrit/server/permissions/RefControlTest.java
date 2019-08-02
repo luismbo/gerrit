@@ -41,12 +41,11 @@ import com.google.gerrit.common.Nullable;
 import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.PermissionRange;
 import com.google.gerrit.common.data.PermissionRule;
-import com.google.gerrit.common.errors.InvalidNameException;
+import com.google.gerrit.exceptions.InvalidNameException;
 import com.google.gerrit.extensions.api.projects.CommentLinkInfo;
 import com.google.gerrit.metrics.MetricMaker;
 import com.google.gerrit.reviewdb.client.AccountGroup;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.account.CapabilityCollection;
 import com.google.gerrit.server.account.GroupMembership;
@@ -55,7 +54,6 @@ import com.google.gerrit.server.config.AllProjectsName;
 import com.google.gerrit.server.config.AllProjectsNameProvider;
 import com.google.gerrit.server.config.AllUsersName;
 import com.google.gerrit.server.config.AllUsersNameProvider;
-import com.google.gerrit.server.config.SitePaths;
 import com.google.gerrit.server.git.TransferConfig;
 import com.google.gerrit.server.index.SingleVersionModule.SingleVersionListener;
 import com.google.gerrit.server.project.ProjectCache;
@@ -64,16 +62,13 @@ import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.project.RefPattern;
 import com.google.gerrit.server.project.testing.Util;
 import com.google.gerrit.server.schema.SchemaCreator;
-import com.google.gerrit.server.util.RequestContext;
 import com.google.gerrit.server.util.ThreadLocalRequestContext;
-import com.google.gerrit.testing.InMemoryDatabase;
+import com.google.gerrit.testing.GerritBaseTests;
 import com.google.gerrit.testing.InMemoryModule;
 import com.google.gerrit.testing.InMemoryRepositoryManager;
 import com.google.inject.Guice;
 import com.google.inject.Inject;
 import com.google.inject.Injector;
-import com.google.inject.Provider;
-import com.google.inject.util.Providers;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -89,7 +84,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-public class RefControlTest {
+public class RefControlTest extends GerritBaseTests {
   private void assertAdminsAreOwnersAndDevsAreNot() {
     ProjectControl uBlah = user(local, DEVS);
     ProjectControl uAdmin = user(local, DEVS, ADMIN);
@@ -195,17 +190,16 @@ public class RefControlTest {
   private ProjectCache projectCache;
   private PermissionCollection.Factory sectionSorter;
   private ChangeControl.Factory changeControlFactory;
-  private ReviewDb db;
 
   @Inject private PermissionBackend permissionBackend;
   @Inject private CapabilityCollection.Factory capabilityCollectionFactory;
   @Inject private SchemaCreator schemaCreator;
   @Inject private SingleVersionListener singleVersionListener;
-  @Inject private InMemoryDatabase schemaFactory;
   @Inject private ThreadLocalRequestContext requestContext;
   @Inject private DefaultRefFilter.Factory refFilterFactory;
   @Inject private TransferConfig transferConfig;
   @Inject private MetricMaker metricMaker;
+  @Inject private ProjectConfig.Factory projectConfigFactory;
 
   @Before
   public void setUp() throws Exception {
@@ -274,7 +268,8 @@ public class RefControlTest {
 
     try {
       Repository repo = repoManager.createRepository(allProjectsName);
-      ProjectConfig allProjects = new ProjectConfig(new Project.NameKey(allProjectsName.get()));
+      ProjectConfig allProjects =
+          projectConfigFactory.create(new Project.NameKey(allProjectsName.get()));
       allProjects.load(repo);
       LabelType cr = Util.codeReview();
       allProjects.getLabelSections().put(cr.getName(), cr);
@@ -283,10 +278,9 @@ public class RefControlTest {
       throw new RuntimeException(e);
     }
 
-    db = schemaFactory.open();
     singleVersionListener.start();
     try {
-      schemaCreator.create(db);
+      schemaCreator.create();
     } finally {
       singleVersionListener.stop();
     }
@@ -295,27 +289,16 @@ public class RefControlTest {
         CacheBuilder.newBuilder().build();
     sectionSorter = new PermissionCollection.Factory(new SectionSortCache(c), metricMaker);
 
-    parent = new ProjectConfig(parentKey);
+    parent = projectConfigFactory.create(parentKey);
     parent.load(newRepository(parentKey));
     add(parent);
 
-    local = new ProjectConfig(localKey);
+    local = projectConfigFactory.create(localKey);
     local.load(newRepository(localKey));
     add(local);
     local.getProject().setParentName(parentKey);
 
-    requestContext.setContext(
-        new RequestContext() {
-          @Override
-          public CurrentUser getUser() {
-            return null;
-          }
-
-          @Override
-          public Provider<ReviewDb> getReviewDbProvider() {
-            return Providers.of(db);
-          }
-        });
+    requestContext.setContext(() -> null);
 
     changeControlFactory = injector.getInstance(ChangeControl.Factory.class);
   }
@@ -323,10 +306,6 @@ public class RefControlTest {
   @After
   public void tearDown() {
     requestContext.setContext(null);
-    if (db != null) {
-      db.close();
-    }
-    InMemoryDatabase.drop(schemaFactory);
   }
 
   @Test
@@ -455,7 +434,7 @@ public class RefControlTest {
     allow(local, READ, DEVS, "refs/heads/*");
     assertCanAccess(user(local, "a", ADMIN));
 
-    local = new ProjectConfig(localKey);
+    local = projectConfigFactory.create(localKey);
     local.load(newRepository(localKey));
     local.getProject().setParentName(parentKey);
     allow(local, READ, DEVS, "refs/*");
@@ -582,6 +561,16 @@ public class RefControlTest {
 
     ProjectControl u = user(local, DEVS);
     assertCannotUpdate("refs/tags/V10", u);
+  }
+
+  @Test
+  public void blockPartialRangeLocally() {
+    block(local, LABEL + "Code-Review", +1, +2, DEVS, "refs/heads/master");
+
+    ProjectControl u = user(local, DEVS);
+
+    PermissionRange range = u.controlForRef("refs/heads/master").getRange(LABEL + "Code-Review");
+    assertCannotVote(2, range);
   }
 
   @Test
@@ -951,7 +940,6 @@ public class RefControlTest {
   }
 
   private InMemoryRepository add(ProjectConfig pc) {
-    SitePaths sitePaths = null;
     List<CommentLinkInfo> commentLinks = null;
 
     InMemoryRepository repo;
@@ -966,7 +954,6 @@ public class RefControlTest {
     all.put(
         pc.getName(),
         new ProjectState(
-            sitePaths,
             projectCache,
             allProjectsName,
             allUsersName,
@@ -986,8 +973,8 @@ public class RefControlTest {
   private ProjectControl user(
       ProjectConfig local, @Nullable String name, AccountGroup.UUID... memberOf) {
     return new ProjectControl(
-        Collections.<AccountGroup.UUID>emptySet(),
-        Collections.<AccountGroup.UUID>emptySet(),
+        Collections.emptySet(),
+        Collections.emptySet(),
         sectionSorter,
         changeControlFactory,
         permissionBackend,

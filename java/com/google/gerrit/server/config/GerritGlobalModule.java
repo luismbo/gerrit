@@ -29,6 +29,7 @@ import com.google.gerrit.extensions.config.DownloadCommand;
 import com.google.gerrit.extensions.config.DownloadScheme;
 import com.google.gerrit.extensions.config.ExternalIncludedIn;
 import com.google.gerrit.extensions.config.FactoryModule;
+import com.google.gerrit.extensions.config.PluginProjectPermissionDefinition;
 import com.google.gerrit.extensions.events.AccountIndexedListener;
 import com.google.gerrit.extensions.events.AgreementSignupListener;
 import com.google.gerrit.extensions.events.AssigneeChangedListener;
@@ -75,14 +76,13 @@ import com.google.gerrit.server.AnonymousUser;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.CmdLineParserModule;
 import com.google.gerrit.server.CreateGroupPermissionSyncer;
+import com.google.gerrit.server.DynamicOptions;
 import com.google.gerrit.server.IdentifiedUser;
-import com.google.gerrit.server.Sequences;
 import com.google.gerrit.server.account.AccountCacheImpl;
 import com.google.gerrit.server.account.AccountControl;
 import com.google.gerrit.server.account.AccountDeactivator;
 import com.google.gerrit.server.account.AccountExternalIdCreator;
 import com.google.gerrit.server.account.AccountManager;
-import com.google.gerrit.server.account.AccountResolver;
 import com.google.gerrit.server.account.AccountVisibilityProvider;
 import com.google.gerrit.server.account.CapabilityCollection;
 import com.google.gerrit.server.account.EmailExpander;
@@ -98,6 +98,7 @@ import com.google.gerrit.server.avatar.AvatarProvider;
 import com.google.gerrit.server.cache.CacheRemovalListener;
 import com.google.gerrit.server.change.AbandonOp;
 import com.google.gerrit.server.change.AccountPatchReviewStore;
+import com.google.gerrit.server.change.ChangeAttributeFactory;
 import com.google.gerrit.server.change.ChangeFinder;
 import com.google.gerrit.server.change.ChangeJson;
 import com.google.gerrit.server.change.ChangeKindCacheImpl;
@@ -117,6 +118,7 @@ import com.google.gerrit.server.git.GitModule;
 import com.google.gerrit.server.git.MergeUtil;
 import com.google.gerrit.server.git.MergedByPushOp;
 import com.google.gerrit.server.git.NotesBranchUtil;
+import com.google.gerrit.server.git.PureRevertCache;
 import com.google.gerrit.server.git.ReceivePackInitializer;
 import com.google.gerrit.server.git.TagCache;
 import com.google.gerrit.server.git.TransferConfig;
@@ -161,8 +163,8 @@ import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.project.SubmitRuleEvaluator;
 import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gerrit.server.query.change.ChangeQueryBuilder;
-import com.google.gerrit.server.query.change.ChangeQueryProcessor;
 import com.google.gerrit.server.query.change.ConflictsCacheImpl;
+import com.google.gerrit.server.quota.QuotaEnforcer;
 import com.google.gerrit.server.restapi.change.SuggestReviewers;
 import com.google.gerrit.server.restapi.group.GroupModule;
 import com.google.gerrit.server.rules.DefaultSubmitRule;
@@ -214,7 +216,6 @@ public class GerritGlobalModule extends FactoryModule {
     bind(IdGenerator.class);
     bind(RulesCache.class);
     bind(BlameCache.class).to(BlameCacheImpl.class);
-    bind(Sequences.class);
     install(authModule);
     install(AccountCacheImpl.module());
     install(BatchUpdate.module());
@@ -230,6 +231,7 @@ public class GerritGlobalModule extends FactoryModule {
     install(SubmitStrategy.module());
     install(TagCache.module());
     install(OAuthTokenCache.module());
+    install(PureRevertCache.module());
 
     install(new AccessControlModule());
     install(new CmdLineParserModule());
@@ -238,15 +240,13 @@ public class GerritGlobalModule extends FactoryModule {
     install(new GitModule());
     install(new GroupDbModule());
     install(new GroupModule());
-    install(new NoteDbModule(cfg));
+    install(new NoteDbModule());
     install(new PrologModule());
     install(new DefaultSubmitRule.Module());
     install(new IgnoreSelfApprovalRule.Module());
     install(new ReceiveCommitsModule());
     install(new SshAddressesModule());
     install(ThreadLocalRequestContext.module());
-
-    bind(AccountResolver.class);
 
     factory(CapabilityCollection.Factory.class);
     factory(ChangeData.AssistedFactory.class);
@@ -284,8 +284,8 @@ public class GerritGlobalModule extends FactoryModule {
     bind(SoyTofu.class).annotatedWith(MailTemplates.class).toProvider(MailSoyTofuProvider.class);
     bind(FromAddressGenerator.class).toProvider(FromAddressGeneratorProvider.class).in(SINGLETON);
     bind(Boolean.class)
-        .annotatedWith(DisableReverseDnsLookup.class)
-        .toProvider(DisableReverseDnsLookupProvider.class)
+        .annotatedWith(EnableReverseDnsLookup.class)
+        .toProvider(EnableReverseDnsLookupProvider.class)
         .in(SINGLETON);
 
     bind(PatchSetInfoFactory.class);
@@ -298,6 +298,7 @@ public class GerritGlobalModule extends FactoryModule {
     DynamicMap.mapOf(binder(), new TypeLiteral<Cache<?, ?>>() {});
     DynamicSet.setOf(binder(), CacheRemovalListener.class);
     DynamicMap.mapOf(binder(), CapabilityDefinition.class);
+    DynamicMap.mapOf(binder(), PluginProjectPermissionDefinition.class);
     DynamicSet.setOf(binder(), GitReferenceUpdatedListener.class);
     DynamicSet.setOf(binder(), AssigneeChangedListener.class);
     DynamicSet.setOf(binder(), ChangeAbandonedListener.class);
@@ -380,6 +381,7 @@ public class GerritGlobalModule extends FactoryModule {
     DynamicItem.itemOf(binder(), MergeSuperSetComputation.class);
     DynamicItem.itemOf(binder(), ProjectNameLockManager.class);
     DynamicSet.setOf(binder(), SubmitRule.class);
+    DynamicSet.setOf(binder(), QuotaEnforcer.class);
 
     DynamicMap.mapOf(binder(), MailFilter.class);
     bind(MailFilter.class).annotatedWith(Exports.named("ListMailFilter")).to(ListMailFilter.class);
@@ -390,9 +392,10 @@ public class GerritGlobalModule extends FactoryModule {
     factory(UploadValidators.Factory.class);
     DynamicSet.setOf(binder(), UploadValidationListener.class);
 
+    DynamicMap.mapOf(binder(), DynamicOptions.DynamicBean.class);
     DynamicMap.mapOf(binder(), ChangeQueryBuilder.ChangeOperatorFactory.class);
     DynamicMap.mapOf(binder(), ChangeQueryBuilder.ChangeHasOperandFactory.class);
-    DynamicMap.mapOf(binder(), ChangeQueryProcessor.ChangeAttributeFactory.class);
+    DynamicSet.setOf(binder(), ChangeAttributeFactory.class);
 
     install(new GitwebConfig.LegacyModule(cfg));
 

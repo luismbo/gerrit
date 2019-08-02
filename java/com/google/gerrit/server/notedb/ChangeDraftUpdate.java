@@ -19,6 +19,7 @@ import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.Sets;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Comment;
@@ -28,8 +29,6 @@ import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.reviewdb.client.RevId;
 import com.google.gerrit.server.GerritPersonIdent;
 import com.google.gerrit.server.config.AllUsersName;
-import com.google.gerrit.server.config.GerritServerConfig;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.assistedinject.Assisted;
 import com.google.inject.assistedinject.AssistedInject;
 import java.io.IOException;
@@ -42,7 +41,6 @@ import java.util.Map;
 import java.util.Set;
 import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.CommitBuilder;
-import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectInserter;
 import org.eclipse.jgit.lib.PersonIdent;
@@ -92,9 +90,7 @@ public class ChangeDraftUpdate extends AbstractChangeUpdate {
 
   @AssistedInject
   private ChangeDraftUpdate(
-      @GerritServerConfig Config cfg,
       @GerritPersonIdent PersonIdent serverIdent,
-      NotesMigration migration,
       AllUsersName allUsers,
       ChangeNoteUtil noteUtil,
       @Assisted ChangeNotes notes,
@@ -102,25 +98,13 @@ public class ChangeDraftUpdate extends AbstractChangeUpdate {
       @Assisted("real") Account.Id realAccountId,
       @Assisted PersonIdent authorIdent,
       @Assisted Date when) {
-    super(
-        cfg,
-        migration,
-        noteUtil,
-        serverIdent,
-        notes,
-        null,
-        accountId,
-        realAccountId,
-        authorIdent,
-        when);
+    super(noteUtil, serverIdent, notes, null, accountId, realAccountId, authorIdent, when);
     this.draftsProject = allUsers;
   }
 
   @AssistedInject
   private ChangeDraftUpdate(
-      @GerritServerConfig Config cfg,
       @GerritPersonIdent PersonIdent serverIdent,
-      NotesMigration migration,
       AllUsersName allUsers,
       ChangeNoteUtil noteUtil,
       @Assisted Change change,
@@ -128,17 +112,7 @@ public class ChangeDraftUpdate extends AbstractChangeUpdate {
       @Assisted("real") Account.Id realAccountId,
       @Assisted PersonIdent authorIdent,
       @Assisted Date when) {
-    super(
-        cfg,
-        migration,
-        noteUtil,
-        serverIdent,
-        null,
-        change,
-        accountId,
-        realAccountId,
-        authorIdent,
-        when);
+    super(noteUtil, serverIdent, null, change, accountId, realAccountId, authorIdent, when);
     this.draftsProject = allUsers;
   }
 
@@ -158,7 +132,7 @@ public class ChangeDraftUpdate extends AbstractChangeUpdate {
 
   private CommitBuilder storeCommentsInNotes(
       RevWalk rw, ObjectInserter ins, ObjectId curr, CommitBuilder cb)
-      throws ConfigInvalidException, OrmException, IOException {
+      throws ConfigInvalidException, IOException {
     RevisionNoteMap<ChangeRevisionNote> rnm = getRevisionNoteMap(rw, curr);
     Set<RevId> updatedRevs = Sets.newHashSetWithExpectedSize(rnm.revisionNotes.size());
     RevisionNoteBuilder.Cache cache = new RevisionNoteBuilder.Cache(rnm);
@@ -210,20 +184,17 @@ public class ChangeDraftUpdate extends AbstractChangeUpdate {
   }
 
   private RevisionNoteMap<ChangeRevisionNote> getRevisionNoteMap(RevWalk rw, ObjectId curr)
-      throws ConfigInvalidException, OrmException, IOException {
-    if (migration.readChanges()) {
-      // If reading from changes is enabled, then the old DraftCommentNotes
-      // already parsed the revision notes. We can reuse them as long as the ref
-      // hasn't advanced.
-      ChangeNotes changeNotes = getNotes();
-      if (changeNotes != null) {
-        DraftCommentNotes draftNotes = changeNotes.load().getDraftCommentNotes();
-        if (draftNotes != null) {
-          ObjectId idFromNotes = firstNonNull(draftNotes.getRevision(), ObjectId.zeroId());
-          RevisionNoteMap<ChangeRevisionNote> rnm = draftNotes.getRevisionNoteMap();
-          if (idFromNotes.equals(curr) && rnm != null) {
-            return rnm;
-          }
+      throws ConfigInvalidException, IOException {
+    // The old DraftCommentNotes already parsed the revision notes. We can reuse them as long as
+    // the ref hasn't advanced.
+    ChangeNotes changeNotes = getNotes();
+    if (changeNotes != null) {
+      DraftCommentNotes draftNotes = changeNotes.load().getDraftCommentNotes();
+      if (draftNotes != null) {
+        ObjectId idFromNotes = firstNonNull(draftNotes.getRevision(), ObjectId.zeroId());
+        RevisionNoteMap<ChangeRevisionNote> rnm = draftNotes.getRevisionNoteMap();
+        if (idFromNotes.equals(curr) && rnm != null) {
+          return rnm;
         }
       }
     }
@@ -246,13 +217,13 @@ public class ChangeDraftUpdate extends AbstractChangeUpdate {
 
   @Override
   protected CommitBuilder applyImpl(RevWalk rw, ObjectInserter ins, ObjectId curr)
-      throws OrmException, IOException {
+      throws IOException {
     CommitBuilder cb = new CommitBuilder();
     cb.setMessage("Update draft comments");
     try {
       return storeCommentsInNotes(rw, ins, curr, cb);
     } catch (ConfigInvalidException e) {
-      throw new OrmException(e);
+      throw new StorageException(e);
     }
   }
 

@@ -16,18 +16,19 @@ package com.google.gerrit.server.rules;
 
 import static com.google.gerrit.server.rules.StoredValue.create;
 
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.client.DiffPreferencesInfo.Whitespace;
 import com.google.gerrit.reviewdb.client.Account;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.AnonymousUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.account.AccountCache;
 import com.google.gerrit.server.account.Accounts;
 import com.google.gerrit.server.account.Emails;
+import com.google.gerrit.server.config.PluginConfigFactory;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.patch.PatchList;
 import com.google.gerrit.server.patch.PatchListCache;
@@ -36,7 +37,6 @@ import com.google.gerrit.server.patch.PatchListNotAvailableException;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.query.change.ChangeData;
-import com.google.gwtorm.server.OrmException;
 import com.googlecode.prolog_cafe.exceptions.SystemException;
 import com.googlecode.prolog_cafe.lang.Prolog;
 import java.io.IOException;
@@ -50,7 +50,6 @@ public final class StoredValues {
   public static final StoredValue<Accounts> ACCOUNTS = create(Accounts.class);
   public static final StoredValue<AccountCache> ACCOUNT_CACHE = create(AccountCache.class);
   public static final StoredValue<Emails> EMAILS = create(Emails.class);
-  public static final StoredValue<ReviewDb> REVIEW_DB = create(ReviewDb.class);
   public static final StoredValue<ChangeData> CHANGE_DATA = create(ChangeData.class);
   public static final StoredValue<ProjectState> PROJECT_STATE = create(ProjectState.class);
 
@@ -58,7 +57,7 @@ public final class StoredValues {
     ChangeData cd = CHANGE_DATA.get(engine);
     try {
       return cd.change();
-    } catch (OrmException e) {
+    } catch (StorageException e) {
       throw new SystemException("Cannot load change " + cd.getId());
     }
   }
@@ -67,7 +66,7 @@ public final class StoredValues {
     ChangeData cd = CHANGE_DATA.get(engine);
     try {
       return cd.currentPatchSet();
-    } catch (OrmException e) {
+    } catch (StorageException e) {
       throw new SystemException(e.getMessage());
     }
   }
@@ -107,6 +106,27 @@ public final class StoredValues {
             throw new SystemException("Cannot create " + plKey);
           }
           return patchList;
+        }
+      };
+
+  // Accessing GitRepositoryManager could be slow.
+  // It should be minimized or cached to reduce pause time
+  // when evaluating Prolog submit rules.
+  public static final StoredValue<GitRepositoryManager> REPO_MANAGER =
+      new StoredValue<GitRepositoryManager>() {
+        @Override
+        public GitRepositoryManager createValue(Prolog engine) {
+          PrologEnvironment env = (PrologEnvironment) engine.control;
+          return env.getArgs().getGitRepositoryManager();
+        }
+      };
+
+  public static final StoredValue<PluginConfigFactory> PLUGIN_CONFIG_FACTORY =
+      new StoredValue<PluginConfigFactory>() {
+        @Override
+        public PluginConfigFactory createValue(Prolog engine) {
+          PrologEnvironment env = (PrologEnvironment) engine.control;
+          return env.getArgs().getPluginConfigFactory();
         }
       };
 

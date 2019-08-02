@@ -44,6 +44,8 @@
 
   const TRAILING_WHITESPACE_REGEX = /[ \t]+$/gm;
 
+  const MSG_PREFIX = '#message-';
+
   const ReloadToastMessage = {
     NEWER_REVISION: 'A newer patch set has been uploaded',
     RESTORED: 'This change has been restored',
@@ -62,6 +64,7 @@
 
   Polymer({
     is: 'gr-change-view',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when the title of the page should change.
@@ -105,6 +108,14 @@
       disableEdit: {
         type: Boolean,
         value: false,
+      },
+      disableDiffPrefs: {
+        type: Boolean,
+        value: false,
+      },
+      _diffPrefsDisabled: {
+        type: Boolean,
+        computed: '_computeDiffPrefsDisabled(disableDiffPrefs, _loggedIn)',
       },
       _commentThreads: Array,
       /** @type {?} */
@@ -248,6 +259,25 @@
         type: Boolean,
         value: true,
       },
+      _showFileTabContent: {
+        type: Boolean,
+        value: true,
+      },
+      /** @type {Array<string>} */
+      _dynamicTabHeaderEndpoints: {
+        type: Array,
+      },
+      _showPrimaryTabs: {
+        type: Boolean,
+        computed: '_computeShowPrimaryTabs(_dynamicTabHeaderEndpoints)',
+      },
+      /** @type {Array<string>} */
+      _dynamicTabContentEndpoints: {
+        type: Array,
+      },
+      _selectedFilesTabPluginEndpoint: {
+        type: String,
+      },
     },
 
     behaviors: [
@@ -304,6 +334,17 @@
           });
         }
         this._setDiffViewMode();
+      });
+
+      Gerrit.awaitPluginsLoaded().then(() => {
+        this._dynamicTabHeaderEndpoints =
+            Gerrit._endpoints.getDynamicEndpoints('change-view-tab-header');
+        this._dynamicTabContentEndpoints =
+            Gerrit._endpoints.getDynamicEndpoints('change-view-tab-content');
+        if (this._dynamicTabContentEndpoints.length
+            !== this._dynamicTabHeaderEndpoints.length) {
+          console.warn('Different number of tab headers and tab content.');
+        }
       });
 
       this.addEventListener('comment-save', this._handleCommentSave.bind(this));
@@ -364,8 +405,16 @@
       }
     },
 
-    _handleTabChange() {
+    _handleCommentTabChange() {
       this._showMessagesView = this.$.commentTabs.selected === 0;
+    },
+
+    _handleFileTabChange() {
+      const selectedIndex = this.$$('#primaryTabs').selected;
+      this._showFileTabContent = selectedIndex === 0;
+      // Initial tab is the static files list.
+      this._selectedFilesTabPluginEndpoint =
+          this._dynamicTabContentEndpoints[selectedIndex - 1];
     },
 
     _handleEditCommitMessage(e) {
@@ -458,9 +507,9 @@
     },
 
     _handleCommentSave(e) {
-      if (!e.target.comment.__draft) { return; }
+      const draft = e.detail.comment;
+      if (!draft.__draft) { return; }
 
-      const draft = e.target.comment;
       draft.patch_set = draft.patch_set || this._patchRange.patchNum;
 
       // The use of path-based notification helpers (set, push) can’t be used
@@ -490,9 +539,9 @@
     },
 
     _handleCommentDiscard(e) {
-      if (!e.target.comment.__draft) { return; }
+      const draft = e.detail.comment;
+      if (!draft.__draft) { return; }
 
-      const draft = e.target.comment;
       if (!this._diffDrafts[draft.path]) {
         return;
       }
@@ -695,6 +744,8 @@
       // Selected has to be set after the paper-tabs are visible because
       // the selected underline depends on calculations made by the browser.
       this.$.commentTabs.selected = 0;
+      const primaryTabs = this.$$('#primaryTabs');
+      if (primaryTabs) primaryTabs.selected = 0;
 
       this.async(() => {
         if (this.viewState.scrollTop) {
@@ -727,10 +778,17 @@
       this.viewState.numFilesShown = numFilesShown;
     },
 
+    _handleMessageAnchorTap(e) {
+      const hash = MSG_PREFIX + e.detail.id;
+      const url = Gerrit.Nav.getUrlForChange(this._change,
+          this._patchRange.patchNum, this._patchRange.basePatchNum,
+          this._editMode, hash);
+      history.replaceState(null, '', url);
+    },
+
     _maybeScrollToMessage(hash) {
-      const msgPrefix = '#message-';
-      if (hash.startsWith(msgPrefix)) {
-        this.messagesList.scrollToMessage(hash.substr(msgPrefix.length));
+      if (hash.startsWith(MSG_PREFIX)) {
+        this.messagesList.scrollToMessage(hash.substr(MSG_PREFIX.length));
       }
     },
 
@@ -803,18 +861,13 @@
       this.set('_patchRange.patchNum', this._patchRange.patchNum ||
               this.computeLatestPatchNum(this._allPatchSets));
 
-      // Reset the related changes toggle in the event it was previously
-      // displayed on an earlier change.
-      this._showRelatedToggle = false;
-
       const title = change.subject + ' (' + change.change_id.substr(0, 9) + ')';
       this.fire('title-change', {title});
     },
 
     /**
-     * Gets base patch number, if is a parent try and
-     * decide from preference weather to default to `auto merge`
-     * or `Parent 1`.
+     * Gets base patch number, if it is a parent try and decide from
+     * preference weather to default to `auto merge`, `Parent 1` or `PARENT`.
      * @param {Object} change
      * @param {Object} patchRange
      * @return {number|string}
@@ -837,7 +890,15 @@
       const preferFirst = this._prefs &&
           this._prefs.default_base_for_merges === 'FIRST_PARENT';
 
-      return parentCount > 1 && preferFirst ? -1 : 'PARENT';
+      if (parentCount > 1 && preferFirst && !patchRange.patchNum) {
+        return -1;
+      }
+
+      return 'PARENT';
+    },
+
+    _computeShowPrimaryTabs(dynamicTabContentEndpoints) {
+      return dynamicTabContentEndpoints.length > 0;
     },
 
     _computeChangeUrl(change) {
@@ -1013,6 +1074,8 @@
     _handleOpenDiffPrefsShortcut(e) {
       if (this.shouldSuppressKeyboardShortcut(e) ||
           this.modifierPressed(e)) { return; }
+
+      if (this._diffPrefsDisabled) { return; }
 
       e.preventDefault();
       this.$.fileList.openDiffPrefs();
@@ -1710,6 +1773,10 @@
 
     _computeCurrentRevision(currentRevision, revisions) {
       return revisions && revisions[currentRevision];
+    },
+
+    _computeDiffPrefsDisabled(disableDiffPrefs, loggedIn) {
+      return disableDiffPrefs || !loggedIn;
     },
   });
 })();

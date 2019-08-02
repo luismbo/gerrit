@@ -19,8 +19,6 @@ import com.google.gerrit.extensions.common.SuggestedReviewerInfo;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.extensions.restapi.RestReadView;
-import com.google.gerrit.reviewdb.client.Account;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.config.GerritServerConfig;
@@ -29,7 +27,6 @@ import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.permissions.RefPermission;
 import com.google.gerrit.server.project.ProjectCache;
 import com.google.gerrit.server.restapi.change.ReviewersUtil.VisibilityControl;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import java.io.IOException;
@@ -54,13 +51,12 @@ public class SuggestChangeReviewers extends SuggestReviewers
   @Inject
   SuggestChangeReviewers(
       AccountVisibility av,
-      Provider<ReviewDb> dbProvider,
       PermissionBackend permissionBackend,
       Provider<CurrentUser> self,
       @GerritServerConfig Config cfg,
       ReviewersUtil reviewersUtil,
       ProjectCache projectCache) {
-    super(av, dbProvider, cfg, reviewersUtil);
+    super(av, cfg, reviewersUtil);
     this.permissionBackend = permissionBackend;
     this.self = self;
     this.projectCache = projectCache;
@@ -68,7 +64,7 @@ public class SuggestChangeReviewers extends SuggestReviewers
 
   @Override
   public List<SuggestedReviewerInfo> apply(ChangeResource rsrc)
-      throws AuthException, BadRequestException, OrmException, IOException, ConfigInvalidException,
+      throws AuthException, BadRequestException, IOException, ConfigInvalidException,
           PermissionBackendException {
     if (!self.get().isIdentifiedUser()) {
       throw new AuthException("Authentication required");
@@ -83,17 +79,13 @@ public class SuggestChangeReviewers extends SuggestReviewers
 
   private VisibilityControl getVisibility(ChangeResource rsrc) {
 
-    return new VisibilityControl() {
-      @Override
-      public boolean isVisibleTo(Account.Id account) {
-        // Use the destination reference, not the change, as private changes deny anyone who is not
-        // already a reviewer.
-        return permissionBackend
-            .absentUser(account)
-            .database(dbProvider)
-            .ref(rsrc.getChange().getDest())
-            .testOrFalse(RefPermission.READ);
-      }
+    return account -> {
+      // Use the destination reference, not the change, as private changes deny anyone who is not
+      // already a reviewer.
+      return permissionBackend
+          .absentUser(account)
+          .ref(rsrc.getChange().getDest())
+          .testOrFalse(RefPermission.READ);
     };
   }
 }

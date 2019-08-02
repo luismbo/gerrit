@@ -24,7 +24,6 @@ import com.google.gerrit.extensions.restapi.ResourceNotFoundException;
 import com.google.gerrit.extensions.restapi.RestView;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.RevId;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.change.ChangeResource;
 import com.google.gerrit.server.change.RevisionResource;
@@ -34,9 +33,7 @@ import com.google.gerrit.server.permissions.ChangePermission;
 import com.google.gerrit.server.permissions.PermissionBackend;
 import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.project.ProjectCache;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.Singleton;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -48,7 +45,6 @@ import org.eclipse.jgit.lib.ObjectId;
 @Singleton
 public class Revisions implements ChildCollection<ChangeResource, RevisionResource> {
   private final DynamicMap<RestView<RevisionResource>> views;
-  private final Provider<ReviewDb> dbProvider;
   private final ChangeEditUtil editUtil;
   private final PatchSetUtil psUtil;
   private final PermissionBackend permissionBackend;
@@ -57,13 +53,11 @@ public class Revisions implements ChildCollection<ChangeResource, RevisionResour
   @Inject
   Revisions(
       DynamicMap<RestView<RevisionResource>> views,
-      Provider<ReviewDb> dbProvider,
       ChangeEditUtil editUtil,
       PatchSetUtil psUtil,
       PermissionBackend permissionBackend,
       ProjectCache projectCache) {
     this.views = views;
-    this.dbProvider = dbProvider;
     this.editUtil = editUtil;
     this.psUtil = psUtil;
     this.permissionBackend = permissionBackend;
@@ -82,12 +76,11 @@ public class Revisions implements ChildCollection<ChangeResource, RevisionResour
 
   @Override
   public RevisionResource parse(ChangeResource change, IdString id)
-      throws ResourceNotFoundException, AuthException, OrmException, IOException,
-          PermissionBackendException {
+      throws ResourceNotFoundException, AuthException, IOException, PermissionBackendException {
     if (id.get().equals("current")) {
-      PatchSet ps = psUtil.current(dbProvider.get(), change.getNotes());
+      PatchSet ps = psUtil.current(change.getNotes());
       if (ps != null && visible(change)) {
-        return RevisionResource.createNonCachable(change, ps);
+        return RevisionResource.createNonCacheable(change, ps);
       }
       throw new ResourceNotFoundException(id);
     }
@@ -114,7 +107,6 @@ public class Revisions implements ChildCollection<ChangeResource, RevisionResour
       permissionBackend
           .user(change.getUser())
           .change(change.getNotes())
-          .database(dbProvider)
           .check(ChangePermission.READ);
       return projectCache.checkedGet(change.getProject()).statePermitsRead();
     } catch (AuthException e) {
@@ -123,7 +115,7 @@ public class Revisions implements ChildCollection<ChangeResource, RevisionResour
   }
 
   private List<RevisionResource> find(ChangeResource change, String id)
-      throws OrmException, IOException, AuthException {
+      throws IOException, AuthException {
     if (id.equals("0") || id.equals("edit")) {
       return loadEdit(change, null);
     } else if (id.length() < 6 && id.matches("^[1-9][0-9]{0,4}$")) {
@@ -135,7 +127,7 @@ public class Revisions implements ChildCollection<ChangeResource, RevisionResour
       return Collections.emptyList();
     } else {
       List<RevisionResource> out = new ArrayList<>();
-      for (PatchSet ps : psUtil.byChange(dbProvider.get(), change.getNotes())) {
+      for (PatchSet ps : psUtil.byChange(change.getNotes())) {
         if (ps.getRevision() != null && ps.getRevision().get().startsWith(id)) {
           out.add(new RevisionResource(change, ps));
         }
@@ -148,13 +140,9 @@ public class Revisions implements ChildCollection<ChangeResource, RevisionResour
     }
   }
 
-  private List<RevisionResource> byLegacyPatchSetId(ChangeResource change, String id)
-      throws OrmException {
+  private List<RevisionResource> byLegacyPatchSetId(ChangeResource change, String id) {
     PatchSet ps =
-        psUtil.get(
-            dbProvider.get(),
-            change.getNotes(),
-            new PatchSet.Id(change.getId(), Integer.parseInt(id)));
+        psUtil.get(change.getNotes(), new PatchSet.Id(change.getId(), Integer.parseInt(id)));
     if (ps != null) {
       return Collections.singletonList(new RevisionResource(change, ps));
     }

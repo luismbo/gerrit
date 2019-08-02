@@ -15,7 +15,6 @@
 package com.google.gerrit.acceptance.rest.change;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.TruthJUnit.assume;
 import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -26,24 +25,20 @@ import com.google.common.truth.IterableSubject;
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.NoHttpd;
 import com.google.gerrit.acceptance.PushOneCommit;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.extensions.api.changes.HashtagsInput;
 import com.google.gerrit.extensions.common.ChangeMessageInfo;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.extensions.restapi.BadRequestException;
 import com.google.gerrit.testing.TestTimeUtil;
+import com.google.inject.Inject;
 import org.junit.AfterClass;
-import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 @NoHttpd
 public class HashtagsIT extends AbstractDaemonTest {
-  @Before
-  public void before() {
-    assume().that(notesMigration.readChanges()).isTrue();
-  }
-
   @BeforeClass
   public static void setTimeForTesting() {
     TestTimeUtil.resetWithClockStep(1, SECONDS);
@@ -53,6 +48,8 @@ public class HashtagsIT extends AbstractDaemonTest {
   public static void restoreTime() {
     TestTimeUtil.useSystemTime();
   }
+
+  @Inject private RequestScopeOperations requestScopeOperations;
 
   @Test
   public void getNoHashtags() throws Exception {
@@ -260,7 +257,7 @@ public class HashtagsIT extends AbstractDaemonTest {
   @Test
   public void addHashtagWithoutPermissionNotAllowed() throws Exception {
     PushOneCommit.Result r = createChange();
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(AuthException.class);
     exception.expectMessage("edit hashtags not permitted");
     addHashtags(r, "MyHashtag");
@@ -270,7 +267,7 @@ public class HashtagsIT extends AbstractDaemonTest {
   public void addHashtagWithPermissionAllowed() throws Exception {
     PushOneCommit.Result r = createChange();
     grant(project, "refs/heads/master", Permission.EDIT_HASHTAGS, false, REGISTERED_USERS);
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     addHashtags(r, "MyHashtag");
     assertThatGet(r).containsExactly("MyHashtag");
     assertMessage(r, "Hashtag added: MyHashtag");

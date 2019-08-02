@@ -21,6 +21,8 @@ import static com.google.gerrit.server.group.SystemGroupBackend.REGISTERED_USERS
 import com.google.gerrit.acceptance.AbstractDaemonTest;
 import com.google.gerrit.acceptance.GitUtil;
 import com.google.gerrit.acceptance.PushOneCommit;
+import com.google.gerrit.acceptance.testsuite.project.ProjectOperations;
+import com.google.gerrit.acceptance.testsuite.request.RequestScopeOperations;
 import com.google.gerrit.common.data.AccessSection;
 import com.google.gerrit.common.data.GlobalCapability;
 import com.google.gerrit.common.data.Permission;
@@ -63,20 +65,20 @@ import org.junit.Test;
 
 public class AccessIT extends AbstractDaemonTest {
 
-  private static final String PROJECT_NAME = "newProject";
-
   private static final String REFS_ALL = Constants.R_REFS + "*";
   private static final String REFS_HEADS = Constants.R_HEADS + "*";
 
   private static final String LABEL_CODE_REVIEW = "Code-Review";
 
-  private Project.NameKey newProjectName;
-
   @Inject private DynamicSet<FileHistoryWebLink> fileHistoryWebLinkDynamicSet;
+  @Inject private ProjectOperations projectOperations;
+  @Inject private RequestScopeOperations requestScopeOperations;
+
+  private Project.NameKey newProjectName;
 
   @Before
   public void setUp() throws Exception {
-    newProjectName = createProject(PROJECT_NAME);
+    newProjectName = projectOperations.newProject().create();
   }
 
   @Test
@@ -90,14 +92,8 @@ public class AccessIT extends AbstractDaemonTest {
     RegistrationHandle handle =
         fileHistoryWebLinkDynamicSet.add(
             "gerrit",
-            new FileHistoryWebLink() {
-              @Override
-              public WebLinkInfo getFileHistoryWebLink(
-                  String projectName, String revision, String fileName) {
-                return new WebLinkInfo(
-                    "name", "imageURL", "http://view/" + projectName + "/" + fileName);
-              }
-            });
+            (projectName, revision, fileName) ->
+                new WebLinkInfo("name", "imageURL", "http://view/" + projectName + "/" + fileName));
     try {
       ProjectAccessInfo info = pApi().access();
       assertThat(info.configWebLinks).hasSize(1);
@@ -113,14 +109,8 @@ public class AccessIT extends AbstractDaemonTest {
     RegistrationHandle handle =
         fileHistoryWebLinkDynamicSet.add(
             "gerrit",
-            new FileHistoryWebLink() {
-              @Override
-              public WebLinkInfo getFileHistoryWebLink(
-                  String projectName, String revision, String fileName) {
-                return new WebLinkInfo(
-                    "name", "imageURL", "http://view/" + projectName + "/" + fileName);
-              }
-            });
+            (projectName, revision, fileName) ->
+                new WebLinkInfo("name", "imageURL", "http://view/" + projectName + "/" + fileName));
     try (Repository repo = repoManager.openRepository(newProjectName)) {
       RefUpdate u = repo.updateRef(RefNames.REFS_CONFIG);
       u.setForceUpdate(true);
@@ -181,7 +171,7 @@ public class AccessIT extends AbstractDaemonTest {
   public void createAccessChange() throws Exception {
     allow(newProjectName, RefNames.REFS_CONFIG, Permission.READ, REGISTERED_USERS);
     // User can see the branch
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     pApi().branch("refs/heads/master").get();
 
     ProjectAccessInput accessInput = newProjectAccessInput();
@@ -196,7 +186,7 @@ public class AccessIT extends AbstractDaemonTest {
     accessSection.permissions.put(Permission.READ, read);
     accessInput.add.put(REFS_HEADS, accessSection);
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     ChangeInfo out = pApi().accessChange(accessInput);
 
     assertThat(out.project).isEqualTo(newProjectName.get());
@@ -204,7 +194,7 @@ public class AccessIT extends AbstractDaemonTest {
     assertThat(out.status).isEqualTo(ChangeStatus.NEW);
     assertThat(out.submitted).isNull();
 
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
 
     ChangeInfo c = gApi.changes().id(out._number).get(MESSAGES);
     assertThat(c.messages.stream().map(m -> m.message)).containsExactly("Uploaded patch set 1");
@@ -215,7 +205,7 @@ public class AccessIT extends AbstractDaemonTest {
     gApi.changes().id(out._number).current().submit();
 
     // check that the change took effect.
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     try {
       BranchInfo info = pApi().branch("refs/heads/master").get();
       fail("wanted failure, got " + newGson().toJson(info));
@@ -226,16 +216,16 @@ public class AccessIT extends AbstractDaemonTest {
     // Restore.
     accessInput.add.clear();
     accessInput.remove.put(REFS_HEADS, accessSection);
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
 
-    setApiUser(admin);
+    requestScopeOperations.setApiUser(admin.id());
     out = pApi().accessChange(accessInput);
 
     gApi.changes().id(out._number).current().review(reviewIn);
     gApi.changes().id(out._number).current().submit();
 
     // Now it works again.
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     pApi().branch("refs/heads/master").get();
   }
 
@@ -335,7 +325,7 @@ public class AccessIT extends AbstractDaemonTest {
     accessInput.add.put(REFS_ALL, accessSectionInfo);
     pApi().access(accessInput);
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(ResourceNotFoundException.class);
     pApi().access();
   }
@@ -355,7 +345,7 @@ public class AccessIT extends AbstractDaemonTest {
     AccessSectionInfo accessSectionInfoToApply = createDefaultAccessSectionInfo();
     accessInfoToApply.add.put(REFS_HEADS, accessSectionInfoToApply);
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(ResourceNotFoundException.class);
     pApi().access();
   }
@@ -402,7 +392,7 @@ public class AccessIT extends AbstractDaemonTest {
     assertThat(owners.includes).isNull();
 
     // PROJECT_OWNERS is invisible to anonymous user, but GetAccess disregards visibility.
-    setApiUserAnonymous();
+    requestScopeOperations.setApiUserAnonymous();
     ProjectAccessInfo anonResult = pApi().access();
     assertThat(anonResult.groups.keySet())
         .containsExactly(
@@ -412,13 +402,13 @@ public class AccessIT extends AbstractDaemonTest {
   @Test
   public void updateParentAsUser() throws Exception {
     // Create child
-    String newParentProjectName = createProject(PROJECT_NAME + "PA").get();
+    String newParentProjectName = projectOperations.newProject().create().get();
 
     // Set new parent
     ProjectAccessInput accessInput = newProjectAccessInput();
     accessInput.parent = newParentProjectName;
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(AuthException.class);
     exception.expectMessage("administrate server not permitted");
     pApi().access(accessInput);
@@ -427,7 +417,7 @@ public class AccessIT extends AbstractDaemonTest {
   @Test
   public void updateParentAsAdministrator() throws Exception {
     // Create parent
-    String newParentProjectName = createProject(PROJECT_NAME + "PA").get();
+    String newParentProjectName = projectOperations.newProject().create().get();
 
     // Set new parent
     ProjectAccessInput accessInput = newProjectAccessInput();
@@ -445,7 +435,7 @@ public class AccessIT extends AbstractDaemonTest {
 
     accessInput.add.put(AccessSection.GLOBAL_CAPABILITIES, accessSectionInfo);
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(AuthException.class);
     gApi.projects().name(allProjects.get()).access(accessInput);
   }
@@ -465,7 +455,7 @@ public class AccessIT extends AbstractDaemonTest {
                 .get(AccessSection.GLOBAL_CAPABILITIES)
                 .permissions
                 .keySet())
-        .containsAllIn(accessSectionInfo.permissions.keySet());
+        .containsAtLeastElementsIn(accessSectionInfo.permissions.keySet());
   }
 
   @Test
@@ -501,7 +491,7 @@ public class AccessIT extends AbstractDaemonTest {
 
     accessInput.remove.put(AccessSection.GLOBAL_CAPABILITIES, accessSectionInfo);
 
-    setApiUser(user);
+    requestScopeOperations.setApiUser(user.id());
     exception.expect(AuthException.class);
     gApi.projects().name(allProjects.get()).access(accessInput);
   }
@@ -527,7 +517,7 @@ public class AccessIT extends AbstractDaemonTest {
                 .get(AccessSection.GLOBAL_CAPABILITIES)
                 .permissions
                 .keySet())
-        .containsAllIn(accessSectionInfo.permissions.keySet());
+        .containsAtLeastElementsIn(accessSectionInfo.permissions.keySet());
 
     // Remove
     accessInput.add.clear();
@@ -571,7 +561,7 @@ public class AccessIT extends AbstractDaemonTest {
     config = cfg.toText();
     PushOneCommit push =
         pushFactory.create(
-            db, admin.getIdent(), allProjectsRepo, "Subject", ProjectConfig.PROJECT_CONFIG, config);
+            admin.newIdent(), allProjectsRepo, "Subject", ProjectConfig.PROJECT_CONFIG, config);
     push.to(RefNames.REFS_CONFIG).assertOkStatus();
 
     // Verify that unknownPermission is present

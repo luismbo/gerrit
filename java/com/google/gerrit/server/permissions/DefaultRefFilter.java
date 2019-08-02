@@ -14,18 +14,24 @@
 
 package com.google.gerrit.server.permissions;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_CACHE_AUTOMERGE;
-import static com.google.gerrit.reviewdb.client.RefNames.REFS_CHANGES;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_CONFIG;
 import static com.google.gerrit.reviewdb.client.RefNames.REFS_USERS_SELF;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toMap;
 
+import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.Nullable;
+import com.google.gerrit.exceptions.StorageException;
 import com.google.gerrit.extensions.restapi.AuthException;
 import com.google.gerrit.metrics.Counter0;
 import com.google.gerrit.metrics.Description;
@@ -36,7 +42,6 @@ import com.google.gerrit.reviewdb.client.Branch;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.Project;
 import com.google.gerrit.reviewdb.client.RefNames;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.CurrentUser;
 import com.google.gerrit.server.IdentifiedUser;
 import com.google.gerrit.server.account.GroupCache;
@@ -50,9 +55,7 @@ import com.google.gerrit.server.notedb.ChangeNotes.Factory.ChangeNotesResult;
 import com.google.gerrit.server.permissions.PermissionBackend.RefFilterOptions;
 import com.google.gerrit.server.project.ProjectState;
 import com.google.gerrit.server.query.change.ChangeData;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
-import com.google.inject.Provider;
 import com.google.inject.assistedinject.Assisted;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -76,7 +79,6 @@ class DefaultRefFilter {
   private final TagCache tagCache;
   private final ChangeNotes.Factory changeNotesFactory;
   @Nullable private final SearchingChangeCacheImpl changeCache;
-  private final Provider<ReviewDb> db;
   private final GroupCache groupCache;
   private final PermissionBackend permissionBackend;
   private final ProjectControl projectControl;
@@ -94,7 +96,6 @@ class DefaultRefFilter {
       TagCache tagCache,
       ChangeNotes.Factory changeNotesFactory,
       @Nullable SearchingChangeCacheImpl changeCache,
-      Provider<ReviewDb> db,
       GroupCache groupCache,
       PermissionBackend permissionBackend,
       @GerritServerConfig Config config,
@@ -103,7 +104,6 @@ class DefaultRefFilter {
     this.tagCache = tagCache;
     this.changeNotesFactory = changeNotesFactory;
     this.changeCache = changeCache;
-    this.db = db;
     this.groupCache = groupCache;
     this.permissionBackend = permissionBackend;
     this.skipFullRefEvaluationIfAllRefsAreVisible =
@@ -113,7 +113,7 @@ class DefaultRefFilter {
     this.user = projectControl.getUser();
     this.projectState = projectControl.getProjectState();
     this.permissionBackendForProject =
-        permissionBackend.user(user).database(db).project(projectState.getNameKey());
+        permissionBackend.user(user).project(projectState.getNameKey());
     this.fullFilterCount =
         metricMaker.newCounter(
             "permissions/ref_filter/full_filter_count",
@@ -127,20 +127,70 @@ class DefaultRefFilter {
                 .setRate());
   }
 
+  /** Filters given refs and tags by visibility. */
   Map<String, Ref> filter(Map<String, Ref> refs, Repository repo, RefFilterOptions opts)
+      throws PermissionBackendException {
+    // See if we can get away with a single, cheap ref evaluation.
+    if (refs.size() == 1) {
+      String refName = Iterables.getOnlyElement(refs.values()).getName();
+      if (opts.filterMeta() && isMetadata(refName)) {
+        return ImmutableMap.of();
+      }
+      if (RefNames.isRefsChanges(refName)) {
+        return canSeeSingleChangeRef(refName) ? refs : ImmutableMap.of();
+      }
+    }
+
+    // Perform an initial ref filtering with all the refs the caller asked for. If we find tags that
+    // we have to investigate (deferred tags) separately then perform a reachability check starting
+    // from all visible branches (refs/heads/*).
+    Result initialRefFilter = filterRefs(refs, repo, opts);
+    Map<String, Ref> visibleRefs = initialRefFilter.visibleRefs();
+    if (!initialRefFilter.deferredTags().isEmpty()) {
+      Result allVisibleBranches = filterRefs(getTaggableRefsMap(repo), repo, opts);
+      checkState(
+          allVisibleBranches.deferredTags().isEmpty(),
+          "unexpected tags found when filtering refs/heads/* " + allVisibleBranches.deferredTags());
+
+      TagMatcher tags =
+          tagCache
+              .get(projectState.getNameKey())
+              .matcher(tagCache, repo, allVisibleBranches.visibleRefs().values());
+      for (Ref tag : initialRefFilter.deferredTags()) {
+        try {
+          if (tags.isReachable(tag)) {
+            visibleRefs.put(tag.getName(), tag);
+          }
+        } catch (IOException e) {
+          throw new PermissionBackendException(e);
+        }
+      }
+    }
+    return visibleRefs;
+  }
+
+  /**
+   * Filters refs by visibility. Returns tags where visibility can't be trivially computed
+   * separately for later ref-walk-based visibility computation. Tags where visibility is trivial to
+   * compute will be returned as part of {@link Result#visibleRefs()}.
+   */
+  Result filterRefs(Map<String, Ref> refs, Repository repo, RefFilterOptions opts)
       throws PermissionBackendException {
     if (projectState.isAllUsers()) {
       refs = addUsersSelfSymref(refs);
     }
 
+    // TODO(hiesel): Remove when optimization is done.
+    boolean hasReadOnRefsStar =
+        checkProjectPermission(permissionBackendForProject, ProjectPermission.READ);
     if (skipFullRefEvaluationIfAllRefsAreVisible && !projectState.isAllUsers()) {
-      if (projectState.statePermitsRead()
-          && checkProjectPermission(permissionBackendForProject, ProjectPermission.READ)) {
+      if (projectState.statePermitsRead() && hasReadOnRefsStar) {
         skipFilterCount.increment();
-        return refs;
+        return new AutoValue_DefaultRefFilter_Result(refs, ImmutableList.of());
       } else if (projectControl.allRefsAreVisible(ImmutableSet.of(RefNames.REFS_CONFIG))) {
         skipFilterCount.increment();
-        return fastHideRefsMetaConfig(refs);
+        return new AutoValue_DefaultRefFilter_Result(
+            fastHideRefsMetaConfig(refs), ImmutableList.of());
       }
     }
     fullFilterCount.increment();
@@ -164,7 +214,6 @@ class DefaultRefFilter {
 
     Map<String, Ref> result = new HashMap<>();
     List<Ref> deferredTags = new ArrayList<>();
-
     for (Ref ref : refs.values()) {
       String name = ref.getName();
       Change.Id changeId;
@@ -197,9 +246,22 @@ class DefaultRefFilter {
           result.put(name, ref);
         }
       } else if (isTag(ref)) {
-        // If its a tag, consider it later.
-        if (ref.getObjectId() != null) {
-          deferredTags.add(ref);
+        if (hasReadOnRefsStar) {
+          // The user has READ on refs/*. This is the broadest permission one can assign. There is
+          // no way to grant access to (specific) tags in Gerrit, so we have to assume that these
+          // users can see all tags because there could be tags that aren't reachable by any visible
+          // ref while the user can see all non-Gerrit refs. This matches Gerrit's historic
+          // behavior.
+          // This makes it so that these users could see commits that they can't see otherwise
+          // (e.g. a private change ref) if a tag was attached to it. Tags are meant to be used on
+          // the regular Git tree that users interact with, not on any of the Gerrit trees, so this
+          // is a negligible risk.
+          result.put(name, ref);
+        } else {
+          // If its a tag, consider it later.
+          if (ref.getObjectId() != null) {
+            deferredTags.add(ref);
+          }
         }
       } else if (name.startsWith(RefNames.REFS_SEQUENCES)) {
         // Sequences are internal database implementation details.
@@ -226,32 +288,29 @@ class DefaultRefFilter {
         }
       }
     }
+    return new AutoValue_DefaultRefFilter_Result(result, deferredTags);
+  }
 
-    // If we have tags that were deferred, we need to do a revision walk
-    // to identify what tags we can actually reach, and what we cannot.
-    //
-    if (!deferredTags.isEmpty() && (!result.isEmpty() || opts.filterTagsSeparately())) {
-      TagMatcher tags =
-          tagCache
-              .get(projectState.getNameKey())
-              .matcher(
-                  tagCache,
-                  repo,
-                  opts.filterTagsSeparately()
-                      ? filter(
-                              repo.getAllRefs(),
-                              repo,
-                              opts.toBuilder().setFilterTagsSeparately(false).build())
-                          .values()
-                      : result.values());
-      for (Ref tag : deferredTags) {
-        if (tags.isReachable(tag)) {
-          result.put(tag.getName(), tag);
-        }
-      }
+  /**
+   * Returns all refs tag we regard as starting points for reachability computation for tags. In
+   * general, these are all refs not managed by Gerrit excluding symbolic refs and tags.
+   *
+   * <p>We exclude symbolic refs because their target will be included and this will suffice for
+   * computing reachability.
+   */
+  private static Map<String, Ref> getTaggableRefsMap(Repository repo)
+      throws PermissionBackendException {
+    try {
+      return repo.getRefDatabase().getRefs().stream()
+          .filter(
+              r ->
+                  !RefNames.isGerritRef(r.getName())
+                      && !r.getName().startsWith(RefNames.REFS_TAGS)
+                      && !r.isSymbolic())
+          .collect(toMap(Ref::getName, r -> r));
+    } catch (IOException e) {
+      throw new PermissionBackendException(e);
     }
-
-    return result;
   }
 
   private Map<String, Ref> fastHideRefsMetaConfig(Map<String, Ref> refs)
@@ -296,6 +355,7 @@ class DefaultRefFilter {
     if (id == null) {
       return false;
     }
+
     if (user.isIdentifiedUser()
         && name.startsWith(RefNames.refsEditPrefix(user.asIdentifiedUser().getAccountId()))
         && visible(repo, id)) {
@@ -320,7 +380,7 @@ class DefaultRefFilter {
     Project.NameKey project = projectState.getNameKey();
     try {
       Map<Change.Id, Branch.NameKey> visibleChanges = new HashMap<>();
-      for (ChangeData cd : changeCache.getChangeData(db.get(), project)) {
+      for (ChangeData cd : changeCache.getChangeData(project)) {
         ChangeNotes notes = changeNotesFactory.createFromIndexedChange(cd.change());
         if (!projectState.statePermitsRead()) {
           continue;
@@ -333,7 +393,7 @@ class DefaultRefFilter {
         }
       }
       return visibleChanges;
-    } catch (OrmException e) {
+    } catch (StorageException e) {
       logger.atSevere().withCause(e).log(
           "Cannot load changes for project %s, assuming no changes are visible", project);
       return Collections.emptyMap();
@@ -345,7 +405,7 @@ class DefaultRefFilter {
     Project.NameKey p = projectState.getNameKey();
     ImmutableList<ChangeNotesResult> changes;
     try {
-      changes = changeNotesFactory.scan(repo, db.get(), p).collect(toImmutableList());
+      changes = changeNotesFactory.scan(repo, p).collect(toImmutableList());
     } catch (IOException e) {
       logger.atSevere().withCause(e).log(
           "Cannot load changes for project %s, assuming no changes are visible", p);
@@ -384,7 +444,7 @@ class DefaultRefFilter {
   }
 
   private boolean isMetadata(String name) {
-    return name.startsWith(REFS_CHANGES) || RefNames.isRefsEdit(name);
+    return RefNames.isRefsChanges(name) || RefNames.isRefsEdit(name);
   }
 
   private static boolean isTag(Ref ref) {
@@ -422,5 +482,47 @@ class DefaultRefFilter {
     // Keep this logic in sync with GroupControl#isOwner().
     return isAdmin
         || (user != null && user.getEffectiveGroups().contains(group.getOwnerGroupUUID()));
+  }
+
+  /**
+   * Returns true if the user can see the provided change ref. Uses NoteDb for evaluation, hence
+   * does not suffer from the limitations documented in {@link SearchingChangeCacheImpl}.
+   *
+   * <p>This code lets users fetch changes that are not among the fraction of most recently modified
+   * changes that {@link SearchingChangeCacheImpl} returns. This works only when Git Protocol v2
+   * with refs-in-wants is used as that enables Gerrit to skip traditional advertisement of all
+   * visible refs.
+   */
+  private boolean canSeeSingleChangeRef(String refName) throws PermissionBackendException {
+    // We are treating just a single change ref. We are therefore not going through regular ref
+    // filtering, but use NoteDb directly. This makes it so that we can always serve this ref
+    // even if the change is not part of the set of most recent changes that
+    // SearchingChangeCacheImpl returns.
+    Change.Id cId = Change.Id.fromRef(refName);
+    checkNotNull(cId, "invalid change id for ref %s", refName);
+    ChangeNotes notes;
+    try {
+      notes = changeNotesFactory.create(projectState.getNameKey(), cId);
+    } catch (StorageException e) {
+      throw new PermissionBackendException("can't construct change notes", e);
+    }
+    try {
+      permissionBackendForProject.change(notes).check(ChangePermission.READ);
+      return true;
+    } catch (AuthException e) {
+      return false;
+    }
+  }
+
+  @AutoValue
+  abstract static class Result {
+    /** Subset of the refs passed into the computation that is visible to the user. */
+    abstract Map<String, Ref> visibleRefs();
+
+    /**
+     * List of tags where we couldn't figure out visibility in the first pass and need to do an
+     * expensive ref walk.
+     */
+    abstract List<Ref> deferredTags();
   }
 }

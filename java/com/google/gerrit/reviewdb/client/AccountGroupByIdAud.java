@@ -14,23 +14,24 @@
 
 package com.google.gerrit.reviewdb.client;
 
-import com.google.gwtorm.client.Column;
+import com.google.gerrit.common.Nullable;
 import com.google.gwtorm.client.CompoundKey;
 import java.sql.Timestamp;
 import java.util.Objects;
 
 /** Inclusion of an {@link AccountGroup} in another {@link AccountGroup}. */
 public final class AccountGroupByIdAud {
+  public static Key key(AccountGroup.Id groupId, AccountGroup.UUID includeUuid, Timestamp addedOn) {
+    return new Key(groupId, includeUuid, addedOn);
+  }
+
   public static class Key extends CompoundKey<AccountGroup.Id> {
     private static final long serialVersionUID = 1L;
 
-    @Column(id = 1)
     protected AccountGroup.Id groupId;
 
-    @Column(id = 2)
     protected AccountGroup.UUID includeUUID;
 
-    @Column(id = 3)
     protected Timestamp addedOn;
 
     protected Key() {
@@ -49,12 +50,24 @@ public final class AccountGroupByIdAud {
       return groupId;
     }
 
+    public AccountGroup.Id groupId() {
+      return getParentKey();
+    }
+
     public AccountGroup.UUID getIncludeUUID() {
       return includeUUID;
     }
 
+    public AccountGroup.UUID includeUuid() {
+      return getIncludeUUID();
+    }
+
     public Timestamp getAddedOn() {
       return addedOn;
+    }
+
+    public Timestamp addedOn() {
+      return getAddedOn();
     }
 
     @Override
@@ -75,17 +88,13 @@ public final class AccountGroupByIdAud {
     }
   }
 
-  @Column(id = 1, name = Column.NONE)
   protected Key key;
 
-  @Column(id = 2)
   protected Account.Id addedBy;
 
-  @Column(id = 3, notNull = false)
-  protected Account.Id removedBy;
+  @Nullable protected Account.Id removedBy;
 
-  @Column(id = 4, notNull = false)
-  protected Timestamp removedOn;
+  @Nullable protected Timestamp removedOn;
 
   protected AccountGroupByIdAud() {}
 

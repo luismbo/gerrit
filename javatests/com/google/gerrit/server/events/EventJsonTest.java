@@ -577,10 +577,10 @@ public class EventJsonTest extends GerritBaseTests {
 
   private Change newChange() {
     return new Change(
-        new Change.Key(CHANGE_ID),
-        new Change.Id(CHANGE_NUM),
-        new Account.Id(9999),
-        new Branch.NameKey(new Project.NameKey(PROJECT), BRANCH),
+        Change.key(CHANGE_ID),
+        Change.id(CHANGE_NUM),
+        Account.id(9999),
+        Branch.nameKey(Project.nameKey(PROJECT), BRANCH),
         TimeUtil.nowTs());
   }
 

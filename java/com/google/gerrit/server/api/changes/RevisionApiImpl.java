@@ -20,6 +20,7 @@ import static com.google.gerrit.server.api.ApiUtil.asRestApiException;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.MultimapBuilder.ListMultimapBuilder;
+import com.google.gerrit.common.Nullable;
 import com.google.gerrit.extensions.api.changes.ChangeApi;
 import com.google.gerrit.extensions.api.changes.Changes;
 import com.google.gerrit.extensions.api.changes.CherryPickInput;
@@ -54,7 +55,6 @@ import com.google.gerrit.extensions.restapi.IdString;
 import com.google.gerrit.extensions.restapi.RestApiException;
 import com.google.gerrit.extensions.restapi.RestModifyView;
 import com.google.gerrit.reviewdb.client.PatchSetApproval;
-import com.google.gerrit.reviewdb.server.ReviewDb;
 import com.google.gerrit.server.ApprovalsUtil;
 import com.google.gerrit.server.account.AccountDirectory.FillOptions;
 import com.google.gerrit.server.account.AccountLoader;
@@ -144,7 +144,6 @@ class RevisionApiImpl implements RevisionApi {
   private final PutDescription putDescription;
   private final GetDescription getDescription;
   private final ApprovalsUtil approvalsUtil;
-  private final Provider<ReviewDb> db;
   private final AccountLoader.Factory accountLoaderFactory;
 
   @Inject
@@ -188,7 +187,6 @@ class RevisionApiImpl implements RevisionApi {
       PutDescription putDescription,
       GetDescription getDescription,
       ApprovalsUtil approvalsUtil,
-      Provider<ReviewDb> db,
       AccountLoader.Factory accountLoaderFactory,
       @Assisted RevisionResource r) {
     this.repoManager = repoManager;
@@ -230,7 +228,6 @@ class RevisionApiImpl implements RevisionApi {
     this.putDescription = putDescription;
     this.getDescription = getDescription;
     this.approvalsUtil = approvalsUtil;
-    this.db = db;
     this.accountLoaderFactory = accountLoaderFactory;
     this.revision = r;
   }
@@ -245,23 +242,12 @@ class RevisionApiImpl implements RevisionApi {
   }
 
   @Override
-  public void submit() throws RestApiException {
-    SubmitInput in = new SubmitInput();
-    submit(in);
-  }
-
-  @Override
   public void submit(SubmitInput in) throws RestApiException {
     try {
       submit.apply(revision, in);
     } catch (Exception e) {
       throw asRestApiException("Cannot submit change", e);
     }
-  }
-
-  @Override
-  public BinaryResult submitPreview() throws RestApiException {
-    return submitPreview("zip");
   }
 
   @Override
@@ -272,22 +258,6 @@ class RevisionApiImpl implements RevisionApi {
     } catch (Exception e) {
       throw asRestApiException("Cannot get submit preview", e);
     }
-  }
-
-  @Override
-  public void publish() throws RestApiException {
-    throw new UnsupportedOperationException("draft workflow is discontinued");
-  }
-
-  @Override
-  public void delete() throws RestApiException {
-    throw new UnsupportedOperationException("draft workflow is discontinued");
-  }
-
-  @Override
-  public ChangeApi rebase() throws RestApiException {
-    RebaseInput in = new RebaseInput();
-    return rebase(in);
   }
 
   @Override
@@ -384,17 +354,7 @@ class RevisionApiImpl implements RevisionApi {
 
   @SuppressWarnings("unchecked")
   @Override
-  public Map<String, FileInfo> files() throws RestApiException {
-    try {
-      return (Map<String, FileInfo>) listFiles.apply(revision).value();
-    } catch (Exception e) {
-      throw asRestApiException("Cannot retrieve files", e);
-    }
-  }
-
-  @SuppressWarnings("unchecked")
-  @Override
-  public Map<String, FileInfo> files(String base) throws RestApiException {
+  public Map<String, FileInfo> files(@Nullable String base) throws RestApiException {
     try {
       return (Map<String, FileInfo>) listFiles.setBase(base).apply(revision).value();
     } catch (Exception e) {
@@ -627,8 +587,7 @@ class RevisionApiImpl implements RevisionApi {
         ListMultimapBuilder.treeKeys().arrayListValues().build();
     try {
       Iterable<PatchSetApproval> approvals =
-          approvalsUtil.byPatchSet(
-              db.get(), revision.getNotes(), revision.getPatchSet().getId(), null, null);
+          approvalsUtil.byPatchSet(revision.getNotes(), revision.getPatchSet().getId(), null, null);
       AccountLoader accountLoader =
           accountLoaderFactory.create(
               EnumSet.of(

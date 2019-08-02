@@ -15,12 +15,10 @@
 package com.google.gerrit.server.project;
 
 import static com.google.gerrit.common.data.PermissionRule.Action.ALLOW;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.flogger.FluentLogger;
 import com.google.gerrit.common.data.AccessSection;
@@ -29,10 +27,8 @@ import com.google.gerrit.common.data.LabelType;
 import com.google.gerrit.common.data.LabelTypes;
 import com.google.gerrit.common.data.Permission;
 import com.google.gerrit.common.data.PermissionRule;
-import com.google.gerrit.common.data.RefConfigSection;
 import com.google.gerrit.common.data.SubscribeSection;
 import com.google.gerrit.extensions.api.projects.CommentLinkInfo;
-import com.google.gerrit.extensions.api.projects.ThemeInfo;
 import com.google.gerrit.extensions.client.SubmitType;
 import com.google.gerrit.extensions.restapi.ResourceConflictException;
 import com.google.gerrit.index.project.ProjectData;
@@ -49,7 +45,6 @@ import com.google.gerrit.reviewdb.client.RefNames;
 import com.google.gerrit.server.account.CapabilityCollection;
 import com.google.gerrit.server.config.AllProjectsName;
 import com.google.gerrit.server.config.AllUsersName;
-import com.google.gerrit.server.config.SitePaths;
 import com.google.gerrit.server.git.BranchOrderSection;
 import com.google.gerrit.server.git.GitRepositoryManager;
 import com.google.gerrit.server.git.TransferConfig;
@@ -57,14 +52,11 @@ import com.google.gerrit.server.notedb.ChangeNotes;
 import com.google.inject.Inject;
 import com.google.inject.assistedinject.Assisted;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -85,7 +77,6 @@ public class ProjectState {
 
   private final boolean isAllProjects;
   private final boolean isAllUsers;
-  private final SitePaths sitePaths;
   private final AllProjectsName allProjectsName;
   private final ProjectCache projectCache;
   private final GitRepositoryManager gitMgr;
@@ -106,11 +97,6 @@ public class ProjectState {
   /** Local access sections, wrapped in SectionMatchers for faster evaluation. */
   private volatile List<SectionMatcher> localAccessSections;
 
-  // TODO(dborowitz): Delete when the GWT UI gets deleted; in the meantime, don't bother with any
-  // refactoring.
-  /** Theme information loaded from site_path/themes. */
-  private volatile ThemeInfo theme;
-
   /** If this is all projects, the capabilities used by the server. */
   private final CapabilityCollection capabilities;
 
@@ -119,7 +105,6 @@ public class ProjectState {
 
   @Inject
   public ProjectState(
-      SitePaths sitePaths,
       ProjectCache projectCache,
       AllProjectsName allProjectsName,
       AllUsersName allUsersName,
@@ -129,7 +114,6 @@ public class ProjectState {
       TransferConfig transferConfig,
       MetricMaker metricMaker,
       @Assisted ProjectConfig config) {
-    this.sitePaths = sitePaths;
     this.projectCache = projectCache;
     this.isAllProjects = config.getProject().getNameKey().equals(allProjectsName);
     this.isAllUsers = config.getProject().getNameKey().equals(allUsersName);
@@ -421,12 +405,7 @@ public class ProjectState {
    *     Starts from this project and progresses up the hierarchy to All-Projects.
    */
   public Iterable<ProjectState> tree() {
-    return new Iterable<ProjectState>() {
-      @Override
-      public Iterator<ProjectState> iterator() {
-        return new ProjectHierarchyIterator(projectCache, allProjectsName, ProjectState.this);
-      }
-    };
+    return () -> new ProjectHierarchyIterator(projectCache, allProjectsName, ProjectState.this);
   }
 
   /**
@@ -502,7 +481,7 @@ public class ProjectState {
             continue;
           }
 
-          if (RefConfigSection.isValid(refPattern) && match(destination, refPattern)) {
+          if (AccessSection.isValidRefSectionName(refPattern) && match(destination, refPattern)) {
             r.add(l);
             break;
           }
@@ -553,24 +532,6 @@ public class ProjectState {
     return ret;
   }
 
-  public ThemeInfo getTheme() {
-    ThemeInfo theme = this.theme;
-    if (theme == null) {
-      synchronized (this) {
-        theme = this.theme;
-        if (theme == null) {
-          theme = loadTheme();
-          this.theme = theme;
-        }
-      }
-    }
-    if (theme == ThemeInfo.INHERIT) {
-      ProjectState parent = Iterables.getFirst(parents(), null);
-      return parent != null ? parent.getTheme() : null;
-    }
-    return theme;
-  }
-
   public Set<GroupReference> getAllGroups() {
     return getGroups(getAllSections());
   }
@@ -602,36 +563,12 @@ public class ProjectState {
     return all;
   }
 
-  private ThemeInfo loadTheme() {
-    String name = getConfig().getProject().getName();
-    Path dir = sitePaths.themes_dir.resolve(name);
-    if (!Files.exists(dir)) {
-      return ThemeInfo.INHERIT;
-    } else if (!Files.isDirectory(dir)) {
-      logger.atWarning().log("Bad theme for %s: not a directory", name);
-      return ThemeInfo.INHERIT;
-    }
-    try {
-      return new ThemeInfo(
-          readFile(dir.resolve(SitePaths.CSS_FILENAME)),
-          readFile(dir.resolve(SitePaths.HEADER_FILENAME)),
-          readFile(dir.resolve(SitePaths.FOOTER_FILENAME)));
-    } catch (IOException e) {
-      logger.atSevere().withCause(e).log("Error reading theme for %s", name);
-      return ThemeInfo.INHERIT;
-    }
-  }
-
   public ProjectData toProjectData() {
     ProjectData project = null;
     for (ProjectState state : treeInOrder()) {
       project = new ProjectData(state.getProject(), Optional.ofNullable(project));
     }
     return project;
-  }
-
-  private String readFile(Path p) throws IOException {
-    return Files.exists(p) ? new String(Files.readAllBytes(p), UTF_8) : null;
   }
 
   private LabelTypes loadLabelTypes() {

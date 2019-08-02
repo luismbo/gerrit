@@ -21,6 +21,7 @@
 
   Polymer({
     is: 'gr-dashboard-view',
+    _legacyUndefinedCheck: true,
 
     /**
      * Fired when the title of the page should change.
@@ -207,7 +208,7 @@
               this._showNewUserHelp = lastResultSet.length == 0;
             }
             this._results = changes.map((results, i) => ({
-              sectionName: res.sections[i].name,
+              name: res.sections[i].name,
               query: res.sections[i].query,
               results,
               isOutgoing: res.sections[i].isOutgoing,

@@ -27,7 +27,6 @@ import re
 import sys
 
 MAIN = '//tools/eclipse:classpath'
-GWT = '//gerrit-gwtui:ui_module'
 AUTO = '//lib/auto:auto-value'
 JRE = '/'.join([
     'org.eclipse.jdt.launching.JRE_CONTAINER',
@@ -37,7 +36,6 @@ JRE = '/'.join([
 # Map of targets to corresponding classpath collector rules
 cp_targets = {
     AUTO: '//tools/eclipse:autovalue_classpath_collect',
-    GWT: '//tools/eclipse:gwt_classpath_collect',
     MAIN: '//tools/eclipse:main_classpath_collect',
 }
 
@@ -56,15 +54,19 @@ opts.add_option('-j', '--java', action='store',
                 dest='java', help='Post Java 8 support (9)')
 opts.add_option('-e', '--edge_java', action='store',
                 dest='edge_java', help='Post Java 9 support (10|11|...)')
+opts.add_option('--bazel', help='name of the bazel executable',
+                action='store', default='bazel', dest='bazel_exe')
+
 args, _ = opts.parse_args()
 
 batch_option = '--batch' if args.batch else None
 custom_java = args.java
 edge_java = args.edge_java
+bazel_exe = args.bazel_exe
 
 def _build_bazel_cmd(*args):
     build = False
-    cmd = ['bazel']
+    cmd = [bazel_exe]
     if batch_option:
         cmd.append('--batch')
     for arg in args:
@@ -84,7 +86,7 @@ def retrieve_ext_location():
 
 
 def gen_bazel_path(ext_location):
-    bazel = check_output(['which', 'bazel']).strip().decode('UTF-8')
+    bazel = check_output(['which', bazel_exe]).strip().decode('UTF-8')
     with open(path.join(ROOT, ".bazel_path"), 'w') as fd:
         fd.write("output_base=%s\n" % ext_location)
         fd.write("bazel=%s\n" % bazel)
@@ -163,12 +165,25 @@ def gen_classpath(ext):
             e.setAttribute('output', out)
         if exported:
             e.setAttribute('exported', 'true')
+        atts = None
         if out and "test" in out:
             atts = doc.createElement('attributes')
             testAtt = doc.createElement('attribute')
             testAtt.setAttribute('name', 'test')
             testAtt.setAttribute('value', 'true')
             atts.appendChild(testAtt)
+        if "apt_generated" in path:
+            if not atts:
+                atts = doc.createElement('attributes')
+            ignoreOptionalProblems = doc.createElement('attribute')
+            ignoreOptionalProblems.setAttribute('name', 'ignore_optional_problems')
+            ignoreOptionalProblems.setAttribute('value', 'true')
+            atts.appendChild(ignoreOptionalProblems)
+            optional = doc.createElement('attribute')
+            optional.setAttribute('name', 'optional')
+            optional.setAttribute('value', 'true')
+            atts.appendChild(optional)
+        if atts:
             e.appendChild(atts)
         doc.documentElement.appendChild(e)
 
@@ -176,8 +191,6 @@ def gen_classpath(ext):
     src = set()
     lib = set()
     proto = set()
-    gwt_src = set()
-    gwt_lib = set()
     plugins = set()
 
     # Classpath entries are absolute for cross-cell support
@@ -185,10 +198,6 @@ def gen_classpath(ext):
     srcs = re.compile('(.*/external/[^/]+)/jar/(.*)[.]jar')
     for p in _query_classpath(MAIN):
         if p.endswith('-src.jar'):
-            # gwt_module() depends on -src.jar for Java to JavaScript compiles.
-            if p.startswith("external"):
-                p = path.join(ext, p)
-            gwt_lib.add(p)
             continue
 
         m = java_library.match(p)
@@ -196,7 +205,9 @@ def gen_classpath(ext):
             src.add(m.group(1))
             # Exceptions: both source and lib
             if p.endswith('libquery_parser.jar') or \
-               p.endswith('libgerrit-prolog-common.jar'):
+               p.endswith('libgerrit-prolog-common.jar') or \
+         p.endswith('com_google_protobuf/libprotobuf_java.jar') or \
+               p.endswith('lucene-core-and-backward-codecs__merged.jar'):
                 lib.add(p)
             # JGit dependency from external repository
             if 'gerrit-' not in p and 'jgit' in p:
@@ -214,11 +225,6 @@ def gen_classpath(ext):
                 p = path.join(ext, p)
             lib.add(p)
 
-    for p in _query_classpath(GWT):
-        m = java_library.match(p)
-        if m:
-            gwt_src.add(m.group(1))
-
     classpathentry('src', 'java')
     classpathentry('src', 'javatests', out='eclipse-out/test')
     classpathentry('src', 'resources')
@@ -235,7 +241,10 @@ def gen_classpath(ext):
 
         p = path.join(s, 'java')
         if path.exists(p):
-            classpathentry('src', p, out=out)
+            classpathentry('src', p, out=out + '/main')
+            p = path.join(s, 'javatests')
+            if path.exists(p):
+                classpathentry('src', p, out=out + '/test')
             continue
 
         for env in ['main', 'test']:
@@ -250,7 +259,7 @@ def gen_classpath(ext):
                 if path.exists(p):
                     classpathentry('src', p, out=o)
 
-    for libs in [lib, gwt_lib]:
+    for libs in [lib]:
         for j in sorted(libs):
             s = None
             m = srcs.match(j)
@@ -263,30 +272,18 @@ def gen_classpath(ext):
             if args.plugins:
                 classpathentry('lib', j, s, exported=True)
             else:
-                # Filter out the source JARs that we pull through transitive
-                # closure of GWT plugin API (we add source directories
-                # themselves).  Exception is libEdit-src.jar, that is needed
-                # for GWT SDM to work.
-                m = java_library.match(j)
-                if m:
-                    if m.group(1).startswith("gerrit-") and \
-                       j.endswith("-src.jar") and \
-                       not j.endswith("libEdit-src.jar"):
-                        continue
                 classpathentry('lib', j, s)
 
     for p in sorted(proto):
         s = p.replace('-fastbuild/bin/proto/lib', '-fastbuild/genfiles/proto/')
+        s = p.replace('-fastbuild/bin/proto/testing/lib', '-fastbuild/genfiles/proto/testing/')
         s = s.replace('.jar', '-src.jar')
         classpathentry('lib', p, s)
 
-    for s in sorted(gwt_src):
-        p = path.join(ROOT, s, 'src', 'main', 'java')
-        if path.exists(p):
-            classpathentry('lib', p, out='eclipse-out/gwtsrc')
-
     classpathentry('con', JRE)
     classpathentry('output', 'eclipse-out/classes')
+    classpathentry('src', '.apt_generated')
+    classpathentry('src', '.apt_generated_tests', out="eclipse-out/test")
 
     p = path.join(ROOT, '.classpath')
     with open(p, 'w') as fd:
@@ -326,14 +323,8 @@ try:
     gen_factorypath(ext_location)
     gen_bazel_path(ext_location)
 
-    # TODO(davido): Remove this when GWT gone
-    gwt_working_dir = ".gwt_work_dir"
-    if not path.isdir(gwt_working_dir):
-        makedirs(path.join(ROOT, gwt_working_dir))
-
     try:
-        check_call(_build_bazel_cmd('build', MAIN, GWT,
-                                    '//java/org/eclipse/jgit:libEdit-src.jar'))
+        check_call(_build_bazel_cmd('build', MAIN))
     except CalledProcessError:
         exit(1)
 except KeyboardInterrupt:

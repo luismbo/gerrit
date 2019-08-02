@@ -27,7 +27,7 @@ import com.google.gerrit.index.IndexConfig;
 import com.google.gerrit.reviewdb.client.Change;
 import com.google.gerrit.reviewdb.client.PatchSet;
 import com.google.gerrit.reviewdb.client.Project;
-import com.google.gerrit.reviewdb.server.ReviewDb;
+import com.google.gerrit.server.ChangeUtil;
 import com.google.gerrit.server.CommonConverters;
 import com.google.gerrit.server.PatchSetUtil;
 import com.google.gerrit.server.change.RevisionResource;
@@ -36,7 +36,6 @@ import com.google.gerrit.server.permissions.PermissionBackendException;
 import com.google.gerrit.server.project.NoSuchProjectException;
 import com.google.gerrit.server.query.change.ChangeData;
 import com.google.gerrit.server.query.change.InternalChangeQuery;
-import com.google.gwtorm.server.OrmException;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
 import com.google.inject.Singleton;
@@ -44,13 +43,13 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import org.eclipse.jgit.errors.RepositoryNotFoundException;
 import org.eclipse.jgit.revwalk.RevCommit;
 
 @Singleton
 public class GetRelated implements RestReadView<RevisionResource> {
-  private final Provider<ReviewDb> db;
   private final Provider<InternalChangeQuery> queryProvider;
   private final PatchSetUtil psUtil;
   private final RelatedChangesSorter sorter;
@@ -58,12 +57,10 @@ public class GetRelated implements RestReadView<RevisionResource> {
 
   @Inject
   GetRelated(
-      Provider<ReviewDb> db,
       Provider<InternalChangeQuery> queryProvider,
       PatchSetUtil psUtil,
       RelatedChangesSorter sorter,
       IndexConfig indexConfig) {
-    this.db = db;
     this.queryProvider = queryProvider;
     this.psUtil = psUtil;
     this.sorter = sorter;
@@ -72,7 +69,7 @@ public class GetRelated implements RestReadView<RevisionResource> {
 
   @Override
   public RelatedChangesInfo apply(RevisionResource rsrc)
-      throws RepositoryNotFoundException, IOException, OrmException, NoSuchProjectException,
+      throws RepositoryNotFoundException, IOException, NoSuchProjectException,
           PermissionBackendException {
     RelatedChangesInfo relatedChangesInfo = new RelatedChangesInfo();
     relatedChangesInfo.changes = getRelated(rsrc);
@@ -80,8 +77,8 @@ public class GetRelated implements RestReadView<RevisionResource> {
   }
 
   private List<RelatedChangeAndCommitInfo> getRelated(RevisionResource rsrc)
-      throws OrmException, IOException, PermissionBackendException {
-    Set<String> groups = getAllGroups(rsrc.getNotes(), db.get(), psUtil);
+      throws IOException, PermissionBackendException {
+    Set<String> groups = getAllGroups(rsrc.getNotes(), psUtil);
     if (groups.isEmpty()) {
       return Collections.emptyList();
     }
@@ -125,14 +122,11 @@ public class GetRelated implements RestReadView<RevisionResource> {
   }
 
   @VisibleForTesting
-  public static Set<String> getAllGroups(ChangeNotes notes, ReviewDb db, PatchSetUtil psUtil)
-      throws OrmException {
-    return psUtil.byChange(db, notes).stream()
-        .flatMap(ps -> ps.getGroups().stream())
-        .collect(toSet());
+  public static Set<String> getAllGroups(ChangeNotes notes, PatchSetUtil psUtil) {
+    return psUtil.byChange(notes).stream().flatMap(ps -> ps.getGroups().stream()).collect(toSet());
   }
 
-  private void reloadChangeIfStale(List<ChangeData> cds, PatchSet wantedPs) throws OrmException {
+  private void reloadChangeIfStale(List<ChangeData> cds, PatchSet wantedPs) {
     for (ChangeData cd : cds) {
       if (cd.getId().equals(wantedPs.getId().getParentKey())) {
         if (cd.patchSet(wantedPs.getId()) == null) {
@@ -153,7 +147,7 @@ public class GetRelated implements RestReadView<RevisionResource> {
       info._revisionNumber = ps != null ? ps.getPatchSetId() : null;
       PatchSet.Id curr = change.currentPatchSetId();
       info._currentRevisionNumber = curr != null ? curr.get() : null;
-      info.status = change.getStatus().asChangeStatus().toString();
+      info.status = ChangeUtil.status(change).toUpperCase(Locale.US);
     }
 
     info.commit = new CommitInfo();
