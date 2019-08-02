@@ -39,8 +39,8 @@ import static org.eclipse.jgit.lib.Constants.OBJ_BLOB;
 public class TimestampFrobber implements CommitModifier {
   // TODO (MAYBE): turn these constants into config options
   private static final int MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MiB
-  private static final SimpleDateFormat TIMESTAMP_FORMAT = new SimpleDateFormat("\tyyyy/MM/dd\t");
-  private static final String TIMESTAMP_MARKER = "\t0000/00/00\t";
+  private static final SimpleDateFormat TIMESTAMP_FORMAT = new SimpleDateFormat("$1yyyy/MM/dd$2");
+  private static final Pattern TIMESTAMP_MARKER = Pattern.compile("(\\s)0000/00/00(\\s)");
   private static final String ENCODING = "iso-8859-1";
 
   @Inject
@@ -117,7 +117,8 @@ public class TimestampFrobber implements CommitModifier {
 
         // TODO: avoid so many copies
         String content = new String(data, ENCODING);
-        String newContent = content.replaceAll(TIMESTAMP_MARKER, timestamp);
+        String newContent = TIMESTAMP_MARKER.matcher(content).replaceAll(timestamp);
+
 
         if (content.equals(newContent)) {
           // skip files without timestamp markers. Notably, this mean we won't
