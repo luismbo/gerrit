@@ -637,6 +637,12 @@ public class MergeUtil {
         n, mergeTip, notes.getChange().getDest(), createDetailedCommitMessage(n, notes, id));
   }
 
+  public ObjectId applyCommitModifiers(ObjectInserter inserter, RevWalk rw, RevCommit mergeTip,
+                                       ObjectId newTree, String newCommitMessage)
+    throws IOException {
+    return commitModifier.process(inserter, rw, mergeTip, newTree, newCommitMessage);
+  }
+
   private static boolean isCodeReview(LabelId id) {
     return "Code-Review".equalsIgnoreCase(id.get());
   }

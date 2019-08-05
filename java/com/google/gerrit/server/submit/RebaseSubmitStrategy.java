@@ -158,7 +158,7 @@ public class RebaseSubmitStrategy extends SubmitStrategy {
                   0,
                   true,
                   false,
-                  false); // XXX: CommitModifier not working in rebase yet.
+                  true);
         } catch (MergeConflictException mce) {
           // Unlike in Cherry-pick case, this should never happen.
           toMerge.setStatusCode(CommitMergeStatus.REBASE_MERGE_CONFLICT);
@@ -183,6 +183,7 @@ public class RebaseSubmitStrategy extends SubmitStrategy {
                 // RebaseAlways should set always modify commit message like
                 // Cherry-Pick strategy.
                 .setDetailedCommitMessage(rebaseAlways)
+                .setApplyCommitModifiers(rebaseAlways)
                 // Do not post message after inserting new patchset because there
                 // will be one about change being merged already.
                 .setPostMessage(false)

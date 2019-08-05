@@ -69,6 +69,7 @@ public class RebaseChangeOp implements BatchUpdateOp {
   private boolean checkAddPatchSetPermission = true;
   private boolean forceContentMerge;
   private boolean detailedCommitMessage;
+  private boolean applyCommitModifiers;
   private boolean postMessage = true;
   private boolean sendEmail = true;
   private boolean matchAuthorToCommitterDate = false;
@@ -127,6 +128,11 @@ public class RebaseChangeOp implements BatchUpdateOp {
 
   public RebaseChangeOp setDetailedCommitMessage(boolean detailedCommitMessage) {
     this.detailedCommitMessage = detailedCommitMessage;
+    return this;
+  }
+
+  public RebaseChangeOp setApplyCommitModifiers(boolean applyCommitModifiers) {
+    this.applyCommitModifiers = applyCommitModifiers;
     return this;
   }
 
@@ -274,8 +280,15 @@ public class RebaseChangeOp implements BatchUpdateOp {
           "The change could not be rebased due to a conflict during merge.");
     }
 
+    ObjectId tree = merger.getResultTreeId();
+    if (applyCommitModifiers) {
+      RevWalk rw = ctx.getRevWalk();
+      RevCommit baseCommit = rw.parseCommit(base);
+      tree = newMergeUtil().applyCommitModifiers(ctx.getInserter(), rw, baseCommit, tree, commitMessage);
+    }
+
     CommitBuilder cb = new CommitBuilder();
-    cb.setTreeId(merger.getResultTreeId());
+    cb.setTreeId(tree);
     cb.setParentId(base);
     cb.setAuthor(original.getAuthorIdent());
     cb.setMessage(commitMessage);
